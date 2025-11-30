@@ -1,6 +1,9 @@
 # Homebrew packages: taps, brews (CLI), casks (GUI), and Mac App Store apps
 # See docs/homebrew-vs-nixpkgs.md for when to use Homebrew vs nixpkgs
 { ... }: {
+  # Add Homebrew to PATH (Apple Silicon location)
+  environment.systemPath = [ "/opt/homebrew/bin" "/opt/homebrew/sbin" ];
+
   homebrew = {
     enable = true;
 
@@ -15,9 +18,6 @@
     };
 
     taps = [
-      # "1password/tap"
-      # "homebrew/bundle"
-      # "homebrew/cask-versions" # deprecated
       "f/mcptools"
       "stripe/stripe-cli"
       "ungive/music-presence"
