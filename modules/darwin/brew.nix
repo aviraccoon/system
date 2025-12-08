@@ -1,5 +1,8 @@
 # Homebrew packages: taps, brews (CLI), casks (GUI), and Mac App Store apps
 # See docs/homebrew-vs-nixpkgs.md for when to use Homebrew vs nixpkgs
+#
+# NOTE: Some casks are auto-restarted after upgrade to avoid stale process issues
+# (e.g. AltTab causes system lockups if not restarted). See scripts/darwin-switch.sh
 { ... }: {
   # Add Homebrew to PATH (Apple Silicon location)
   environment.systemPath = [ "/opt/homebrew/bin" "/opt/homebrew/sbin" ];
@@ -133,6 +136,10 @@
       }
       {
         name = "grandperspective"; # Disk usage analyzer
+        greedy = true;
+      }
+      {
+        name = "hammerspoon"; # macOS automation (Lua scripting, used by rcmd)
         greedy = true;
       }
       {
@@ -284,6 +291,7 @@
       "NextDNS" = 1464122853; # DNS client
       "Playlisty for Apple Music" = 1459275972; # Move music to Apple Music
       "Playlisty for Spotify" = 6478105775; # Move music to Spotify
+      "rcmd" = 1596283165; # App switcher (Right Cmd + app letter)
       "Steam Link" = 1246969117; # Remote play for Steam
       "Swift Playground" = 1496833156; # Swift tutorial
       # "Swiftgram: Telegram mod client" = 6471879502; # Telegram mod client # Disabled iPad app

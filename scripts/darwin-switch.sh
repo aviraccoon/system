@@ -36,4 +36,38 @@ if [[ -n "$upgraded" ]]; then
         echo -n "$needs_relaunch"
     fi
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+    # Auto-restart apps after upgrade. These have no unsaved state.
+    auto_restart_apps=(
+        # REQUIRED: These hook into system input events. Running stale processes
+        # after .app bundle replacement causes system-wide issues (e.g. AltTab
+        # causes ~5 second lockups on any modifier key press).
+        "alt-tab:AltTab"
+        "hammerspoon:Hammerspoon"
+
+        # OPTIONAL: Menu bar utilities - nice to restart for consistency
+        "alcove:Alcove"
+        "aldente:AlDente"
+        "clop:Clop"
+        "jordanbaird-ice:Ice"
+        "music-presence:Music Presence"
+        "raycast:Raycast"
+        "shottr:Shottr"
+        "stats:Stats"
+    )
+
+    for entry in "${auto_restart_apps[@]}"; do
+        cask="${entry%%:*}"
+        app="${entry##*:}"
+        if echo "$upgraded" | grep -q "$cask"; then
+            if pgrep -x "$app" > /dev/null; then
+                echo ""
+                echo "🔄 Restarting $app..."
+                killall "$app" 2>/dev/null
+                sleep 1
+                open -a "$app"
+                echo "✓ $app restarted"
+            fi
+        fi
+    done
 fi
