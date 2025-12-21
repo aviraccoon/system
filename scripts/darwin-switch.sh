@@ -9,8 +9,8 @@ running_apps=$(osascript -e 'tell application "System Events" to get name of eve
 # Run the switch, capture output while showing it
 output=$(sudo darwin-rebuild --flake ".#${FLAKE_HOST:-$(hostname)}" switch 2>&1 | tee /dev/stderr)
 
-# Extract upgraded casks (lines with "Installing <cask>")
-upgraded=$(echo "$output" | grep -E '^Installing ' | sed 's/^Installing //' || true)
+# Extract upgraded casks (lines with "Upgrading <cask> cask. It is installed")
+upgraded=$(echo "$output" | grep -E '^Upgrading .* cask\. It is installed' | sed 's/^Upgrading //' | sed 's/ cask\. It is installed.*//' || true)
 
 if [[ -n "$upgraded" ]]; then
     echo ""
