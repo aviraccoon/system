@@ -2,6 +2,9 @@
 # Wrapper for darwin-rebuild switch that shows which running apps were updated
 set -euo pipefail
 
+# Capture current system for diff after switch
+old_system=$(readlink /run/current-system)
+
 # Capture running GUI apps before switch (requires System Events access)
 echo "Checking running apps via System Events..."
 running_apps=$(osascript -e 'tell application "System Events" to get name of every process whose background only is false' 2>/dev/null | tr ',' '\n' | sed 's/^ //')
@@ -71,3 +74,10 @@ if [[ -n "$upgraded" ]]; then
         fi
     done
 fi
+
+# Show what changed in Nix packages
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📦 Nix package changes:"
+nvd --color always diff "$old_system" /run/current-system
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

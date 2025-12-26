@@ -62,7 +62,7 @@ Lix maintains multiple version lines (e.g., 2.91.x, 2.92.x, 2.93.x). Pick the la
    ```bash
    mise nix-upgrade  # or: nix-upgrade (from anywhere)
    ```
-   This runs `nix flake update` followed by `mise nix-switch`.
+   This updates flake inputs, runs garbage collection, switches the system, and updates global mise tools.
 4. If something breaks, roll back:
    ```bash
    sudo darwin-rebuild switch --rollback
