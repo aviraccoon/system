@@ -5,6 +5,7 @@ This directory contains the Tailscale ACL policy for the tailnet.
 ## Files
 
 - `policy.hujson` - Access control policy (ACLs, SSH rules, node attributes)
+- `push-acl.sh` - Script to validate and push policy to Tailscale
 
 ## Usage
 
@@ -13,6 +14,8 @@ Edit the policy locally, then push to Tailscale:
 ```bash
 mise ts-push  # or: mise tailscale:push-acl
 ```
+
+This validates the policy, updates the "Last updated" timestamp, and pushes to the Tailscale API.
 
 ## Auth key
 
@@ -28,7 +31,7 @@ tailscale up --authkey $(sops --decrypt --extract '["auth_key"]' secrets/tailsca
 
 | Tag | Purpose |
 |-----|---------|
-| `tag:nix-managed` | Devices provisioned via nix-system auth key |
+| `tag:nix-managed` | Devices provisioned via system repo auth key |
 | `tag:home` | Stationary home devices (Apple TV, etc.) |
 | `tag:server` | Cloud servers (Hetzner, etc.) |
 | `tag:service-host` | Can host Tailscale Services |
