@@ -19,6 +19,8 @@ in
   home.sessionVariables = {
     SSH_AUTH_SOCK = sockPath;
     OP_PLUGIN_ALIASES_SOURCED = 1;
+    # Fix macOS LC_CTYPE=UTF-8 (invalid on Linux) - use valid locale instead
+    LC_CTYPE = "en_US.UTF-8";
   };
 
   home.file.sock = lib.mkIf pkgs.stdenvNoCC.isDarwin {
