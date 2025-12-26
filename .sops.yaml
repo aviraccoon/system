@@ -1,0 +1,25 @@
+# SOPS configuration
+# Docs: https://github.com/Mic92/sops-nix
+
+keys:
+  # Personal age keys (from ~/.config/sops/age/keys.txt)
+  - &avi age1mxsll85s4xqpkmpmzjdr78h2t98r3sg8usjzx045n26zfe58fsus2ya9vw
+
+  # Machine SSH host keys (add after first boot)
+  # Get with: ssh-keyscan localhost | ssh-to-age
+  # - &procyonid-trailblazer age1...
+  # - &server1 age1...
+
+creation_rules:
+  # Secrets accessible by avi on any machine
+  - path_regex: secrets/[^/]+\.(yaml|json|env)$
+    key_groups:
+      - age:
+          - *avi
+
+  # Machine-specific secrets (add more rules as needed)
+  # - path_regex: secrets/servers/.*\.yaml$
+  #   key_groups:
+  #     - age:
+  #         - *avi
+  #         - *server1

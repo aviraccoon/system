@@ -27,6 +27,7 @@ in
       devenv # Development environments
       nixpkgs-fmt # Nix code formatter
       nvd # Nix version diff tool
+      sops # Secrets management
     ])
     ++
     # Stable packages (versions match homebrew)
