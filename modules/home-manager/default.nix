@@ -132,7 +132,7 @@ in
       jq # JSON processor
       just # Command runner (Makefile alternative)
       lynx # Text-based web browser
-      mise # Runtime manager
+      # mise - in Homebrew (updates frequently, avoid recompiling Rust)
       mtr # Network diagnostic tool
       mysql80 # MySQL client
       ncdu # Disk usage analyzer

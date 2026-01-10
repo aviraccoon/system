@@ -71,7 +71,7 @@ brew bundle cleanup    # list unexpected dependencies (--force to remove)
 3. Clone this repo, preserving hardware config:
     ```bash
     mv hardware-configuration.nix ..
-    git init && git remote add origin https://github.com/AviDuda/system && git fetch origin
+    git init && git remote add origin https://github.com/aviraccoon/system && git fetch origin
     git reset --hard origin/main
     mv ../hardware-configuration.nix ./machines/$(hostname)/hardware.nix
     ```

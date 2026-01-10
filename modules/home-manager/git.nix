@@ -7,8 +7,8 @@
 
     settings = {
       user = {
-        name = "Avi Duda";
-        email = "368677+AviDuda@users.noreply.github.com";
+        name = "aviraccoon";
+        email = "368677+aviraccoon@users.noreply.github.com";
         signingkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHwxJ/uQQtFgsmDDiUfMTDjlLl/aSihCeAuGukVKBVEA";
       };
       init.defaultBranch = "main";

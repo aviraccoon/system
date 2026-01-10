@@ -71,7 +71,7 @@ Use `nix search nixpkgs <name>` to find the correct package name.
 
 Some packages work in nixpkgs but are better kept in Homebrew:
 
-- **Fast-moving compiled packages** (e.g., `uv`) - Rust/Go packages that update frequently will recompile on every update. Homebrew provides prebuilt bottles.
+- **Fast-moving compiled packages** (e.g., `mise`, `uv`) - Rust/Go packages that update frequently will recompile on every update. Homebrew provides prebuilt bottles.
 - **Broken builds** (e.g., `ollama`) - Sometimes nixpkgs-unstable has build failures. Check Hydra or try building before committing.
 
 To check update frequency:

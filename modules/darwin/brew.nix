@@ -37,6 +37,7 @@
       "f/mcptools/mcp" # MCP tools (custom tap)
       "ollama" # LLM runtime (nixpkgs build broken)
       "stripe/stripe-cli/stripe" # Stripe CLI (homebrew has newer version)
+      "mise" # Runtime manager (updates frequently, avoid recompiling Rust)
       "uv" # Python package manager (updates frequently, avoid recompiling Rust)
     ];
 

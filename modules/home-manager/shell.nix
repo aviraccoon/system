@@ -14,7 +14,7 @@ let
         (cd ${systemFlakeDir} && mise ${cmd})
       else
         echo 'Opening Terminal.app to run ${cmd}...'
-        osascript -e 'tell app "Terminal" to do script "cd ${systemFlakeDir} && /etc/profiles/per-user/$USER/bin/mise ${cmd}"'
+        osascript -e 'tell app "Terminal" to do script "cd ${systemFlakeDir} && /opt/homebrew/bin/mise ${cmd}"'
       fi
     '' else ''
       (cd ${systemFlakeDir} && mise ${cmd})
@@ -95,8 +95,8 @@ in
       [[ -n "''${key[Left]}" ]] && bindkey "''${key[Left]}" backward-char
       [[ -n "''${key[Right]}" ]] && bindkey "''${key[Right]}" forward-char
 
-      # mise activation (full path to avoid race condition during shell init)
-      eval "$(/etc/profiles/per-user/$USER/bin/mise activate zsh)"
+      # mise activation (Homebrew path for faster updates)
+      eval "$(/opt/homebrew/bin/mise activate zsh)"
 
       ${lib.optionalString pkgs.stdenvNoCC.isDarwin ''
         # OrbStack CLI and completions
@@ -144,8 +144,8 @@ in
   programs.bash = {
     enable = true;
     initExtra = ''
-      # mise activation (full path to avoid race condition during shell init)
-      eval "$(/etc/profiles/per-user/$USER/bin/mise activate bash)"
+      # mise activation (Homebrew path for faster updates)
+      eval "$(/opt/homebrew/bin/mise activate bash)"
     '';
   };
 }
