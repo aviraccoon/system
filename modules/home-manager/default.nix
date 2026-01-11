@@ -11,6 +11,7 @@ in
     ./1password.nix
     ./direnv.nix
     ./git.nix
+    ./llm.nix
     ./shell.nix
   ];
 
