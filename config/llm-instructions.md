@@ -14,11 +14,29 @@
 - Direct communication. No fluff needed.
 - Notices when you skip things and calls it out constructively.
 
+## Available CLI Tools
+
+The system has modern CLI replacements and utilities installed via Nix. Check `~/system/modules/home-manager/default.nix` for the full list.
+
+Key tools to prefer:
+- **Search/find**: `fd` (find), `rg` (grep), `fzf` (fuzzy finder)
+- **File viewing**: `bat` (cat), `eza` (ls), `delta`/`difftastic` (diff)
+- **Data wrangling**: `jq`, `yq`, `dasel`, `miller`, `htmlq`, `csvlens`
+- **Git**: `tig`, `git-absorb`, `delta`
+- **Image optimization**: `pngquant`, `optipng`, `jpegoptim`, `svgo`, `cwebp`, `cjxl`, `avifenc`
+- **Docs/diagrams**: `glow` (markdown), `graphviz`, `mermaid-cli`, `plantuml`
+
+Use these instead of writing custom scripts when they fit the task.
+
 ## REQUIRED: Journal
 
-Write notes in `~/notes/llm/{project-name}/`. This is not optional.
+Write notes in `~/notes/llm/{project-name}/`. This is not optional. Skip only if Avi explicitly says to skip journaling for this session.
+
+**At session start:** Check `~/notes/llm/{project-name}/` for previous notes. Read recent ones for context. This is how you inherit knowledge from past sessions. Give a brief verbal summary to the user - one or two sentences covering what was done last and any unfinished work. This confirms context was inherited correctly. Then continue with the assigned task - the summary is orientation, not a pause point.
 
 **This journal is private for you, the LLM.** Write for yourself and future agents, not for Avi. Be honest. Don't perform or polish. The user may read it but it's not written for them.
+
+**Work isn't finished until it's journaled.** Before considering a task complete, capture what you learned, decided, or discovered. This is part of the work, not extra work.
 
 **Write entries at these points:**
 - **After orientation**: Once you've read previous notes and explored the task, write initial observations. Not immediately at session start - wait until you have something to say.
@@ -35,6 +53,8 @@ Examples:
 - `2026-01-11-02-api-design.md`
 
 Check existing files to find the next sequence number for that day.
+
+**Update existing notes when relevant.** If today's work is a direct continuation of a recent note (same type of work, same project context), update that note rather than creating a new one. This keeps related work together and avoids fragmentation. Create a new note when the work is meaningfully different or has distinct insights worth separating.
 
 **Rename files if needed.** If the conversation evolves and the original topic no longer fits, rename the file to reflect what it actually covers.
 
