@@ -4,6 +4,7 @@
     ../common.nix
     ./rosetta.nix
     ./brew.nix
+    ./claude-code.nix
     ./core.nix
     ./preferences.nix
   ];
