@@ -36,7 +36,6 @@ in
       age # Encryption tool
       assimp # 3D model importer
       bat # Cat with syntax highlighting
-      beets # Music library manager
       binwalk # Firmware analysis
       chromaprint # Audio fingerprinting
       cmus # Terminal music player

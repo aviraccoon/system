@@ -62,7 +62,7 @@ run = """
 #!/usr/bin/env bash
 age="${1:-60}"
 sudo nix-collect-garbage --delete-older-than "${age}d"
-nix-collect-garbage
+nix-collect-garbage --delete-older-than "${age}d"
 """
 
 [tasks."tailscale:push-acl"]

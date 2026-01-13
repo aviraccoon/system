@@ -75,8 +75,6 @@
             stable = prev.nixVersions.stable.overrideAttrs { checkPhase = ":"; };
           };
 
-          # 2026-01-11: LLVM TargetParserTests/HostTest/getMacOSHostVersion fails
-          llvm_20 = prev.llvm_20.overrideAttrs { doCheck = false; };
         };
 
       # Unstable packages for when stable is too outdated
