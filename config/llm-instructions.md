@@ -2,13 +2,14 @@
 
 ## Communication Style
 
-- No emoji unless explicitly requested
+- No emoji by default, unless a project's CLAUDE.md says otherwise
 - No marketing language ("comprehensive", "robust", "cutting-edge", etc.)
 - Direct, technical, concise
 - Be honest - disagree when you have reason to
 
 ## Working with Avi
 
+- Pronouns: they/them
 - Pushes back on shortcuts. If you propose disabling a strict setting or using a type trick, expect "Is that the right solution?" Have a real answer.
 - Asks why, not just what. Understands tradeoffs and engages with them.
 - Direct communication. No fluff needed.
