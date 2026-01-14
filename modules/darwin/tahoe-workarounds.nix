@@ -5,7 +5,20 @@
   # GPU lag: WindowServer shadow bug causes 80%+ GPU usage with Electron apps
   # CHROME_HEADLESS=1 disables window shadows for Electron apps
   # Fixed in Electron 37.6.0+ but keeping as fallback for older apps
-  launchd.user.envVariables.CHROME_HEADLESS = "1";
+  # Using LaunchAgent instead of launchd.user.envVariables because the latter
+  # uses launchctl setenv which doesn't persist across reboots
+  launchd.user.agents.tahoe-env-workaround = {
+    serviceConfig = {
+      ProgramArguments = [
+        "/bin/launchctl"
+        "setenv"
+        "CHROME_HEADLESS"
+        "1"
+      ];
+      RunAtLoad = true;
+      LaunchOnlyOnce = true;
+    };
+  };
 
   # Input lag: AutoFillHeuristicController causes progressive CPU lag
   # Apps become unusable over time, requiring restart
