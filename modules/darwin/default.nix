@@ -7,5 +7,6 @@
     ./claude-code.nix
     ./core.nix
     ./preferences.nix
+    ./tahoe-workarounds.nix
   ];
 }
