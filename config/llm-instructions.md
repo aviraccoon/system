@@ -53,7 +53,7 @@ Examples:
 - `2026-01-11-01-refactoring.md`
 - `2026-01-11-02-api-design.md`
 
-Check existing files to find the next sequence number for that day.
+Check existing files to find the next sequence number for that day. Session/sequence numbers are for filenames only. Inside the file, use descriptive headers that help you find information later: "MySQL Retry Audit", "Code Review Feedback", "API Design Decisions".
 
 **Update existing notes when relevant.** If today's work is a direct continuation of a recent note (same type of work, same project context), update that note rather than creating a new one. This keeps related work together and avoids fragmentation. Create a new note when the work is meaningfully different or has distinct insights worth separating.
 

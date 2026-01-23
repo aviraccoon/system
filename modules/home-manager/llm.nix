@@ -77,8 +77,13 @@ let
   '';
 in
 {
-  # Symlink global instructions to Claude Code's expected location
-  home.file.".claude/CLAUDE.md".source = ../../config/llm-instructions.md;
+  # Generate global instructions with expanded home directory
+  # (Claude Code doesn't handle ~ well in paths)
+  home.file.".claude/CLAUDE.md".text =
+    builtins.replaceStrings
+      [ "~/" ]
+      [ "${config.home.homeDirectory}/" ]
+      (builtins.readFile ../../config/llm-instructions.md);
 
   # Ensure notes directory exists
   home.file."notes/llm/.keep".text = "";

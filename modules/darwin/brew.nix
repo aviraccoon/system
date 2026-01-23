@@ -267,6 +267,10 @@
         greedy = true;
       }
       {
+        name = "wave"; # Wave Terminal
+        greedy = true;
+      }
+      {
         name = "wireshark-app"; # Network protocol analyzer
         greedy = true;
       }
