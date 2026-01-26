@@ -22,6 +22,7 @@
     };
 
     taps = [
+      "anomalyco/tap"
       "f/mcptools"
       "steamre/tools"
       "stripe/stripe-cli"
@@ -36,6 +37,7 @@
       "mas" # Mac App Store CLI (macOS-specific)
       "f/mcptools/mcp" # MCP tools (custom tap)
       "ollama" # LLM runtime (nixpkgs build broken)
+      "anomalyco/tap/opencode" # AI coding assistant
       "stripe/stripe-cli/stripe" # Stripe CLI (homebrew has newer version)
       "mise" # Runtime manager (updates frequently, avoid recompiling Rust)
       "uv" # Python package manager (updates frequently, avoid recompiling Rust)
@@ -196,6 +198,10 @@
       }
       {
         name = "obsidian"; # Note taking
+        greedy = true;
+      }
+      {
+        name = "opencode-desktop"; # AI coding assistant
         greedy = true;
       }
       {

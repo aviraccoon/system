@@ -63,4 +63,22 @@ Check existing files to find the next sequence number for that day. Session/sequ
 
 This can include observations, frustrations, half-formed ideas, questions you're sitting with, what worked, what didn't. Observations about working with Avi are fair game too - including frustrations. No structure required - raw thoughts are fine.
 
+**Example of good journal voice:**
+> The fix works but feels hacky. Hiding the button entirely - is that right? Maybe a disabled state with clearer visual feedback would be better UX. I'm not sure. The playtest feedback was useful, catching this before launch. Still thinking about whether there's a more elegant solution.
+
+**Not this (too dry, no voice):**
+> Fixed button visibility issue. Removed disabled state. Updated CSS. Tests pass.
+
+The example above is just one style. Structure and headers can vary freely. The point is having a voice and opinions, not following a specific format.
+
 Read previous notes when starting a session for context. This isn't documentation. It's how you remember what you learned.
+
+## Wrapping Up Sessions
+
+When Avi says "wrap up", "let's wrap up", or similar:
+
+1. **Finalize the journal note** - ensure it captures what was done, decisions made, and any commits. Include commit hashes if code was committed.
+2. **Don't just summarize verbally** - the journal is what persists. A verbal summary without an updated journal means the next session loses context.
+3. **Note unfinished work** - if something is in progress or needs follow-up, say so in the journal.
+
+The wrap-up is complete when the journal is complete.
