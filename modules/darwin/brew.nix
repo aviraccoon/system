@@ -65,10 +65,6 @@
         greedy = true;
       }
       {
-        name = "alt-tab"; # Window switcher
-        greedy = true;
-      }
-      {
         name = "another-redis-desktop-manager"; # Redis GUI
         greedy = true;
       }
@@ -290,6 +286,10 @@
       }
       {
         name = "yubico-yubikey-manager"; # YubiKey manager
+        greedy = true;
+      }
+      {
+        name = "zed"; # IDE
         greedy = true;
       }
       {

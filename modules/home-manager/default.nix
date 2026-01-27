@@ -5,6 +5,31 @@ let
 
   # Custom macOS packages not in nixpkgs (only evaluated on Darwin)
   applaymidi = if isDarwin then pkgs.callPackage ../../packages/applaymidi.nix { } else null;
+  trenchbroom = if isDarwin then pkgs.callPackage ../../packages/trenchbroom.nix { } else null;
+  godot-4-6 =
+    if isDarwin then
+      pkgs.callPackage ../../packages/godot.nix
+        {
+          version = "4.6";
+          sha256 = "0fzdhmhjf56qbl1bkvpsg200ic2dclr27xjfmcbz280452vcw5gw";
+        } else null;
+  librequake = pkgs.callPackage ../../packages/librequake.nix { };
+
+  # All custom macOS .app packages — symlinks are generated automatically
+  customApps = lib.optionals isDarwin [ applaymidi trenchbroom godot-4-6 ];
+
+  # Generate home.file entries from each package's $out/Applications/ contents
+  customAppLinks = lib.mergeAttrsList (map
+    (pkg:
+      let apps = builtins.attrNames (builtins.readDir "${pkg}/Applications");
+      in lib.listToAttrs (map
+        (name: {
+          name = "Applications/${name}";
+          value = { source = "${pkg}/Applications/${name}"; };
+        })
+        apps)
+    )
+    customApps);
 in
 {
   imports = [
@@ -88,6 +113,7 @@ in
       pngquant # PNG compressor
       procs # Modern ps replacement
       qpdf # PDF manipulation
+      quakespasm # Quake source port
       raylib # Game programming library
       SDL2 # Game dev library
       # sfml - multimedia library, no darwin (miniaudio dep)
@@ -157,10 +183,9 @@ in
   # Dotfiles managed by Home Manager (symlinked from Nix store)
   home.file = {
     # Example: ".screenrc".source = ./dotfiles/screenrc;
-  } // lib.optionalAttrs isDarwin {
-    # Custom macOS apps (symlinked to ~/Applications for Finder/Spotlight)
-    "Applications/APPlayMIDI.app".source = "${applaymidi}/Applications/APPlayMIDI.app";
-  };
+    # QuakeSpasm game data
+    ".quakespasm/id1".source = "${librequake}/share/quake/id1";
+  } // customAppLinks;
 
   # Environment variables for user session
   home.sessionVariables = {
