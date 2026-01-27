@@ -14,9 +14,11 @@ let
           sha256 = "0fzdhmhjf56qbl1bkvpsg200ic2dclr27xjfmcbz280452vcw5gw";
         } else null;
   librequake = pkgs.callPackage ../../packages/librequake.nix { };
+  ericw-tools = if isDarwin then pkgs.callPackage ../../packages/ericw-tools.nix { } else null;
+  vkquake = if isDarwin then pkgs.callPackage ../../packages/vkquake.nix { } else null;
 
   # All custom macOS .app packages — symlinks are generated automatically
-  customApps = lib.optionals isDarwin [ applaymidi trenchbroom godot-4-6 ];
+  customApps = lib.optionals isDarwin [ applaymidi trenchbroom godot-4-6 vkquake ];
 
   # Generate home.file entries from each package's $out/Applications/ contents
   customAppLinks = lib.mergeAttrsList (map
@@ -113,7 +115,7 @@ in
       pngquant # PNG compressor
       procs # Modern ps replacement
       qpdf # PDF manipulation
-      quakespasm # Quake source port
+      # quakespasm - nixpkgs SDL2 is sdl2-compat (SDL3 shim), doesn't work. Using vkQuake .app instead.
       raylib # Game programming library
       SDL2 # Game dev library
       # sfml - multimedia library, no darwin (miniaudio dep)
@@ -178,7 +180,12 @@ in
       yazi # Terminal file manager
       yt-dlp # YouTube downloader
       yubikey-manager # YubiKey manager
-    ]);
+    ])
+    ++
+    # Custom packages not in nixpkgs
+    lib.optionals isDarwin [
+      ericw-tools # Quake map compiling (qbsp, vis, light)
+    ];
 
   # Dotfiles managed by Home Manager (symlinked from Nix store)
   home.file = {
@@ -186,6 +193,11 @@ in
     # QuakeSpasm game data
     ".quakespasm/id1".source = "${librequake}/share/quake/id1";
   } // customAppLinks;
+
+  # Create writable directories needed by managed tools
+  home.activation.createQuakeSpasmDirs = lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+    mkdir -p "$HOME/.quakespasm/custom/maps"
+  '';
 
   # Environment variables for user session
   home.sessionVariables = {
