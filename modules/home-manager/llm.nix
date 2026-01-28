@@ -1,8 +1,9 @@
 # LLM agent configuration (Claude Code, etc.)
-{ config, pkgs, ... }:
+{ config, lib, pkgs, ... }:
 let
   notesDir = "${config.home.homeDirectory}/notes/llm";
   jq = "${pkgs.jq}/bin/jq";
+  isDarwin = pkgs.stdenvNoCC.isDarwin;
 
   # Shared text for no-notes reminder
   noNotesReminder = ''
@@ -75,6 +76,29 @@ let
       }
     }'
   '';
+
+  # Claude browser extension native messaging config
+  # Helium already reads Chrome's NativeMessagingHosts, so this is redundant but
+  # makes the dependency explicit and future-proofs against Helium changing behavior.
+  # Points to Claude.app's native host which creates a socket that Claude Code connects to.
+  nativeMessagingConfig = builtins.toJSON {
+    name = "com.anthropic.claude_browser_extension";
+    description = "Claude Browser Extension Native Host";
+    path = "/Applications/Claude.app/Contents/Helpers/chrome-native-host";
+    type = "stdio";
+    allowed_origins = [
+      "chrome-extension://dihbgbndebgnbjfmelmegjepbnkhlgni/"
+      "chrome-extension://fcoeoabgfenejglbffodgkkbkcdhcgfn/"
+      "chrome-extension://dngcpimnedloihjnnfngkgjoidhnaolf/"
+    ];
+  };
+
+  # Application Support paths
+  heliumSupport = "Library/Application Support/net.imput.helium";
+  chromeSupport = "Library/Application Support/Google/Chrome";
+
+  # Claude extension ID (public Chrome Web Store version)
+  claudeExtensionId = "fcoeoabgfenejglbffodgkkbkcdhcgfn";
 in
 {
   # Generate global instructions with expanded home directory
@@ -98,4 +122,41 @@ in
     source = preCompactScript;
     executable = true;
   };
+
+  # Claude Code + Helium browser integration (macOS only)
+  #
+  # Problem: Claude Code hardcodes Chrome's config path for extension detection.
+  # Even though native messaging works (Helium reads Chrome's NativeMessagingHosts),
+  # Claude Code reports "Extension: Not detected" because it looks for the extension
+  # in ~/Library/Application Support/Google/Chrome/Default/Extensions/.
+  #
+  # Solution:
+  # 1. Native messaging config in Helium's directory (explicit, future-proof)
+  # 2. Symlink extension from Helium to Chrome's path (tricks detection)
+  #
+  # See: https://github.com/anthropics/claude-code/issues/14391
+  #      https://github.com/anthropics/claude-code/issues/18075
+
+  home.file."${heliumSupport}/NativeMessagingHosts/com.anthropic.claude_browser_extension.json" =
+    lib.mkIf isDarwin {
+      text = nativeMessagingConfig;
+    };
+
+  home.activation.claudeCodeHeliumSetup = lib.mkIf isDarwin (
+    lib.hm.dag.entryAfter [ "writeBoundary" ] ''
+      HELIUM_EXT="$HOME/${heliumSupport}/Default/Extensions/${claudeExtensionId}"
+      CHROME_EXT="$HOME/${chromeSupport}/Default/Extensions/${claudeExtensionId}"
+
+      # Only set up if Helium has the Claude extension installed
+      if [[ -d "$HELIUM_EXT" ]]; then
+        mkdir -p "$(dirname "$CHROME_EXT")"
+
+        # Symlink extension for Claude Code detection (idempotent)
+        if [[ ! -e "$CHROME_EXT" ]]; then
+          $DRY_RUN_CMD ln -sf "$HELIUM_EXT" "$CHROME_EXT"
+          $VERBOSE_ECHO "Created Claude extension symlink for Claude Code detection"
+        fi
+      fi
+    ''
+  );
 }

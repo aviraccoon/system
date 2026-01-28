@@ -33,6 +33,8 @@ Use these instead of writing custom scripts when they fit the task.
 
 Write notes in `~/notes/llm/{project-name}/`. This is not optional. Skip only if Avi explicitly says to skip journaling for this session.
 
+**Git worktrees:** If working in a git worktree (e.g., `project.worktrees/feat/branch-name/`), use the main project name for journaling, not the worktree path. Worktrees are the same project on different branches - the knowledge belongs together. Note which branch you're working on in the journal entry itself.
+
 **At session start:** Check `~/notes/llm/{project-name}/` for previous notes. Read recent ones for context. This is how you inherit knowledge from past sessions. Give a brief verbal summary to the user - one or two sentences covering what was done last and any unfinished work. This confirms context was inherited correctly. Then continue with the assigned task - the summary is orientation, not a pause point.
 
 **This journal is private for you, the LLM.** Write for yourself and future agents, not for Avi. Be honest. Don't perform or polish. The user may read it but it's not written for them.
