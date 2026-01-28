@@ -22,30 +22,12 @@ if [[ -n "$upgraded" ]]; then
     # shellcheck disable=SC2086 # Word splitting intentional - one cask per line
     printf "   %s\n" $upgraded
 
-    # Check which updated apps were running
-    needs_relaunch=""
-    while IFS= read -r cask; do
-        [[ -z "$cask" ]] && continue
-        # Convert cask name to likely app name (e.g., visual-studio-code -> Visual Studio Code)
-        app_pattern=${cask//-/ }
-        if echo "$running_apps" | grep -iq "$app_pattern"; then
-            needs_relaunch+="   $cask"$'\n'
-        fi
-    done <<< "$upgraded"
-
-    if [[ -n "$needs_relaunch" ]]; then
-        echo ""
-        echo "🔄 Was running (may need relaunch):"
-        echo -n "$needs_relaunch"
-    fi
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
     # Auto-restart apps after upgrade. These have no unsaved state.
+    # Format: "cask-name:ProcessName"
+    # To find process name: pgrep -l <pattern> while app is running
     auto_restart_apps=(
         # REQUIRED: These hook into system input events. Running stale processes
-        # after .app bundle replacement causes system-wide issues (e.g. AltTab
-        # causes ~5 second lockups on any modifier key press).
-        "alt-tab:AltTab"
+        # after .app bundle replacement causes system-wide issues.
         "hammerspoon:Hammerspoon"
 
         # OPTIONAL: Menu bar utilities - nice to restart for consistency
@@ -57,8 +39,13 @@ if [[ -n "$upgraded" ]]; then
         "raycast:Raycast"
         "shottr:Shottr"
         "stats:Stats"
+        "steelseries-gg:SteelSeriesGG"
+        "pallotron-yubiswitch:yubiswitch"
+        "yubico-authenticator:Yubico Authenticator"
+        "yubico-yubikey-manager:ykman-gui"
     )
 
+    restarted_casks=""
     for entry in "${auto_restart_apps[@]}"; do
         cask="${entry%%:*}"
         app="${entry##*:}"
@@ -70,9 +57,42 @@ if [[ -n "$upgraded" ]]; then
                 sleep 1
                 open -a "$app"
                 echo "✓ $app restarted"
+                restarted_casks+="$cask"$'\n'
             fi
         fi
     done
+
+    # Check which running apps need manual restart (updated but not auto-restarted)
+    needs_manual=""
+    while IFS= read -r cask; do
+        [[ -z "$cask" ]] && continue
+        # Skip if this cask was auto-restarted
+        if echo "$restarted_casks" | grep -q "^${cask}$"; then
+            continue
+        fi
+        # Find the .app bundle and check if its executable is running
+        pattern="${cask//-/ }"
+        app_path=$(find /Applications -maxdepth 1 -iname "*$pattern*.app" 2>/dev/null | head -1)
+        # Fallback: try last word (e.g., jordanbaird-ice -> ice)
+        if [[ -z "$app_path" ]]; then
+            last_word="${cask##*-}"
+            app_path=$(find /Applications -maxdepth 1 -iname "*$last_word*.app" 2>/dev/null | head -1)
+        fi
+        if [[ -n "$app_path" ]]; then
+            executable=$(defaults read "$app_path/Contents/Info" CFBundleExecutable 2>/dev/null)
+            # Match full path since macOS shows full path in COMM for some apps
+            if [[ -n "$executable" ]] && ps -eo comm | grep -q "$app_path/Contents/MacOS/$executable"; then
+                needs_manual+="   $cask"$'\n'
+            fi
+        fi
+    done <<< "$upgraded"
+
+    if [[ -n "$needs_manual" ]]; then
+        echo ""
+        echo "⚠️  Needs manual restart:"
+        echo -n "$needs_manual"
+    fi
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 fi
 
 # Show what changed in Nix packages
