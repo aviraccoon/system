@@ -48,6 +48,7 @@ flags:
   --date <yyyy-mm-dd>         date for log
   -r, --remove                with alias
   --json                      machine-readable output
+  --conceal                   hide money amounts (status/today/week/month)
   -h, --help                  this help
 
 no command = status. Project/task args are fuzzy-matched; set aliases for
@@ -64,6 +65,7 @@ interface Cli {
   date?: string;
   hours?: string;
   remove: boolean;
+  conceal: boolean;
   json: boolean;
   help: boolean;
   positionals: string[];
@@ -79,6 +81,7 @@ export function parseCli(argv: string[]): Cli {
       date: { type: "string" },
       hours: { type: "string" },
       remove: { type: "boolean", short: "r" },
+      conceal: { type: "boolean" },
       json: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -95,10 +98,25 @@ export function parseCli(argv: string[]): Cli {
     date,
     hours: values.hours,
     remove: values.remove === true,
+    conceal: values.conceal === true,
     json: values.json === true,
     help: values.help === true,
     positionals: positionals.filter((p): p is string => typeof p === "string"),
   };
+}
+
+/** Deep-clone with money fields removed — --conceal applies to JSON too. */
+export function concealMoney(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(concealMoney);
+  if (value !== null && typeof value === "object") {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (k === "amount" || k === "totalAmount" || k === "billable_rate" || k === "cost_rate") continue;
+      out[k] = concealMoney(v);
+    }
+    return out;
+  }
+  return value;
 }
 
 function arity(cmd: string, positionals: string[], min: number, max: number): string | null {
@@ -144,7 +162,7 @@ async function run(argv: string[]): Promise<number> {
     case "status": {
       const err = arity("status", p, 0, 0);
       if (err) return failArg(err);
-      result = await cmdStatus(deps);
+      result = await cmdStatus(deps, { conceal: cli.conceal });
       break;
     }
     case "start": {
@@ -174,19 +192,19 @@ async function run(argv: string[]): Promise<number> {
     case "today": {
       const err = arity("today", p, 0, 0);
       if (err) return failArg(err);
-      result = await cmdToday(deps);
+      result = await cmdToday(deps, { conceal: cli.conceal });
       break;
     }
     case "week": {
       const err = arity("week", p, 0, 0);
       if (err) return failArg(err);
-      result = await cmdWeek(deps);
+      result = await cmdWeek(deps, { conceal: cli.conceal });
       break;
     }
     case "month": {
       const err = arity("month", p, 0, 1);
       if (err) return failArg(err);
-      result = await cmdMonth(deps, p[0]);
+      result = await cmdMonth(deps, p[0], { conceal: cli.conceal });
       break;
     }
     case "projects": {
@@ -227,7 +245,8 @@ async function run(argv: string[]): Promise<number> {
   }
 
   if (cli.json) {
-    console.log(JSON.stringify(result.json, null, 2));
+    const json = cli.conceal ? concealMoney(result.json) : result.json;
+    console.log(JSON.stringify(json, null, 2));
   } else {
     console.log(result.text);
   }

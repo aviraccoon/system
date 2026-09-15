@@ -22,7 +22,7 @@ import {
   spentDateClockToDate,
   weekDates,
 } from "./format";
-import { parseCli } from "./harvest";
+import { concealMoney, parseCli } from "./harvest";
 import { type Candidate, formatCandidates, matchOne } from "./resolve";
 
 // ---------- format ----------
@@ -381,6 +381,7 @@ describe("cmdStatus", () => {
     const api = apiStub({
       me: [Promise.resolve({ id: 7, first_name: "A", last_name: "B", email: "a@b.c" })],
       timeEntries: [[running], [past]],
+      company: [{ wants_timestamp_timers: false, currency: "czk" }],
     });
     const { deps } = makeDeps(api);
     const r = await cmdStatus(deps);
@@ -404,6 +405,7 @@ describe("cmdStatus", () => {
     const api = apiStub({
       me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
       timeEntries: [[running], []],
+      company: [{ wants_timestamp_timers: false, currency: "czk" }],
     });
     const { deps } = makeDeps(api);
     const r = await cmdStatus(deps);
@@ -596,5 +598,26 @@ describe("parseCli", () => {
 
   test("bad date format throws", () => {
     expect(() => parseCli(["log", "1", "a", "--date", "tomorrow"])).toThrow(/yyyy-mm-dd/);
+  });
+
+  test("conceal flag parses", () => {
+    expect(parseCli(["status"]).conceal).toBe(false);
+    expect(parseCli(["status", "--conceal"]).conceal).toBe(true);
+  });
+});
+
+describe("concealMoney", () => {
+  test("strips money fields at any depth, keeps hours", () => {
+    const out = concealMoney({
+      totalAmount: 500,
+      total: 2,
+      entries: [{ id: 1, hours: 2, billable_rate: 100, cost_rate: 50, project: { id: 9, name: "X" } }],
+      groups: [{ project: "X", hours: 2, amount: 200, ratedHours: 2 }],
+    });
+    expect(out).toEqual({
+      total: 2,
+      entries: [{ id: 1, hours: 2, project: { id: 9, name: "X" } }],
+      groups: [{ project: "X", hours: 2, ratedHours: 2 }],
+    });
   });
 });

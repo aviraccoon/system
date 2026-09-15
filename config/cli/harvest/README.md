@@ -48,7 +48,7 @@ harvest whoami
 
 Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space equivalent; matches name, code, or client). Ambiguous matches list the candidates. An alias without a task defers the task choice to each start/log; with one task assigned, it's picked automatically.
 
-`--json` on any command prints structured output instead of the human format — that's the form agents should parse.
+`--json` prints structured output. Money appears in status/today/week/month when a rate is known; `--conceal` hides amounts (screen-sharing, pasted output).
 
 ## Notes
 

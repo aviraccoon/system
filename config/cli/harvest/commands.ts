@@ -161,6 +161,44 @@ function totalHours(entries: TimeEntry[]): number {
   return entries.reduce((sum, e) => sum + e.hours, 0);
 }
 
+interface MoneySum {
+  hours: number;
+  ratedHours: number;
+  amount: number;
+}
+
+/** Rate for an entry: config wins, entry rate fallback. Null = no rate known. */
+function entryRate(cfg: HarvestConfig, e: TimeEntry): number | null {
+  if (cfg.hourlyRate !== undefined) return cfg.hourlyRate;
+  return e.billable_rate;
+}
+
+function sumMoney(entries: TimeEntry[], cfg: HarvestConfig): MoneySum {
+  const sum: MoneySum = { hours: 0, ratedHours: 0, amount: 0 };
+  for (const e of entries) {
+    sum.hours += e.hours;
+    const rate = entryRate(cfg, e);
+    if (rate !== null) {
+      sum.amount += e.hours * rate;
+      sum.ratedHours += e.hours;
+    }
+  }
+  return sum;
+}
+
+/** " — 12 345.00 CZK" suffix, or "" when concealed / unrated / currency unknown. */
+function moneySuffix(
+  sum: MoneySum,
+  currency: string | null,
+  cfg: HarvestConfig,
+  conceal: boolean,
+  withRate = false,
+): string {
+  if (conceal || currency === null || sum.ratedHours <= 0) return "";
+  const rateNote = withRate && cfg.hourlyRate !== undefined ? ` (rate ${cfg.hourlyRate})` : "";
+  return ` — ${formatMoney(sum.amount, currency)}${rateNote}`;
+}
+
 async function stopRunning(deps: Deps): Promise<TimeEntry[]> {
   const running = await runningEntries(deps);
   const stopped: TimeEntry[] = [];
@@ -170,9 +208,11 @@ async function stopRunning(deps: Deps): Promise<TimeEntry[]> {
   return stopped;
 }
 
-export async function cmdStatus(deps: Deps): Promise<CmdResult> {
+export async function cmdStatus(deps: Deps, opts: { conceal?: boolean } = {}): Promise<CmdResult> {
+  const conceal = opts.conceal === true;
   const running = await runningEntries(deps);
   const today = await todayEntries(deps);
+  const currency = await ensureCurrency(deps);
   const lines: string[] = [];
   let runningJson: Record<string, unknown> | null = null;
   if (running.length > 0) {
@@ -192,13 +232,20 @@ export async function cmdStatus(deps: Deps): Promise<CmdResult> {
   } else {
     lines.push("no timer running");
   }
-  lines.push(`today: ${formatHours(totalHours(today))} (${today.length} ${today.length === 1 ? "entry" : "entries"})`);
+  const todaySum = sumMoney(today, deps.cfg);
+  lines.push(
+    `today: ${formatHours(todaySum.hours)} (${today.length} ${today.length === 1 ? "entry" : "entries"})${moneySuffix(todaySum, currency, deps.cfg, conceal)}`,
+  );
   for (const e of [...today].sort((a, b) => a.id - b.id)) {
+    const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
     lines.push(
-      `  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${e.notes ? ` — ${e.notes}` : ""}`,
+      `  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}${e.notes ? ` — ${e.notes}` : ""}`,
     );
   }
-  return { text: lines.join("\n"), json: { running: runningJson, today, total: totalHours(today) } };
+  return {
+    text: lines.join("\n"),
+    json: { running: runningJson, today, total: totalHours(today), totalAmount: todaySum.amount },
+  };
 }
 
 export async function cmdStart(
@@ -291,17 +338,21 @@ export async function cmdEdit(
   };
 }
 
-export async function cmdToday(deps: Deps): Promise<CmdResult> {
+export async function cmdToday(deps: Deps, opts: { conceal?: boolean } = {}): Promise<CmdResult> {
+  const conceal = opts.conceal === true;
   const today = await todayEntries(deps);
+  const currency = await ensureCurrency(deps);
+  const todaySum = sumMoney(today, deps.cfg);
   const lines = [
-    `today: ${formatHours(totalHours(today))} (${today.length} ${today.length === 1 ? "entry" : "entries"})`,
+    `today: ${formatHours(todaySum.hours)} (${today.length} ${today.length === 1 ? "entry" : "entries"})${moneySuffix(todaySum, currency, deps.cfg, conceal)}`,
   ];
   for (const e of [...today].sort((a, b) => a.id - b.id)) {
+    const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
     lines.push(
-      `  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${e.notes ? ` — ${e.notes}` : ""}`,
+      `  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}${e.notes ? ` — ${e.notes}` : ""}`,
     );
   }
-  return { text: lines.join("\n"), json: { entries: today, total: totalHours(today) } };
+  return { text: lines.join("\n"), json: { entries: today, total: totalHours(today), totalAmount: todaySum.amount } };
 }
 
 export function monthRange(monthArg: string | undefined, now: Date): { label: string; from: string; to: string } {
@@ -315,7 +366,8 @@ export function monthRange(monthArg: string | undefined, now: Date): { label: st
   return { label, from: `${label}-01`, to: localDateString(to) };
 }
 
-export async function cmdMonth(deps: Deps, monthArg?: string): Promise<CmdResult> {
+export async function cmdMonth(deps: Deps, monthArg?: string, opts: { conceal?: boolean } = {}): Promise<CmdResult> {
+  const conceal = opts.conceal === true;
   const { label, from, to } = monthRange(monthArg, deps.now);
   const me = await ensureMe(deps);
   const entries = await deps.getApi().timeEntries({ user_id: me.id, from, to });
@@ -342,10 +394,10 @@ export async function cmdMonth(deps: Deps, monthArg?: string): Promise<CmdResult
 
   const money = (amount: number): string => (currency ? formatMoney(amount, currency) : amount.toFixed(2));
   const rateNote = deps.cfg.hourlyRate !== undefined ? ` (rate ${deps.cfg.hourlyRate})` : "";
-  const headerMoney = ratedHours > 0 ? ` — ${money(totalAmount)}${rateNote}` : "";
+  const headerMoney = !conceal && ratedHours > 0 ? ` — ${money(totalAmount)}${rateNote}` : "";
   const lines = [`${label}: ${formatHours(totalHours)} total${headerMoney}`];
   for (const [name, g] of groups) {
-    const amount = g.ratedHours > 0 && currency ? ` — ${money(g.amount)}` : "";
+    const amount = !conceal && g.ratedHours > 0 && currency ? ` — ${money(g.amount)}` : "";
     lines.push(`  ${formatHours(g.hours)}  ${name}${amount}`);
   }
   const unrated = totalHours - ratedHours;
@@ -371,10 +423,12 @@ export async function cmdMonth(deps: Deps, monthArg?: string): Promise<CmdResult
   };
 }
 
-export async function cmdWeek(deps: Deps): Promise<CmdResult> {
+export async function cmdWeek(deps: Deps, opts: { conceal?: boolean } = {}): Promise<CmdResult> {
+  const conceal = opts.conceal === true;
   const me = await ensureMe(deps);
   const days = weekDates(deps.now);
   const entries = await deps.getApi().timeEntries({ user_id: me.id, from: days[0], to: days[days.length - 1] });
+  const currency = await ensureCurrency(deps);
   const byDate = new Map<string, TimeEntry[]>();
   const byProject = new Map<string, number>();
   for (const e of entries) {
@@ -387,14 +441,19 @@ export async function cmdWeek(deps: Deps): Promise<CmdResult> {
   for (const day of days) {
     const list = byDate.get(day);
     if (!list) continue;
-    lines.push(`${day}: ${formatHours(totalHours(list))}`);
+    lines.push(
+      `${day}: ${formatHours(totalHours(list))}${moneySuffix(sumMoney(list, deps.cfg), currency, deps.cfg, conceal)}`,
+    );
     for (const e of [...list].sort((a, b) => a.id - b.id)) {
+      const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
       lines.push(
-        `  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${e.notes ? ` — ${e.notes}` : ""}`,
+        `  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}${e.notes ? ` — ${e.notes}` : ""}`,
       );
     }
   }
-  lines.push(`week: ${formatHours(totalHours(entries))}`);
+  lines.push(
+    `week: ${formatHours(totalHours(entries))}${moneySuffix(sumMoney(entries, deps.cfg), currency, deps.cfg, conceal)}`,
+  );
   for (const [project, hours] of [...byProject.entries()].sort((a, b) => b[1] - a[1])) {
     lines.push(`  ${formatHours(hours)}  ${project}`);
   }
