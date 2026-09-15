@@ -52,9 +52,7 @@ On macOS, GNU variants are `gsed`/`gawk`/`ggrep`/`gfind`/`gdate`. BSD `sed` is t
 
 Prefer structural tools over regex for code structure: `ast-grep` over `rg` for function calls/imports/types, `comby` over `sed` for mechanical multi-file transforms. `shellcheck` on any shell script before committing. `hyperfine` over `time` for benchmarking.
 
-`rg` (ripgrep) recurses by default but does NOT show line numbers — `rg 'pattern' path` searches recursively; add `-n` when you want line numbers (e.g. to report `file:42`). The flag that bites: `-r` is `--replace` and takes a required argument, so `rg -rn 'pattern'` silently replaces every match with the literal string `n` (it parses as `-r n`, not `-r` + `-n`) — looks like recursion+numbers, actually rewrites matches. Never write `rg -rn`. Regex needs no escaping, and escaping inverts the meaning: `\|` is a LITERAL pipe (not alternation) and `\+` is a LITERAL plus (not the quantifier) — the opposite of grep's BRE where backslash enables these operators. So `rg 'foo\|bar'` silently searches for the literal text `foo|bar` instead of matching either, with no error. Use bare `|` and `+`.
-
-When running compilers, linters, or test suites (`cargo clippy`, `mise run check`, `cargo test`, etc.), dump the full output — never pipe through `grep`/`tail`/`head`. Filtering hides the actual error/warning lines and forces a re-run to find what you missed.
+`rg` (ripgrep) recurses by default but does NOT show line numbers — add `-n` when you want them (e.g. to report `file:42`). No escaping in rg patterns: bare `|` and `+` mean alternation/quantifier; backslash-escaped ones are literals.
 
 Read referenced docs, skill files, and journal entries in full before acting on them — don't skim or read the first N lines. Partial reads lead to stale assumptions and wrong edits.
 
@@ -98,9 +96,9 @@ Write journal files directly — not via subagents. They lose the conversation c
 
 TODO.md rules:
 - **Only actionable items you're actively working on or will work on next.** No wishlists, no reference material, no competitive analysis, no product ideas. That stuff goes in project docs or journal entries.
-- **Never add completed items.** Remove items when done, don't add "DONE" entries. When an item's work is done, delete the item entirely — never reword it to look unfinished, annotate it as done, or swap in a pointer to a journal entry. If part of an item remains, rewrite it to contain only what remains.
+- **Never add completed items.** Delete done items entirely; if part of an item remains, keep only what remains.
 - **No design docs.** If a feature needs design spec, write a journal entry and link it from TODO with one line.
-- **Plain prose, not Markdown checkboxes.** Use `- item` not `- [ ] item`. TODO is a living doc, not a checklist to tick off.
+- **Plain prose items** (`- item`, no Markdown checkboxes).
 - **Edit the file if it already exists.** Never fully rewrite the file.
 
 **Cross-project journal routing.** If the user starts discussing another project mid-session, check if `~/notes/llm/{other-project}/` exists. If it does, ask whether to journal there or in the current project's notes. If it doesn't, ask the user where to store it. Don't dump unrelated content into the wrong project's notes.
