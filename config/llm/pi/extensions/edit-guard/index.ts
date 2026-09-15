@@ -14,8 +14,8 @@
  * (wrap-up use: finds stale rule violations no live edit would re-trigger).
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -128,12 +128,21 @@ export default function editGuardExtension(pi: ExtensionAPI) {
     const lines = readFileSync(abs, "utf-8").split("\n").length;
     const rel = relative(ctx.cwd, abs);
     rewriteAllowed.add(abs);
+    // Stash the blocked content so the agent can copy it instead of retyping.
+    let stashNote = "";
+    const content = (event.input as { content?: unknown }).content;
+    if (typeof content === "string") {
+      const stashPath = join(tmpdir(), `edit-guard-write-${rel.replace(/[^a-zA-Z0-9._-]/g, "-")}-${Date.now()}`);
+      writeFileSync(stashPath, content);
+      stashNote = ` The blocked content is saved at ${stashPath} — copy or edit it from there; it was NOT applied.`;
+    }
     return {
       block: true,
       reason:
         `edit-guard: ${rel} already exists (${lines} lines). Don't use write to replace existing files — ` +
         "use patch for targeted changes (write is for genuinely new files only). " +
-        "If a full rewrite is genuinely intended, re-issue this exact write call and it will proceed.",
+        "If a full rewrite is genuinely intended, re-issue this exact write call and it will proceed." +
+        stashNote,
     };
   });
 
