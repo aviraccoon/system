@@ -12,11 +12,18 @@ instead of hoping the prompt sticks.
   tool result as a self-contained block: matched lines with `>>` context plus
   the verbatim policy statement. The agent can correct immediately, without
   the user reading diffs.
+- Every `bash` command is scanned with `bash`-kind rules before it reaches
+  the agent; the same self-contained block is appended to the tool result.
+- `write` to an existing non-empty file is blocked once with a pointer to
+  `patch` (write is for new files). Re-issuing the same write proceeds, so
+  genuine full rewrites stay possible.
 - Silent when clean — no "0 violations" noise.
-- Files the edit did not change are never scanned; `bash`-written files are
-  out of scope (they don't flow through edit tools).
-- `/todo-check [path]` — on-demand sweep, defaulting to the project journal
-  `TODO.md`. Wrap-up use: finds stale violations no live edit would re-trigger.
+- Files the edit did not change are never scanned; files written through
+  `bash` are out of scope (only the command line itself is checked).
+- `/todo-check [path]` sweeps the project journal `TODO.md` on demand and
+  sends the report to the agent; the `todo_check` tool exposes the same scan
+  to the agent itself (wrap-up use: finds stale violations no live edit
+  would re-trigger).
 
 ## Rules are data
 
@@ -50,6 +57,8 @@ defaults.
 - `match.kind: "basename"` — case-insensitive basename set.
 - `match.kind: "allExcept"` — every edited file except paths under the listed
   roots; `{notesDir}`, `{sessionsDir}`, `{cwd}` placeholders expand at runtime.
+- `match.kind: "bash"` — the rule runs against every bash command instead of
+  file contents.
 - Broken regexes and an invalid config file are reported as warnings and the
   affected pattern/rule is skipped — a broken rule must never silently stop
   matching.
@@ -57,9 +66,10 @@ defaults.
 ## Adding a rule
 
 Only add rules with observed violations — a speculative row costs false
-positives on every edit of the matched files. The row needs: a matcher, one
-or more line patterns, and a `policy` string that stands alone (the agent
-reading the tool result sees only that block).
+positives on every edit of the matched files. The row needs: a matcher (or
+`"match": { "kind": "bash" }` for command rules), one or more line patterns,
+and a `policy` string that stands alone (the agent reading the tool result
+sees only that block).
 
 ## Internal codenames
 
