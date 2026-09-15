@@ -157,7 +157,8 @@ function secretValue(account: string): string | null {
  * 2. 1Password via `op item get` (config.op; default item "Harvest API")
  * 3. Secret files: HARVEST_TOKEN_FILE / HARVEST_ACCOUNT_ID_FILE, else
  *    /run/secrets/harvest-token + /run/secrets/harvest-account-id (sops-nix)
- * 4. Platform secret store: macOS keychain / Linux secret-tool (libsecret)
+ * 4. Platform secret store: macOS keychain / Linux secret-tool (libsecret);
+ *    Windows relies on the other sources
  */
 export function resolveAuth(env: NodeJS.ProcessEnv = process.env, cfg: Partial<HarvestConfig> = {}): HarvestAuth {
   if (env.HARVEST_TOKEN && env.HARVEST_ACCOUNT_ID) {
@@ -178,12 +179,16 @@ export function resolveAuth(env: NodeJS.ProcessEnv = process.env, cfg: Partial<H
 /** Pure: the setup instructions thrown when no auth source yields credentials. */
 export function authSetupMessage(opError: string | null = null): string {
   const darwinSetup =
+    "  macOS keychain:\n" +
     "  security add-generic-password -s harvest -a token -w <personal-access-token>\n" +
     "  security add-generic-password -s harvest -a account-id -w <account-id>\n";
   const linuxSetup =
+    "  Linux libsecret:\n" +
     "  echo -n <personal-access-token> | secret-tool store --label=harvest-token service harvest account token\n" +
     "  echo -n <account-id> | secret-tool store --label=harvest-account-id service harvest account account-id\n";
-  const platformSetup = process.platform === "linux" ? linuxSetup : darwinSetup;
+  const win32Setup = "  Windows: no system-store fallback — use 1Password or env vars (above).\n";
+  const platformSetup =
+    process.platform === "linux" ? linuxSetup : process.platform === "win32" ? win32Setup : darwinSetup;
   const opNote = opError === null ? "" : `\n(1Password lookup failed: ${opError})`;
   return (
     "no Harvest credentials found.\n" +

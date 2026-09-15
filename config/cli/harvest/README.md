@@ -11,7 +11,7 @@ Runs on bun. Zero runtime dependencies.
    - `HARVEST_TOKEN` + `HARVEST_ACCOUNT_ID` env vars
    - 1Password: item `Harvest API` (any vault) with fields `token` and `account-id`. 1Password shows CLI reads in its audit log, which is why this is the default.
    - Secret files: `/run/secrets/harvest-token` + `/run/secrets/harvest-account-id` (sops-nix), or override with `HARVEST_TOKEN_FILE` / `HARVEST_ACCOUNT_FILE`
-   - macOS keychain (`security find-generic-password -s harvest -a token|account-id -w`) or Linux `secret-tool lookup service harvest account token|account-id`
+   - macOS keychain (`security find-generic-password -s harvest -a token|account-id -w`) or Linux `secret-tool lookup service harvest account token|account-id` (not available on Windows)
 
 3. Check auth: `harvest whoami`
 
@@ -34,17 +34,18 @@ harvest status                # running timer + today's entries and total
 harvest start acme dev -n "fixing login"
 harvest stop
 harvest log 1:30 acme dev --date 2026-09-14   # hours: 1.5 | 1:30 | 90m
+harvest edit <entry-id> [--hours H] [-n text] [--date D]
 harvest today
 harvest week                  # ISO week, per-day and per-project totals
 harvest projects              # list + refresh cache
 harvest tasks acme
 harvest alias                 # list
-harvest alias acme "Acme Website" Development
+harvest alias acme "Acme Website" Development   # task optional
 harvest alias -r acme
 harvest whoami
 ```
 
-Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space equivalent; matches name, code, or client). Ambiguous matches list the candidates. Aliases store resolved IDs, so renames of your alias don't break when project names change.
+Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space equivalent; matches name, code, or client). Ambiguous matches list the candidates. An alias without a task defers the task choice to each start/log; with one task assigned, it's picked automatically.
 
 `--json` on any command prints structured output instead of the human format — that's the form agents should parse.
 
@@ -54,7 +55,7 @@ Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space eq
 - Timer mode follows the account setting (`wants_timestamp_timers`): duration accounts get a running entry from a bare `start`; start/end accounts get `started_time` set. `log` on start/end accounts derives a time range ending now.
 - Projects and tasks are cached in `~/.cache/harvest/cache.json` (24h TTL, refreshed by `harvest projects` and on lookup misses). The list comes from your Harvest project assignments — Member roles cannot list account-wide projects, and assignments are exactly what you can track time on. Config lives in `~/.config/harvest/config.json`. Neither file contains credentials.
 - A timer left running from a previous day is flagged `STALE` by `status`.
-- macOS and Linux (bun + the auth chain above are the only platform dependencies).
+- macOS, Linux, and Windows (bun is cross-platform; the macOS keychain / Linux secret-tool fallbacks are not — on Windows use 1Password or env vars).
 
 ## Development
 
