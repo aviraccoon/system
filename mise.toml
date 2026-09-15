@@ -42,7 +42,7 @@ run = "fd -e nix -X nixfmt --check"
 
 [tasks.check]
 description = "Run checks"
-depends = ["fmt-check", "pi-check", "mcp-check"]
+depends = ["fmt-check", "pi-check", "mcp-check", "harvest-check"]
 
 [tasks.pi-check]
 description = "Lint and test pi extensions"
@@ -68,6 +68,20 @@ run = """
 #!/usr/bin/env bash
 set -euo pipefail
 cd config/llm/mcp/web-search
+echo "==> biome check"
+biome check .
+echo "==> tsc --noEmit"
+tsc --noEmit
+echo "==> bun test"
+bun test
+"""
+
+[tasks.harvest-check]
+description = "Lint and test harvest CLI"
+run = """
+#!/usr/bin/env bash
+set -euo pipefail
+cd config/cli/harvest
 echo "==> biome check"
 biome check .
 echo "==> tsc --noEmit"

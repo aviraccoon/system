@@ -296,6 +296,10 @@ in
     ".local/bin/forepaw".source =
       config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dev/personal/forepaw/.build/release/forepaw";
 
+    # harvest CLI (time tracking; bun-run TS source)
+    ".local/bin/harvest".source =
+      config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/system/config/cli/harvest/harvest.ts";
+
     # npm: disable postinstall/preinstall scripts by default.
     # Prevents malicious or noisy lifecycle scripts from running during `npm install`.
     # Packages that genuinely need their scripts (e.g. Prisma, native modules) should

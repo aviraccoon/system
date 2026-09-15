@@ -1,0 +1,254 @@
+#!/usr/bin/env bun
+// harvest — CLI for Harvest time tracking (API v2). Runs under bun.
+
+import { parseArgs } from "node:util";
+import { createClient, HarvestApiError } from "./api";
+import {
+  aliasList,
+  aliasRemove,
+  aliasSet,
+  type CmdResult,
+  cmdEdit,
+  cmdLog,
+  cmdProjects,
+  cmdStart,
+  cmdStatus,
+  cmdStop,
+  cmdTasks,
+  cmdToday,
+  cmdWeek,
+  cmdWhoami,
+  type Deps,
+} from "./commands";
+import { DEFAULT_USER_AGENT, loadCache, loadConfig, resolveAuth, saveCache, saveConfig } from "./config";
+
+const HELP = `harvest — Harvest time tracking from the terminal
+
+usage: harvest [<command>] [args] [flags]
+
+commands:
+  status                      running timer + today's entries and total
+  start <project> [<task>]    start a timer (stops the running one)
+  stop                        stop the running timer
+  log <hours> <project> [<task>] [--date D]   log past time (1.5, 1:30, 90m)
+  edit <entry-id> [--hours H] [-n text] [--date D]   edit an entry
+  today                       today's entries and total
+  week                        this ISO week, per-day and per-project totals
+  projects                    list active projects (refreshes the cache)
+  tasks <project>             list tasks assigned to a project
+  alias                       list aliases
+  alias <name> <project> [<task>]   set an alias (resolved once, stored by id)
+  alias -r <name>             remove an alias
+  whoami                      auth check: user, timer mode, cache state
+
+flags:
+  -n, --note <text>           note for start/log
+  --date <yyyy-mm-dd>         date for log
+  -r, --remove                with alias
+  --json                      machine-readable output
+  -h, --help                  this help
+
+no command = status. Project/task args are fuzzy-matched; set aliases for
+the common cases (harvest alias acme "Acme Website" Development).
+
+setup: create a Personal Access Token (not an OAuth2 app) at
+https://id.getharvest.com/developers (Developers section), then store it via
+1Password (item "Harvest API" with fields token + account-id), or see the
+error message for other options.
+`;
+
+interface Cli {
+  note?: string;
+  date?: string;
+  hours?: string;
+  remove: boolean;
+  json: boolean;
+  help: boolean;
+  positionals: string[];
+}
+
+/** Strict parse; throws on unknown flags. Exported for tests. */
+export function parseCli(argv: string[]): Cli {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      note: { type: "string", short: "n" },
+      date: { type: "string" },
+      hours: { type: "string" },
+      remove: { type: "boolean", short: "r" },
+      json: { type: "boolean" },
+      help: { type: "boolean", short: "h" },
+    },
+  });
+  const note = values.note;
+  const date = values.date;
+  if (typeof note !== "string" && note !== undefined) throw new Error("--note takes a string");
+  if (typeof date !== "string" && date !== undefined) throw new Error("--date takes a string");
+  if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(`--date must be yyyy-mm-dd, got "${date}"`);
+  }
+  return {
+    note,
+    date,
+    hours: values.hours,
+    remove: values.remove === true,
+    json: values.json === true,
+    help: values.help === true,
+    positionals: positionals.filter((p): p is string => typeof p === "string"),
+  };
+}
+
+function arity(cmd: string, positionals: string[], min: number, max: number): string | null {
+  if (positionals.length < min) return `${cmd}: missing argument(s)`;
+  if (positionals.length > max) return `${cmd}: too many arguments`;
+  return null;
+}
+
+async function run(argv: string[]): Promise<number> {
+  let cli: Cli;
+  try {
+    cli = parseCli(argv);
+  } catch (e) {
+    console.error(`error: ${(e as Error).message}\n(run harvest --help for usage)`);
+    return 2;
+  }
+  if (cli.help || (cli.positionals[0] ?? null) === "help") {
+    console.log(HELP.trimEnd());
+    return 0;
+  }
+  const cmd = cli.positionals[0] ?? "status";
+  const p = cli.positionals.slice(1);
+
+  const cfg = loadConfig();
+  const cache = loadCache();
+  const now = new Date();
+  // Auth happens lazily: alias list/remove must work offline.
+  let api: ReturnType<typeof createClient> | null = null;
+  const deps: Deps = {
+    getApi: () => {
+      if (!api) api = createClient(resolveAuth(process.env, cfg), cfg.userAgent ?? DEFAULT_USER_AGENT);
+      return api;
+    },
+    cfg,
+    cache,
+    saveCache: (next) => saveCache(next),
+    saveConfig: (next) => saveConfig(next),
+    now,
+  };
+
+  let result: CmdResult;
+  switch (cmd) {
+    case "status": {
+      const err = arity("status", p, 0, 0);
+      if (err) return failArg(err);
+      result = await cmdStatus(deps);
+      break;
+    }
+    case "start": {
+      const err = arity("start", p, 1, 2);
+      if (err) return failArg(err);
+      result = await cmdStart(deps, p[0] ?? "", p[1], cli.note);
+      break;
+    }
+    case "stop": {
+      const err = arity("stop", p, 0, 0);
+      if (err) return failArg(err);
+      result = await cmdStop(deps);
+      break;
+    }
+    case "log": {
+      const err = arity("log", p, 2, 3);
+      if (err) return failArg(err);
+      result = await cmdLog(deps, p[0] ?? "", p[1] ?? "", p[2], cli.date, cli.note);
+      break;
+    }
+    case "edit": {
+      const err = arity("edit", p, 1, 1);
+      if (err) return failArg(err);
+      result = await cmdEdit(deps, p[0] ?? "", { hours: cli.hours, notes: cli.note, date: cli.date });
+      break;
+    }
+    case "today": {
+      const err = arity("today", p, 0, 0);
+      if (err) return failArg(err);
+      result = await cmdToday(deps);
+      break;
+    }
+    case "week": {
+      const err = arity("week", p, 0, 0);
+      if (err) return failArg(err);
+      result = await cmdWeek(deps);
+      break;
+    }
+    case "projects": {
+      const err = arity("projects", p, 0, 0);
+      if (err) return failArg(err);
+      result = await cmdProjects(deps);
+      break;
+    }
+    case "tasks": {
+      const err = arity("tasks", p, 1, 1);
+      if (err) return failArg(err);
+      result = await cmdTasks(deps, p[0] ?? "");
+      break;
+    }
+    case "alias": {
+      if (cli.remove) {
+        const err = arity("alias -r", p, 1, 1);
+        if (err) return failArg(err);
+        result = aliasRemove(deps, p[0] ?? "");
+      } else if (p.length === 0) {
+        result = aliasList(deps);
+      } else if (p.length === 2 || p.length === 3) {
+        result = await aliasSet(deps, p[0] ?? "", p[1] ?? "", p[2]);
+      } else {
+        return failArg("alias: expected 0, 2, or 3 arguments (list, set with task optional)");
+      }
+      break;
+    }
+    case "whoami": {
+      const err = arity("whoami", p, 0, 0);
+      if (err) return failArg(err);
+      result = await cmdWhoami(deps);
+      break;
+    }
+    default:
+      console.error(`error: unknown command "${cmd}"\n(run harvest --help for usage)`);
+      return 2;
+  }
+
+  if (cli.json) {
+    console.log(JSON.stringify(result.json, null, 2));
+  } else {
+    console.log(result.text);
+  }
+  return 0;
+}
+
+function failArg(message: string): number {
+  console.error(`error: ${message}\n(run harvest --help for usage)`);
+  return 2;
+}
+
+async function main(): Promise<number> {
+  try {
+    return await run(process.argv.slice(2));
+  } catch (e) {
+    if (e instanceof HarvestApiError) {
+      console.error(`harvest api error ${e.status}: ${e.message}`);
+      if (e.status === 401)
+        console.error("(token invalid or expired — create a new one at https://id.getharvest.com/developers)");
+      if (e.status === 403) console.error("(your Harvest role does not allow this action)");
+    } else {
+      console.error(`error: ${(e as Error).message}`);
+    }
+    return 1;
+  }
+}
+
+// Only run when executed directly — importing this module (tests) must not
+// trigger main(), which would probe auth sources.
+if (import.meta.main) {
+  process.exitCode = await main();
+}

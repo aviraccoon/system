@@ -30,7 +30,7 @@
     }
   },
   "files": {
-    "includes": ["config/llm/**/*.ts", "scripts/**/*.ts", "!!**/node_modules", "!!**/dist"],
+    "includes": ["config/llm/**/*.ts", "config/cli/**/*.ts", "scripts/**/*.ts", "!!**/node_modules", "!!**/dist"],
     "ignoreUnknown": true
   },
   "vcs": {
