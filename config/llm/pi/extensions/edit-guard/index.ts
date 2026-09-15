@@ -153,16 +153,16 @@ export default function editGuardExtension(pi: ExtensionAPI) {
       const command = typeof input.command === "string" ? input.command : "";
       if (command.length === 0) return;
       const blocks: string[] = [];
-      let flagged = 0;
+      const labels: string[] = [];
       for (const rule of compiled) {
         if (rule.kind !== "bash" || rule.rules.length === 0) continue;
         const violations = scanContent(command, rule.rules);
         if (violations.length === 0) continue;
         blocks.push(formatViolations(violations, rule, ""));
-        flagged += violations.length;
+        labels.push(...violations.flatMap((v) => v.labels));
       }
       if (blocks.length === 0) return;
-      ctx.ui.notify(`edit-guard: ${flagged} suspect line${flagged === 1 ? "" : "s"} in bash command`, "warning");
+      ctx.ui.notify(`edit-guard: ${[...new Set(labels)].join(", ")} (bash command)`, "warning");
       const existing = event.content[0]?.type === "text" ? event.content[0].text : "";
       return {
         content: [{ type: "text" as const, text: `${existing}\n\n${blocks.join("\n\n")}` }],
@@ -175,7 +175,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
 
     const blocks: string[] = [];
     const flaggedFiles = new Set<string>();
-    let flaggedLines = 0;
+    const flaggedLabels = new Set<string>();
     for (const raw of paths) {
       const abs = resolveInputPath(raw, ctx.cwd);
       if (!existsSync(abs)) continue;
@@ -191,15 +191,17 @@ export default function editGuardExtension(pi: ExtensionAPI) {
         if (violations.length === 0) continue;
         blocks.push(formatViolations(violations, rule, relative(ctx.cwd, abs)));
         flaggedFiles.add(abs);
-        flaggedLines += violations.length;
+        for (const v of violations) {
+          for (const label of v.labels) flaggedLabels.add(label);
+        }
       }
     }
     if (blocks.length === 0) return;
 
     ctx.ui.notify(
-      flaggedFiles.size === 1
-        ? `edit-guard: ${flaggedLines} suspect line${flaggedLines === 1 ? "" : "s"} in ${relative(ctx.cwd, [...flaggedFiles][0] ?? "")}`
-        : `edit-guard: ${flaggedLines} suspect line${flaggedLines === 1 ? "" : "s"} across ${flaggedFiles.size} files`,
+      `edit-guard: ${[...flaggedLabels].join(", ")} in ${
+        flaggedFiles.size === 1 ? relative(ctx.cwd, [...flaggedFiles][0] ?? "") : `${flaggedFiles.size} files`
+      }`,
       "warning",
     );
 
