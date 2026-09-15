@@ -4,6 +4,7 @@
 
 - No yapping, in everything — code comments, commit messages, docs, chat, prose. Say the least that fully conveys it and no more: less is more, but only when it still explains everything (dense, not caveman-terse). No padding, no restated obviousness, no filler to sound thorough.
 - Commit messages, code comments, and docs are public and must be self-contained — a reader has only the repo, not your journal, session log, or internal framings. Don't reference any of those (journal entries, session names, internal jargon or codenames); describe the change on its own terms.
+- Test fixtures, examples, and sample data are fully synthetic. Write them from scratch — never adapt them from the user's real files, project names, work topics, or any other private content, even "neutralized". Generic names only: `foo`, `acme`, `example.com`.
 - No emoji by default, unless a project's AGENTS.md says otherwise
 - No marketing language ("comprehensive", "robust", "cutting-edge", etc.)
 - Writing style: read and follow `~/raccoon-life/system/ai/reference/llm-writing-guide.md` for any prose output (docs, posts, handouts, commit messages, READMEs). It's the authority on style: specificity over grandiosity, plain words over jargon, and avoid the AI-writing patterns it lists.
@@ -97,7 +98,7 @@ Write journal files directly — not via subagents. They lose the conversation c
 
 TODO.md rules:
 - **Only actionable items you're actively working on or will work on next.** No wishlists, no reference material, no competitive analysis, no product ideas. That stuff goes in project docs or journal entries.
-- **Never add completed items.** Remove items when done, don't add "DONE" entries.
+- **Never add completed items.** Remove items when done, don't add "DONE" entries. When an item's work is done, delete the item entirely — never reword it to look unfinished, annotate it as done, or swap in a pointer to a journal entry. If part of an item remains, rewrite it to contain only what remains.
 - **No design docs.** If a feature needs design spec, write a journal entry and link it from TODO with one line.
 - **Plain prose, not Markdown checkboxes.** Use `- item` not `- [ ] item`. TODO is a living doc, not a checklist to tick off.
 - **Edit the file if it already exists.** Never fully rewrite the file.
