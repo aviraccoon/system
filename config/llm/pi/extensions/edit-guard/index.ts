@@ -18,6 +18,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { loadJournalConfig } from "../shared/journal-context";
 import {
@@ -213,50 +214,106 @@ export default function editGuardExtension(pi: ExtensionAPI) {
 
   // ── /todo-check: on-demand sweep of the project journal TODO.md ──
 
+  function scanTarget(abs: string, ctx: ExtensionContext, roots: RuntimeRoots): { blocks: string[]; flagged: number } {
+    const blocks: string[] = [];
+    let flagged = 0;
+    let content: string;
+    try {
+      content = readFileSync(abs, "utf-8");
+    } catch (err) {
+      throw new Error(`cannot read ${abs}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    for (const rule of compiled) {
+      if (rule.kind !== "file" || !rule.matches(abs, roots) || rule.rules.length === 0) continue;
+      const violations = scanContent(content, rule.rules);
+      if (violations.length === 0) continue;
+      blocks.push(formatViolations(violations, rule, relative(ctx.cwd, abs)));
+      flagged += violations.length;
+    }
+    return { blocks, flagged };
+  }
+
+  function todoTarget(args: string, ctx: ExtensionContext): string {
+    const target = args.trim();
+    return target ? resolveInputPath(target, ctx.cwd) : join(journalNotesDir(), basename(ctx.cwd), "TODO.md");
+  }
+
+  function sweepReport(result: { blocks: string[] }): string {
+    return `${result.blocks.join("\n\n")}\n\nRemove flagged lines that are done items entirely (per the rules above); leave genuinely-open lines untouched. Reply with what you removed.`;
+  }
+
+  function rootsFor(ctx: ExtensionContext): RuntimeRoots {
+    return {
+      cwd: ctx.cwd,
+      notesDir: journalNotesDir(),
+      sessionsDir: join(homedir(), ".pi", "agent", "sessions"),
+    };
+  }
+
   pi.registerCommand("todo-check", {
     description: "Scan the project journal TODO.md (or a given path) for rule violations",
     handler: async (args, ctx) => {
       if (compiled.length === 0) startSession(ctx);
-      const target = args.trim();
-      const abs = target ? resolveInputPath(target, ctx.cwd) : join(journalNotesDir(), basename(ctx.cwd), "TODO.md");
+      const abs = todoTarget(args, ctx);
       if (!existsSync(abs)) {
         ctx.ui.notify(`edit-guard: not found: ${abs}`, "warning");
         return;
       }
-
-      const roots: RuntimeRoots = {
-        cwd: ctx.cwd,
-        notesDir: journalNotesDir(),
-        sessionsDir: join(homedir(), ".pi", "agent", "sessions"),
-      };
-      const blocks: string[] = [];
-      let flaggedLines = 0;
-      let content = "";
+      let result: { blocks: string[]; flagged: number };
       try {
-        content = readFileSync(abs, "utf-8");
+        result = scanTarget(abs, ctx, rootsFor(ctx));
       } catch (err) {
-        ctx.ui.notify(`edit-guard: cannot read ${abs}: ${err instanceof Error ? err.message : String(err)}`, "error");
+        ctx.ui.notify(`edit-guard: ${err instanceof Error ? err.message : String(err)}`, "error");
         return;
       }
-      for (const rule of compiled) {
-        if (rule.kind !== "file" || !rule.matches(abs, roots) || rule.rules.length === 0) continue;
-        const violations = scanContent(content, rule.rules);
-        if (violations.length === 0) continue;
-        blocks.push(formatViolations(violations, rule, relative(ctx.cwd, abs)));
-        flaggedLines += violations.length;
-      }
-
-      if (blocks.length === 0) {
+      if (result.blocks.length === 0) {
         ctx.ui.notify(`edit-guard: clean — ${abs}`, "info");
         return;
       }
-
-      const report = `[/todo-check ${abs}]\n\n${blocks.join("\n\n")}\n\nRemove flagged lines that are done items entirely (per the rules above); leave genuinely-open lines untouched. Reply with what you removed.`;
-      pi.sendUserMessage(report);
+      pi.sendUserMessage(`[/todo-check ${abs}]\n\n${sweepReport(result)}`);
       ctx.ui.notify(
-        `edit-guard: ${flaggedLines} suspect line${flaggedLines === 1 ? "" : "s"} — sent to agent`,
+        `edit-guard: ${result.flagged} suspect line${result.flagged === 1 ? "" : "s"} — sent to agent`,
         "warning",
       );
+    },
+  });
+
+  // ── todo_check tool: the agent runs the same sweep (wrap-up) ──
+
+  pi.registerTool({
+    name: "todo_check",
+    label: "TODO Check",
+    description:
+      "Scan the project journal TODO.md (or a given path) for content-rule violations: done items, commit-hash narration, self-deleting lines. Run it when maintaining a TODO.md or at wrap-up.",
+    promptSnippet:
+      "todo_check: Scan the project journal TODO.md (or a given path) for rule violations (done items, done narration). Run when maintaining a TODO.md or at wrap-up; remove flagged lines.",
+    promptGuidelines: [
+      "After finishing work a TODO.md tracks (or at wrap-up), run todo_check on it; flagged lines are either fully done (delete them) or hold leftover work (strip the done narration, keep the rest).",
+    ],
+    parameters: Type.Object({
+      path: Type.Optional(
+        Type.String({ description: "File to scan. Defaults to the current project's journal TODO.md." }),
+      ),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      if (compiled.length === 0) startSession(ctx);
+      const abs = todoTarget(typeof params.path === "string" ? params.path : "", ctx);
+      if (!existsSync(abs)) {
+        return { content: [{ type: "text", text: `edit-guard: not found: ${abs}` }], details: undefined };
+      }
+      let result: { blocks: string[]; flagged: number };
+      try {
+        result = scanTarget(abs, ctx, rootsFor(ctx));
+      } catch (err) {
+        return {
+          content: [{ type: "text", text: `edit-guard: ${err instanceof Error ? err.message : String(err)}` }],
+          details: undefined,
+        };
+      }
+      if (result.blocks.length === 0) {
+        return { content: [{ type: "text", text: `edit-guard: clean — ${abs}` }], details: undefined };
+      }
+      return { content: [{ type: "text", text: sweepReport(result) }], details: undefined };
     },
   });
 }
