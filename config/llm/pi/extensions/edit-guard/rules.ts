@@ -52,7 +52,8 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
     match: { kind: "basename", names: ["todo.md"] },
     policy:
       "TODO.md lists only unfinished, actionable work. DELETE done items entirely — the journal holds the details. " +
-      "Never reword a done item, annotate it as done, or leave a pointer to it. " +
+      "Never reword a done item or annotate it as done. If the item holds remaining work, strip the done narration " +
+      "(commit hashes, landed/shipped references) and keep only what remains. " +
       "If a flagged line is genuinely still-open work, leave it untouched.",
     patterns: [
       { label: "checked checkbox", regex: "^\\s*(?:[-*+]|\\d+[.)])?\\s*\\[[xX]\\]" },
@@ -64,6 +65,16 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
       { label: "strikethrough", regex: "~~" },
       { label: "checkmark", regex: "[\u2705\u2611\u2713]" },
       { label: "done tag", regex: "\\[(?:done|completed)\\]|\\((?:done|completed)\\)", flags: "i" },
+      {
+        // Commit hashes narrate landed work ("shipped in cafebabe"). All-digit
+        // hashes are real (~3% of 7-char hashes are digits-only), so digits are
+        // allowed; occasional numeric-ID false positives are acceptable — the
+        // notice is advisory and the agent judges from the line.
+        label: "commit hash reference",
+        regex: "\\b[0-9a-f]{7,40}\\b",
+      },
+      { label: "self-deleting item (says it can be deleted)", regex: "\\bcan (?:be )?delete\\b", flags: "i" },
+      { label: "already-done claim", regex: "\\balready (?:fixed|landed|shipped|merged)\\b", flags: "i" },
     ],
   },
   {

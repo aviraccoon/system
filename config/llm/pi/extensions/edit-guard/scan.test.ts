@@ -119,6 +119,33 @@ describe("TODO.md rule", () => {
   test("flags check glyphs and done tags", () => {
     expect(scanContent("✅ finished\n☑ also\n✓ third\n(done) last\n[Done] tagged", rules)).toHaveLength(5);
   });
+
+  test("flags commit hashes narrating landed work", () => {
+    expect(labelsOf(scanContent("- follow-ups (core feature shipped in `cafebabe42`): remaining work", rules))).toEqual(
+      [["commit hash reference"]],
+    );
+    expect(scanContent("- flip the default; the flag landed as `deadbee`", rules)).toHaveLength(1);
+  });
+
+  test("hash pattern catches digits-only hashes; long numeric ids flag too (advisory)", () => {
+    expect(scanContent("- reclassify order `98765432101`", rules)).toHaveLength(1);
+    expect(scanContent("- fix issue #479591 in the tracker", rules)).toHaveLength(0);
+    expect(scanContent("- use color 0xff2049 in the theme", rules)).toHaveLength(0);
+  });
+
+  test("flags self-deleting and already-done lines", () => {
+    expect(labelsOf(scanContent("- the temp export is already fixed — can delete", rules))).toEqual([
+      ["self-deleting item (says it can be deleted)", "already-done claim"],
+    ]);
+  });
+
+  test("leaves sanctioned journal links and future work alone", () => {
+    expect(scanContent("- design agreed, spec: `2027-01-02-03-example-topic.md` — then implement", rules)).toHaveLength(
+      0,
+    );
+    expect(scanContent("- ship the nightly build", rules)).toHaveLength(0);
+    expect(scanContent("- decided: stay on the current stack", rules)).toHaveLength(0);
+  });
 });
 
 describe("journal-reference rule", () => {
