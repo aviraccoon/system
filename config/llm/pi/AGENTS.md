@@ -84,7 +84,7 @@ The benchmark's `shared.ts` replicates this merge logic (reads models.json + pi-
 
 ## Guidelines
 
-- Multi-file extensions go in a subdirectory with `index.ts` as entry point and a README. See `ls config/llm/pi/extensions/` for current extensions.
+- Multi-file extensions go in a subdirectory with `index.ts` as entry point and a README. Add a row to the extension table in `config/llm/pi/README.md`. See `ls config/llm/pi/extensions/` for current extensions.
 - Extract testable logic into a pure module (no pi imports). Test with bun.
 - All extensions are symlinked live to `~/.pi/agent/extensions/` — edit + `/reload` works without nix-switch.
 - Runtime config (journal constants, model roles) is read from `~/.config/llm/journal.json` and `~/.pi/agent/roles.json` respectively.
