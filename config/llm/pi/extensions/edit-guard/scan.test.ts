@@ -174,7 +174,13 @@ describe("mergeRuleConfigs", () => {
       patterns: [{ label: "y", regex: "y" }],
     };
     const merged = mergeRuleConfigs(DEFAULT_RULE_CONFIG, [replacement, added]);
-    expect(merged.map((r) => r.displayName)).toEqual(["TODO.md", "public file", "internal codename", "extra"]);
+    expect(merged.map((r) => r.displayName)).toEqual([
+      "TODO.md",
+      "public file",
+      "internal codename",
+      "bash command",
+      "extra",
+    ]);
     expect(merged[0]).toBe(replacement);
   });
 });
@@ -232,6 +238,33 @@ describe("internal-codename rule", () => {
   test("leaves domain uses of plan alone", () => {
     expect(scanContent("// floor plan diagram lives in assets", codenameRule.rules)).toHaveLength(0);
     expect(scanContent("// delegate to the planner component", codenameRule.rules)).toHaveLength(0);
+  });
+});
+
+describe("bash-command rule", () => {
+  const bashRule = pick("bash command");
+  const rules = bashRule.rules;
+
+  test("is a bash-kind rule", () => {
+    expect(bashRule.kind).toBe("bash");
+  });
+
+  test("flags output filtering and rg misuse", () => {
+    expect(
+      labelsOf(
+        scanContent(["cargo clippy 2>&1 | tail -20", "rg -rn 'pattern' src/", "rg 'foo\\|bar' lib/"].join("\n"), rules),
+      ),
+    ).toEqual([
+      ["output filtered through pipe"],
+      ["rg -rn flag misuse (-r is --replace; this rewrites every match to 'n')"],
+      ["rg escaped alternation (\\| matches a literal pipe, not OR)"],
+    ]);
+  });
+
+  test("leaves plain commands alone", () => {
+    expect(scanContent("rg 'foo|bar' src/", rules)).toHaveLength(0);
+    expect(scanContent("cargo clippy", rules)).toHaveLength(0);
+    expect(scanContent("rg foo src/ | wc -l", rules)).toHaveLength(0);
   });
 });
 

@@ -116,15 +116,38 @@ export default function editGuardExtension(pi: ExtensionAPI) {
 
   pi.on("tool_result", async (event, ctx) => {
     if (event.isError) return;
-    if (!EDIT_LIKE_TOOLS.includes(event.toolName)) return;
-    const paths = collectToolPaths(event.toolName, event.input as Record<string, unknown>);
-    if (paths.length === 0) return;
 
     const roots: RuntimeRoots = {
       cwd: ctx.cwd,
       notesDir: journalNotesDir(),
       sessionsDir: join(homedir(), ".pi", "agent", "sessions"),
     };
+
+    // ── Bash commands: run the bash-kind rules over the command string ──
+    if (event.toolName === "bash") {
+      const input = event.input as { command?: unknown };
+      const command = typeof input.command === "string" ? input.command : "";
+      if (command.length === 0) return;
+      const blocks: string[] = [];
+      let flagged = 0;
+      for (const rule of compiled) {
+        if (rule.kind !== "bash" || rule.rules.length === 0) continue;
+        const violations = scanContent(command, rule.rules);
+        if (violations.length === 0) continue;
+        blocks.push(formatViolations(violations, rule, ""));
+        flagged += violations.length;
+      }
+      if (blocks.length === 0) return;
+      ctx.ui.notify(`edit-guard: ${flagged} suspect line${flagged === 1 ? "" : "s"} in bash command`, "warning");
+      const existing = event.content[0]?.type === "text" ? event.content[0].text : "";
+      return {
+        content: [{ type: "text" as const, text: `${existing}\n\n${blocks.join("\n\n")}` }],
+      };
+    }
+
+    if (!EDIT_LIKE_TOOLS.includes(event.toolName)) return;
+    const paths = collectToolPaths(event.toolName, event.input as Record<string, unknown>);
+    if (paths.length === 0) return;
 
     const blocks: string[] = [];
     const flaggedFiles = new Set<string>();
@@ -139,7 +162,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
         continue;
       }
       for (const rule of compiled) {
-        if (!rule.matches(abs, roots) || rule.rules.length === 0) continue;
+        if (rule.kind !== "file" || !rule.matches(abs, roots) || rule.rules.length === 0) continue;
         const violations = scanContent(content, rule.rules);
         if (violations.length === 0) continue;
         blocks.push(formatViolations(violations, rule, relative(ctx.cwd, abs)));
@@ -190,7 +213,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
         return;
       }
       for (const rule of compiled) {
-        if (!rule.matches(abs, roots) || rule.rules.length === 0) continue;
+        if (rule.kind !== "file" || !rule.matches(abs, roots) || rule.rules.length === 0) continue;
         const violations = scanContent(content, rule.rules);
         if (violations.length === 0) continue;
         blocks.push(formatViolations(violations, rule, relative(ctx.cwd, abs)));

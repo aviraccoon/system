@@ -26,7 +26,7 @@ export interface RuntimeRoots {
 
 /** Serializable rule table — this is what the JSON config holds. */
 export interface RuleConfig {
-  /** Name used in message headers. */
+  /** Name used in message headers (also the merge key against defaults). */
   displayName: string;
   match:
     | { kind: "basename"; names: string[] }
@@ -34,7 +34,8 @@ export interface RuleConfig {
         /** Absolute paths with {notesDir}, {sessionsDir}, {cwd} placeholders. */
         kind: "allExcept";
         paths: string[];
-      };
+      }
+    | { kind: "bash" };
   /**
    * Self-contained policy statement quoted verbatim in every violation
    * message — the agent reading the tool result gets the rule and the
@@ -102,6 +103,28 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
       "or other private artifacts a repo reader cannot see.",
     patterns: [{ label: "internal plan reference", regex: "\\bthe plan\\b", flags: "i" }],
   },
+  {
+    // Deterministic mirrors of written prompt rules, applied to every bash
+    // command. Advisory: genuinely small-output commands where filtering is
+    // the point can ignore the notice (the policy says so).
+    displayName: "bash command",
+    match: { kind: "bash" },
+    policy:
+      "Dump compiler, linter, and test output in full — filtering hides the lines that matter and forces a re-run. " +
+      "For large output, redirect it to a file and analyze that file (repeat reads are cheap; re-running the command " +
+      "is not). If this command is genuinely small-output and the filter is the point, ignore this notice.",
+    patterns: [
+      { label: "output filtered through pipe", regex: "\\|\\s*(?:head|tail|grep|awk|sed)\\b" },
+      {
+        label: "rg -rn flag misuse (-r is --replace; this rewrites every match to 'n')",
+        regex: "\\brg\\b[^\\n|]*\\s-rn\\b",
+      },
+      {
+        label: "rg escaped alternation (\\| matches a literal pipe, not OR)",
+        regex: "\\brg\\b[^\\n|]*\\\\\\|",
+      },
+    ],
+  },
 ];
 
 // ── Config loading: validate + merge user config over defaults ──
@@ -140,8 +163,10 @@ export function validateRuleConfig(entry: unknown, source: string): string | nul
   } else if (match.kind === "allExcept") {
     if (!Array.isArray(match.paths) || match.paths.some((p) => typeof p !== "string"))
       return where(`"${r.displayName}": allExcept match needs "paths": [string, ...]`);
+  } else if (match.kind === "bash") {
+    // no extra fields
   } else {
-    return where(`"${r.displayName}": match.kind must be "basename" or "allExcept"`);
+    return where(`"${r.displayName}": match.kind must be "basename", "allExcept", or "bash"`);
   }
   if (!Array.isArray(r.patterns) || r.patterns.length === 0)
     return where(`"${r.displayName}": "patterns" must be a non-empty array`);
@@ -165,6 +190,8 @@ export interface ContentRule {
 
 export interface CompiledPathRule {
   displayName: string;
+  /** "file" rules match edited paths; "bash" rules apply to every bash command. */
+  kind: "file" | "bash";
   matches: (absPath: string, roots: RuntimeRoots) => boolean;
   policy: string;
   rules: ContentRule[];
@@ -212,19 +239,29 @@ export function compileRules(config: RuleConfig[]): CompileResult {
       const names = new Set(entry.match.names.map((n) => n.toLowerCase()));
       rules.push({
         displayName: entry.displayName,
+        kind: "file",
         policy: entry.policy,
         matches: (abs) => names.has(basename(abs).toLowerCase()),
         rules: contentRules,
       });
-    } else {
+    } else if (entry.match.kind === "allExcept") {
       const excludePaths = entry.match.paths;
       rules.push({
         displayName: entry.displayName,
+        kind: "file",
         policy: entry.policy,
         matches: (abs, roots) => {
           const excluded = excludePaths.some((raw) => under(expandPlaceholders(raw, roots), abs));
           return !excluded;
         },
+        rules: contentRules,
+      });
+    } else {
+      rules.push({
+        displayName: entry.displayName,
+        kind: "bash",
+        policy: entry.policy,
+        matches: () => true,
         rules: contentRules,
       });
     }
