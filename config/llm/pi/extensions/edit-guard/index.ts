@@ -14,7 +14,7 @@
  * (wrap-up use: finds stale rule violations no live edit would re-trigger).
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -97,6 +97,9 @@ function resolveInputPath(raw: string, cwd: string): string {
 
 export default function editGuardExtension(pi: ExtensionAPI) {
   let compiled: CompiledPathRule[] = [];
+  // Paths whose write-to-existing block was already issued once this session;
+  // a re-issued write to the same path proceeds (genuine full rewrite).
+  const rewriteAllowed = new Set<string>();
 
   function startSession(ctx: ExtensionContext) {
     const { config, loadErrors } = loadRuleConfig();
@@ -110,6 +113,27 @@ export default function editGuardExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     startSession(ctx);
+  });
+
+  // ── Write-guard: write is for new files, not wholesale replacement ──
+
+  pi.on("tool_call", async (event, ctx) => {
+    if (event.toolName !== "write") return;
+    const input = event.input as { path?: unknown };
+    if (typeof input.path !== "string") return;
+    const abs = resolveInputPath(input.path, ctx.cwd);
+    if (rewriteAllowed.has(abs) || !existsSync(abs)) return;
+    if (statSync(abs).size === 0) return;
+    const lines = readFileSync(abs, "utf-8").split("\n").length;
+    const rel = relative(ctx.cwd, abs);
+    rewriteAllowed.add(abs);
+    return {
+      block: true,
+      reason:
+        `edit-guard: ${rel} already exists (${lines} lines). Don't use write to replace existing files — ` +
+        "use patch for targeted changes (write is for genuinely new files only). " +
+        "If a full rewrite is genuinely intended, re-issue this exact write call and it will proceed.",
+    };
   });
 
   // ── Post-edit scan: append violations to the tool result ──
