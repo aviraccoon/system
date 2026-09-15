@@ -8,6 +8,7 @@ import {
   clockTime,
   entryElapsed,
   formatHours,
+  formatMoney,
   localDateString,
   parseHours,
   weekDates,
@@ -45,14 +46,20 @@ async function ensureMe(deps: Deps) {
 }
 
 async function ensureTimerMode(deps: Deps): Promise<boolean> {
-  if (deps.cache.timestampTimers !== undefined && isFresh(deps.cache, "timerMode", WEEK, deps.now.getTime())) {
+  if (deps.cache.timestampTimers !== undefined && isFresh(deps.cache, "company", WEEK, deps.now.getTime())) {
     return deps.cache.timestampTimers;
   }
   const company = await deps.getApi().company();
   deps.cache.timestampTimers = company.wants_timestamp_timers;
-  remember(deps, "timerMode");
+  deps.cache.currencyCode = company.currency ? company.currency.toUpperCase() : null;
+  remember(deps, "company");
   deps.saveCache(deps.cache);
   return company.wants_timestamp_timers;
+}
+
+async function ensureCurrency(deps: Deps): Promise<string | null> {
+  await ensureTimerMode(deps);
+  return deps.cache.currencyCode ?? null;
 }
 
 async function ensureProjects(deps: Deps, force = false): Promise<NonNullable<HarvestCache["projects"]>> {
@@ -295,6 +302,73 @@ export async function cmdToday(deps: Deps): Promise<CmdResult> {
     );
   }
   return { text: lines.join("\n"), json: { entries: today, total: totalHours(today) } };
+}
+
+export function monthRange(monthArg: string | undefined, now: Date): { label: string; from: string; to: string } {
+  const label = monthArg ?? localDateString(now).slice(0, 7);
+  const m = /^(\d{4})-(\d{2})$/.exec(label);
+  if (!m) fail(`month must be YYYY-MM, got "${monthArg ?? label}"`);
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  if (mo < 1 || mo > 12) fail(`month must be YYYY-MM, got "${label}"`);
+  const to = new Date(y, mo, 0); // day 0 of month index mo = last day of month mo
+  return { label, from: `${label}-01`, to: localDateString(to) };
+}
+
+export async function cmdMonth(deps: Deps, monthArg?: string): Promise<CmdResult> {
+  const { label, from, to } = monthRange(monthArg, deps.now);
+  const me = await ensureMe(deps);
+  const entries = await deps.getApi().timeEntries({ user_id: me.id, from, to });
+  const currency = await ensureCurrency(deps);
+
+  // Exact tracked hours (raw `hours`, the rounding-agnostic ground truth).
+  // Rate: config wins, entry rate fallback; the billable flag is
+  // ignored — in practice the user's work is billable regardless of project flags.
+  const byProject = new Map<string, { hours: number; ratedHours: number; amount: number }>();
+  for (const e of entries) {
+    const g = byProject.get(e.project.name) ?? { hours: 0, ratedHours: 0, amount: 0 };
+    g.hours += e.hours;
+    const rate = deps.cfg.hourlyRate ?? e.billable_rate;
+    if (rate !== null && rate !== undefined) {
+      g.amount += e.hours * rate;
+      g.ratedHours += e.hours;
+    }
+    byProject.set(e.project.name, g);
+  }
+  const groups = [...byProject.entries()].sort((a, b) => b[1].hours - a[1].hours);
+  const totalHours = groups.reduce((s, [, g]) => s + g.hours, 0);
+  const totalAmount = groups.reduce((s, [, g]) => s + g.amount, 0);
+  const ratedHours = groups.reduce((s, [, g]) => s + g.ratedHours, 0);
+
+  const money = (amount: number): string => (currency ? formatMoney(amount, currency) : amount.toFixed(2));
+  const rateNote = deps.cfg.hourlyRate !== undefined ? ` (rate ${deps.cfg.hourlyRate})` : "";
+  const headerMoney = ratedHours > 0 ? ` — ${money(totalAmount)}${rateNote}` : "";
+  const lines = [`${label}: ${formatHours(totalHours)} total${headerMoney}`];
+  for (const [name, g] of groups) {
+    const amount = g.ratedHours > 0 && currency ? ` — ${money(g.amount)}` : "";
+    lines.push(`  ${formatHours(g.hours)}  ${name}${amount}`);
+  }
+  const unrated = totalHours - ratedHours;
+  if (unrated > 0.0001) {
+    lines.push(`  ${formatHours(unrated)} without a rate — set "hourlyRate" in ~/.config/harvest/config.json`);
+  }
+  return {
+    text: lines.join("\n"),
+    json: {
+      month: label,
+      from,
+      to,
+      entries,
+      groups: groups.map(([name, g]) => ({
+        project: name,
+        hours: g.hours,
+        amount: g.amount,
+        ratedHours: g.ratedHours,
+      })),
+      totalHours,
+      totalAmount,
+    },
+  };
 }
 
 export async function cmdWeek(deps: Deps): Promise<CmdResult> {

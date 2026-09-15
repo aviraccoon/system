@@ -29,6 +29,8 @@ export interface HarvestConfig {
   aliases: Record<string, Alias>;
   userAgent?: string;
   op?: OpConfig;
+  /** Fallback hourly rate for money views when entries carry no rate (Member roles see none). */
+  hourlyRate?: number;
 }
 
 export interface CachedProject {
@@ -41,6 +43,7 @@ export interface CachedProject {
 export interface HarvestCache {
   me?: { id: number; first_name: string; last_name: string; email: string };
   timestampTimers?: boolean;
+  currencyCode?: string | null;
   projects?: CachedProject[];
   tasksByProject?: Record<string, { id: number; name: string }[]>;
   fetchedAt?: Record<string, number>;

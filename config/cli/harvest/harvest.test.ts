@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import { createClient, HarvestApiError, type HarvestClient, type TimeEntry } from "./api";
-import { aliasRemove, aliasSet, cmdLog, cmdStart, cmdStatus, cmdStop, type Deps } from "./commands";
+import {
+  aliasRemove,
+  aliasSet,
+  cmdLog,
+  cmdMonth,
+  cmdStart,
+  cmdStatus,
+  cmdStop,
+  type Deps,
+  monthRange,
+} from "./commands";
 import { authSetupMessage, type HarvestCache, type HarvestConfig, isFresh, resolveAuth } from "./config";
 import {
   buildCreateEntryBody,
@@ -297,6 +307,7 @@ function timeEntry(overrides: Partial<TimeEntry>): TimeEntry {
     spent_date: "2026-09-15",
     hours: 0,
     hours_without_timer: 0,
+    rounded_hours: 0,
     notes: null,
     is_running: false,
     timer_started_at: null,
@@ -305,6 +316,9 @@ function timeEntry(overrides: Partial<TimeEntry>): TimeEntry {
     is_billed: false,
     is_locked: false,
     approval_status: "unsubmitted",
+    billable: false,
+    billable_rate: null,
+    cost_rate: null,
     project: { id: 10, name: "Website" },
     task: { id: 20, name: "Development" },
     client: { id: 30, name: "Acme" },
@@ -513,6 +527,51 @@ describe("alias commands", () => {
     const removed = aliasRemove(deps, "WEB");
     expect(removed.text).toBe("removed alias web");
     expect(() => aliasRemove(deps, "web")).toThrow('no alias "web"');
+  });
+});
+
+describe("cmdMonth", () => {
+  const entries = [
+    timeEntry({ id: 1, project: { id: 10, name: "Website" }, hours: 4.5, billable_rate: null }),
+    timeEntry({ id: 2, project: { id: 10, name: "Website" }, hours: 2, billable_rate: null }),
+    timeEntry({ id: 3, project: { id: 11, name: "Internal" }, hours: 1.25, billable_rate: 100 }),
+  ];
+
+  test("config rate covers all entries with exact hours", async () => {
+    const api = apiStub({
+      me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
+      timeEntries: [entries],
+      company: [{ wants_timestamp_timers: false, currency: "czk" }],
+    });
+    const { deps } = makeDeps(api, { aliases: {}, hourlyRate: 620 });
+    const r = await cmdMonth(deps, "2026-09");
+    expect(r.text).toContain("2026-09: 7:45 total — 4 805.00 CZK (rate 620)");
+    expect(r.text).toContain("6:30  Website — 4 030.00 CZK");
+    expect(r.text).toContain("1:15  Internal — 775.00 CZK");
+  });
+
+  test("without config rate, unrated entries are flagged", async () => {
+    const api = apiStub({
+      me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
+      timeEntries: [entries],
+      company: [{ wants_timestamp_timers: false, currency: "czk" }],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdMonth(deps, "2026-09");
+    expect(r.text).toContain("6:30 without a rate");
+    expect(r.text).toContain("1:15  Internal — 125.00 CZK");
+  });
+
+  test("month parsing", () => {
+    expect(monthRange("2026-09", new Date(2026, 8, 16))).toEqual({
+      label: "2026-09",
+      from: "2026-09-01",
+      to: "2026-09-30",
+    });
+    expect(monthRange("2026-02", new Date(2026, 8, 16)).to).toBe("2026-02-28");
+    expect(monthRange(undefined, new Date(2026, 8, 16)).label).toBe("2026-09");
+    expect(() => monthRange("september", new Date(2026, 8, 16))).toThrow(/YYYY-MM/);
+    expect(() => monthRange("2026-13", new Date(2026, 8, 16))).toThrow(/YYYY-MM/);
   });
 });
 

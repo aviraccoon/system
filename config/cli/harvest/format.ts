@@ -19,6 +19,13 @@ export function formatHours(hours: number): string {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
 }
 
+/** 4530 -> "4 530.00 CZK" (space-grouped, 2 decimals, currency code suffix). */
+export function formatMoney(amount: number, currency: string): string {
+  const [int, frac] = amount.toFixed(2).split(".");
+  const grouped = (int ?? "0").replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+  return `${grouped}.${frac} ${currency}`;
+}
+
 export function formatElapsed(startedIso: string, nowMs: number): string {
   const ms = Math.max(0, nowMs - Date.parse(startedIso));
   const mins = Math.floor(ms / 60000);

@@ -23,6 +23,7 @@ export interface TimeEntry {
   spent_date: string;
   hours: number;
   hours_without_timer: number;
+  rounded_hours: number;
   notes: string | null;
   is_running: boolean;
   timer_started_at: string | null;
@@ -31,6 +32,9 @@ export interface TimeEntry {
   is_billed: boolean;
   is_locked: boolean;
   approval_status: string;
+  billable: boolean;
+  billable_rate: number | null;
+  cost_rate: number | null;
   project: { id: number; name: string };
   task: { id: number; name: string };
   client: { id: number; name: string } | null;
@@ -60,6 +64,8 @@ export interface HarvestUser {
 
 export interface HarvestCompany {
   wants_timestamp_timers: boolean;
+  /** ISO 4217 code (e.g. "CZK"); currency_code_display is a placement specifier, not a code. */
+  currency?: string;
 }
 
 export type QueryParams = Record<string, string | number | boolean | undefined>;

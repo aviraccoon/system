@@ -37,6 +37,7 @@ harvest log 1:30 acme dev --date 2026-09-14   # hours: 1.5 | 1:30 | 90m
 harvest edit <entry-id> [--hours H] [-n text] [--date D]
 harvest today
 harvest week                  # ISO week, per-day and per-project totals
+harvest month [YYYY-MM]       # monthly overview, per-project hours and money
 harvest projects              # list + refresh cache
 harvest tasks acme
 harvest alias                 # list
@@ -55,6 +56,7 @@ Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space eq
 - Timer mode follows the account setting (`wants_timestamp_timers`): duration accounts get a running entry from a bare `start`; start/end accounts get `started_time` set. `log` on start/end accounts derives a time range ending now.
 - Projects and tasks are cached in `~/.cache/harvest/cache.json` (24h TTL, refreshed by `harvest projects` and on lookup misses). The list comes from your Harvest project assignments — Member roles cannot list account-wide projects, and assignments are exactly what you can track time on. Config lives in `~/.config/harvest/config.json`. Neither file contains credentials.
 - A timer left running from a previous day is flagged `STALE` by `status`.
+- Money views (`month`): `hourlyRate` in `~/.config/harvest/config.json` (e.g. `"hourlyRate": 620`) is the rate; when unset, entries' Harvest rates are used, though Member roles see none. Amounts use the exact tracked hours, which Harvest stores at 0.01 h granularity (36-second buckets) — neither seconds nor whole minutes. The H:MM display rounds to the minute, so amounts can differ from rate × displayed time by a few units. The `billable` flag is ignored, and the per-account report rounding (`rounded_hours`, e.g. 15-min intervals where configured) is not applied — raw hours are the ground truth. Currency comes from the account (cached with company settings).
 - macOS, Linux, and Windows (bun is cross-platform; the macOS keychain / Linux secret-tool fallbacks are not — on Windows use 1Password or env vars).
 
 ## Development

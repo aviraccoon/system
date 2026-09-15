@@ -10,6 +10,7 @@ import {
   type CmdResult,
   cmdEdit,
   cmdLog,
+  cmdMonth,
   cmdProjects,
   cmdStart,
   cmdStatus,
@@ -34,6 +35,7 @@ commands:
   edit <entry-id> [--hours H] [-n text] [--date D]   edit an entry
   today                       today's entries and total
   week                        this ISO week, per-day and per-project totals
+  month [YYYY-MM]             monthly overview, per-project hours and money
   projects                    list active projects (refreshes the cache)
   tasks <project>             list tasks assigned to a project
   alias                       list aliases
@@ -179,6 +181,12 @@ async function run(argv: string[]): Promise<number> {
       const err = arity("week", p, 0, 0);
       if (err) return failArg(err);
       result = await cmdWeek(deps);
+      break;
+    }
+    case "month": {
+      const err = arity("month", p, 0, 1);
+      if (err) return failArg(err);
+      result = await cmdMonth(deps, p[0]);
       break;
     }
     case "projects": {
