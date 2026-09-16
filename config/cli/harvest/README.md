@@ -35,6 +35,7 @@ harvest start acme dev -n "fixing login"
 harvest stop
 harvest log 1:30 acme dev --date 2026-09-14   # hours: 1.5 | 1:30 | 90m
 harvest edit <entry-id> [--hours H] [-n text] [--date D]
+harvest delete <entry-id> [--force]             # prompts on a TTY; agents use --force
 harvest today
 harvest week                  # ISO week, per-day and per-project totals
 harvest month [YYYY-MM]       # monthly overview, per-project hours and money
@@ -48,7 +49,9 @@ harvest whoami
 
 Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space equivalent; matches name, code, or client). Ambiguous matches list the candidates. An alias without a task defers the task choice to each start/log; with one task assigned, it's picked automatically.
 
-`--json` prints structured output. Money appears in status/today/week/month when a rate is known; `--conceal` hides amounts (screen-sharing, pasted output).
+`--json` prints structured output. Money appears in status/today/week/month when a rate is known; `--conceal` hides amounts (screen-sharing, pasted output) in both text and JSON (strips amount/rate fields).
+
+`--group-by project|task|note` regroups today/week/month into a flat list with hours and money per group. Tasks are labelled `project / task`; notes group by their first line (the work-item summary), so the same item tracked across days merges. Multiline notes render in full — first line after the entry, continuation lines indented.
 
 ## Notes
 

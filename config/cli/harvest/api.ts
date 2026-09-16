@@ -76,8 +76,10 @@ export interface HarvestClient {
   me(): Promise<HarvestUser>;
   company(): Promise<HarvestCompany>;
   timeEntries(params: QueryParams): Promise<TimeEntry[]>;
+  timeEntry(id: number): Promise<TimeEntry>;
   createTimeEntry(body: Record<string, unknown>): Promise<TimeEntry>;
   stopEntry(id: number): Promise<TimeEntry>;
+  deleteEntry(id: number): Promise<void>;
   projectAssignments(): Promise<ProjectAssignment[]>;
 }
 
@@ -147,8 +149,12 @@ export function createClient(auth: HarvestAuth, userAgent: string, fetchImpl: ty
     me: () => request<HarvestUser>("GET", "/users/me"),
     company: () => request<HarvestCompany>("GET", "/company"),
     timeEntries: (params) => listAll<TimeEntry>("/time_entries", params, "time_entries"),
+    timeEntry: (id) => request<TimeEntry>("GET", `/time_entries/${id}`),
     createTimeEntry: (body) => request<TimeEntry>("POST", "/time_entries", body),
     stopEntry: (id) => request<TimeEntry>("PATCH", `/time_entries/${id}/stop`),
+    deleteEntry: async (id) => {
+      await request<null>("DELETE", `/time_entries/${id}`);
+    },
     projectAssignments: () => listAll<ProjectAssignment>("/users/me/project_assignments", {}, "project_assignments"),
   };
 }

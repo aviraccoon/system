@@ -3,6 +3,7 @@ import { createClient, HarvestApiError, type HarvestClient, type TimeEntry } fro
 import {
   aliasRemove,
   aliasSet,
+  cmdDelete,
   cmdLog,
   cmdMonth,
   cmdStart,
@@ -577,6 +578,80 @@ describe("cmdMonth", () => {
   });
 });
 
+describe("cmdDelete", () => {
+  const entry = timeEntry({ id: 42, notes: "summary line\nhttps://tracker.example/t/42" });
+
+  test("confirm declined cancels", async () => {
+    const api = apiStub({ timeEntry: [entry] });
+    const { deps } = makeDeps(api);
+    const r = await cmdDelete(deps, "42", { confirm: async () => false });
+    expect(r.text).toBe("cancelled");
+  });
+
+  test("confirm accepted deletes with multiline summary", async () => {
+    const api = apiStub({ timeEntry: [entry], deleteEntry: [null] });
+    const { deps } = makeDeps(api);
+    const r = await cmdDelete(deps, "42", { confirm: async () => true });
+    expect(r.text).toContain("deleted Acme / Website / Development (2026-09-15, 0:00) — summary line");
+    expect(r.text).toContain("https://tracker.example/t/42");
+    const json = r.json as { deleted: boolean };
+    expect(json.deleted).toBe(true);
+  });
+
+  test("force skips confirm", async () => {
+    const api = apiStub({ timeEntry: [entry], deleteEntry: [null] });
+    const { deps } = makeDeps(api);
+    const r = await cmdDelete(deps, "42", { force: true });
+    expect(r.text.startsWith("deleted Acme")).toBe(true);
+  });
+
+  test("no force and no confirm fails with hint", async () => {
+    const api = apiStub({ timeEntry: [entry] });
+    const { deps } = makeDeps(api);
+    expect(cmdDelete(deps, "42")).rejects.toThrow(/--force/);
+  });
+});
+
+describe("cmdMonth grouping", () => {
+  const entries = [
+    timeEntry({
+      id: 1,
+      project: { id: 10, name: "Website" },
+      task: { id: 20, name: "Development" },
+      hours: 3,
+      billable_rate: null,
+      notes: "Build the thing\nhttps://tracker.example/t/1",
+    }),
+    timeEntry({
+      id: 2,
+      project: { id: 10, name: "Website" },
+      task: { id: 21, name: "Design" },
+      hours: 1,
+      billable_rate: null,
+    }),
+  ];
+  const api = () =>
+    apiStub({
+      me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
+      timeEntries: [entries],
+      company: [{ wants_timestamp_timers: false, currency: "czk" }],
+    });
+
+  test("--group-by task flattens with project prefix", async () => {
+    const { deps } = makeDeps(api(), { aliases: {}, hourlyRate: 100 });
+    const r = await cmdMonth(deps, "2026-09", { groupBy: "task" });
+    expect(r.text).toContain("3:00  Website / Development — 300.00 CZK");
+    expect(r.text).toContain("1:00  Website / Design — 100.00 CZK");
+  });
+
+  test("--group-by note merges by first line", async () => {
+    const { deps } = makeDeps(api(), { aliases: {}, hourlyRate: 100 });
+    const r = await cmdMonth(deps, "2026-09", { groupBy: "note" });
+    expect(r.text).toContain("3:00  Build the thing — 300.00 CZK");
+    expect(r.text).toContain("1:00  (no note) — 100.00 CZK");
+  });
+});
+
 // ---------- cli parsing ----------
 
 describe("parseCli", () => {
@@ -598,6 +673,12 @@ describe("parseCli", () => {
 
   test("bad date format throws", () => {
     expect(() => parseCli(["log", "1", "a", "--date", "tomorrow"])).toThrow(/yyyy-mm-dd/);
+  });
+
+  test("--group-by parses dim and rejects others", () => {
+    expect(parseCli(["week", "--group-by", "note"]).groupBy).toBe("note");
+    expect(parseCli(["week"]).groupBy).toBeUndefined();
+    expect(() => parseCli(["week", "--group-by", "wat"])).toThrow(/project, task, or note/);
   });
 
   test("conceal flag parses", () => {

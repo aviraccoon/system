@@ -1,6 +1,8 @@
 #!/usr/bin/env bun
+
 // harvest — CLI for Harvest time tracking (API v2). Runs under bun.
 
+import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
 import { createClient, HarvestApiError } from "./api";
 import {
@@ -8,6 +10,7 @@ import {
   aliasRemove,
   aliasSet,
   type CmdResult,
+  cmdDelete,
   cmdEdit,
   cmdLog,
   cmdMonth,
@@ -46,6 +49,9 @@ commands:
 flags:
   -n, --note <text>           note for start/log
   --date <yyyy-mm-dd>         date for log
+  --hours <hours>             hours for edit
+  -f, --force                 with delete: skip the confirm prompt
+  --group-by <dim>            group today/week/month by project|task|note
   -r, --remove                with alias
   --json                      machine-readable output
   --conceal                   hide money amounts (status/today/week/month)
@@ -65,6 +71,8 @@ interface Cli {
   date?: string;
   hours?: string;
   remove: boolean;
+  force: boolean;
+  groupBy?: "project" | "task" | "note";
   conceal: boolean;
   json: boolean;
   help: boolean;
@@ -81,6 +89,8 @@ export function parseCli(argv: string[]): Cli {
       date: { type: "string" },
       hours: { type: "string" },
       remove: { type: "boolean", short: "r" },
+      force: { type: "boolean", short: "f" },
+      "group-by": { type: "string" },
       conceal: { type: "boolean" },
       json: { type: "boolean" },
       help: { type: "boolean", short: "h" },
@@ -98,6 +108,8 @@ export function parseCli(argv: string[]): Cli {
     date,
     hours: values.hours,
     remove: values.remove === true,
+    force: values.force === true,
+    groupBy: parseGroupBy(values["group-by"]),
     conceal: values.conceal === true,
     json: values.json === true,
     help: values.help === true,
@@ -117,6 +129,12 @@ export function concealMoney(value: unknown): unknown {
     return out;
   }
   return value;
+}
+
+function parseGroupBy(value: string | undefined): "project" | "task" | "note" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "project" || value === "task" || value === "note") return value;
+  throw new Error(`--group-by must be project, task, or note (got "${value}")`);
 }
 
 function arity(cmd: string, positionals: string[], min: number, max: number): string | null {
@@ -192,19 +210,28 @@ async function run(argv: string[]): Promise<number> {
     case "today": {
       const err = arity("today", p, 0, 0);
       if (err) return failArg(err);
-      result = await cmdToday(deps, { conceal: cli.conceal });
+      result = await cmdToday(deps, { conceal: cli.conceal, groupBy: cli.groupBy });
       break;
     }
     case "week": {
       const err = arity("week", p, 0, 0);
       if (err) return failArg(err);
-      result = await cmdWeek(deps, { conceal: cli.conceal });
+      result = await cmdWeek(deps, { conceal: cli.conceal, groupBy: cli.groupBy });
       break;
     }
     case "month": {
       const err = arity("month", p, 0, 1);
       if (err) return failArg(err);
-      result = await cmdMonth(deps, p[0], { conceal: cli.conceal });
+      result = await cmdMonth(deps, p[0], { conceal: cli.conceal, groupBy: cli.groupBy });
+      break;
+    }
+    case "delete": {
+      const err = arity("delete", p, 1, 1);
+      if (err) return failArg(err);
+      result = await cmdDelete(deps, p[0] ?? "", {
+        force: cli.force,
+        confirm: cli.force ? undefined : confirmDelete,
+      });
       break;
     }
     case "projects": {
@@ -256,6 +283,24 @@ async function run(argv: string[]): Promise<number> {
 function failArg(message: string): number {
   console.error(`error: ${message}\n(run harvest --help for usage)`);
   return 2;
+}
+
+/**
+ * Interactive delete confirmation. Prompts on stderr when stdin is a TTY;
+ * throws on non-TTY so agents get pointed at --force instead of a silent
+ * "cancelled".
+ */
+function confirmDelete(): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    return Promise.reject(new Error("refusing to delete without --force (non-interactive shell)"));
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise((resolve) => {
+    rl.question("delete this entry? [y/N] ", (answer) => {
+      rl.close();
+      resolve(/^y(es)?$/i.test(answer.trim()));
+    });
+  });
 }
 
 async function main(): Promise<number> {

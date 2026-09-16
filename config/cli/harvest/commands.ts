@@ -12,6 +12,7 @@ import {
   localDateString,
   parseHours,
   weekDates,
+  withNotes,
 } from "./format";
 import { type Candidate, formatCandidates, matchOne } from "./resolve";
 
@@ -238,9 +239,7 @@ export async function cmdStatus(deps: Deps, opts: { conceal?: boolean } = {}): P
   );
   for (const e of [...today].sort((a, b) => a.id - b.id)) {
     const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
-    lines.push(
-      `  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}${e.notes ? ` — ${e.notes}` : ""}`,
-    );
+    lines.push(...withNotes(`  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}`, e.notes));
   }
   return {
     text: lines.join("\n"),
@@ -269,7 +268,7 @@ export async function cmdStart(
   );
   const lines: string[] = [];
   for (const s of stopped) lines.push(`■ stopped ${entryLabel(s)} at ${formatHours(s.hours)}`);
-  lines.push(`▶ ${entryLabel(entry)} — started ${clockTime(deps.now)}${notes ? ` — ${notes}` : ""}`);
+  lines.push(...withNotes(`▶ ${entryLabel(entry)} — started ${clockTime(deps.now)}`, notes ?? null));
   return { text: lines.join("\n"), json: { entry, stopped } };
 }
 
@@ -310,7 +309,9 @@ export async function cmdLog(
     }),
   );
   return {
-    text: `logged ${formatHours(hours)} → ${entryLabel(entry)} (${entry.spent_date})${notes ? ` — ${notes}` : ""}`,
+    text: withNotes(`logged ${formatHours(hours)} → ${entryLabel(entry)} (${entry.spent_date})`, entry.notes, "").join(
+      "\n",
+    ),
     json: { entry },
   };
 }
@@ -333,24 +334,58 @@ export async function cmdEdit(
   if (Object.keys(body).length === 0) fail("nothing to edit (use --hours, --note, or --date)");
   const entry = await deps.getApi().request<TimeEntry>("PATCH", `/time_entries/${id}`, body);
   return {
-    text: `edited ${entryLabel(entry)} (${entry.spent_date}) → ${formatHours(entry.hours)}${entry.notes ? ` — ${entry.notes}` : ""}`,
+    text: withNotes(
+      `edited ${entryLabel(entry)} (${entry.spent_date}) → ${formatHours(entry.hours)}`,
+      entry.notes,
+      "",
+    ).join("\n"),
     json: { entry },
   };
 }
 
-export async function cmdToday(deps: Deps, opts: { conceal?: boolean } = {}): Promise<CmdResult> {
+export async function cmdDelete(
+  deps: Deps,
+  entryId: string,
+  opts: { force?: boolean; confirm?: () => Promise<boolean> } = {},
+): Promise<CmdResult> {
+  const id = Number(entryId);
+  if (!Number.isInteger(id) || id <= 0) fail(`bad entry id "${entryId}"`);
+  const entry = await deps.getApi().timeEntry(id);
+  const summary = `${entryLabel(entry)} (${entry.spent_date}, ${formatHours(entry.hours)})`;
+  const summaryLines = withNotes(summary, entry.notes, "");
+  if (!opts.force) {
+    if (!opts.confirm) fail("refusing to delete without --force (non-interactive shell)");
+    if (!(await opts.confirm())) return { text: "cancelled", json: { deleted: false, entry } };
+  }
+  await deps.getApi().deleteEntry(id);
+  return {
+    text: summaryLines.map((l, i) => (i === 0 ? `deleted ${l}` : l)).join("\n"),
+    json: { deleted: true, entry },
+  };
+}
+
+export async function cmdToday(deps: Deps, opts: { conceal?: boolean; groupBy?: GroupDim } = {}): Promise<CmdResult> {
   const conceal = opts.conceal === true;
   const today = await todayEntries(deps);
   const currency = await ensureCurrency(deps);
   const todaySum = sumMoney(today, deps.cfg);
+  if (opts.groupBy) {
+    const grouped = groupedLines(today, opts.groupBy, deps.cfg, currency, conceal);
+    const lines = [
+      `today: ${formatHours(todaySum.hours)} (${today.length} ${today.length === 1 ? "entry" : "entries"})${moneySuffix(todaySum, currency, deps.cfg, conceal)}`,
+      ...grouped.lines,
+    ];
+    return {
+      text: lines.join("\n"),
+      json: { entries: today, total: totalHours(today), totalAmount: todaySum.amount, groups: grouped.groups },
+    };
+  }
   const lines = [
     `today: ${formatHours(todaySum.hours)} (${today.length} ${today.length === 1 ? "entry" : "entries"})${moneySuffix(todaySum, currency, deps.cfg, conceal)}`,
   ];
   for (const e of [...today].sort((a, b) => a.id - b.id)) {
     const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
-    lines.push(
-      `  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}${e.notes ? ` — ${e.notes}` : ""}`,
-    );
+    lines.push(...withNotes(`  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}`, e.notes));
   }
   return { text: lines.join("\n"), json: { entries: today, total: totalHours(today), totalAmount: todaySum.amount } };
 }
@@ -366,7 +401,57 @@ export function monthRange(monthArg: string | undefined, now: Date): { label: st
   return { label, from: `${label}-01`, to: localDateString(to) };
 }
 
-export async function cmdMonth(deps: Deps, monthArg?: string, opts: { conceal?: boolean } = {}): Promise<CmdResult> {
+export type GroupDim = "project" | "task" | "note";
+
+function groupKey(dim: GroupDim, e: TimeEntry): string {
+  if (dim === "project") return e.project.name;
+  if (dim === "task") return `${e.project.name} / ${e.task.name}`;
+  return (e.notes ? e.notes.split("\n")[0] : "") || "(no note)";
+}
+
+function groupEntries(entries: TimeEntry[], dim: GroupDim, cfg: HarvestConfig): { key: string; sum: MoneySum }[] {
+  const map = new Map<string, MoneySum>();
+  for (const e of entries) {
+    const key = groupKey(dim, e);
+    const sum = map.get(key) ?? { hours: 0, ratedHours: 0, amount: 0 };
+    sum.hours += e.hours;
+    const rate = entryRate(cfg, e);
+    if (rate !== null) {
+      sum.amount += e.hours * rate;
+      sum.ratedHours += e.hours;
+    }
+    map.set(key, sum);
+  }
+  return [...map.entries()].sort((a, b) => b[1].hours - a[1].hours).map(([key, sum]) => ({ key, sum }));
+}
+
+function groupedLines(
+  entries: TimeEntry[],
+  dim: GroupDim,
+  cfg: HarvestConfig,
+  currency: string | null,
+  conceal: boolean,
+): { lines: string[]; groups: { key: string; hours: number; amount: number; ratedHours: number }[] } {
+  const grouped = groupEntries(entries, dim, cfg);
+  const lines = grouped.map(
+    (g) => `  ${formatHours(g.sum.hours)}  ${g.key}${moneySuffix(g.sum, currency, cfg, conceal)}`,
+  );
+  return {
+    lines,
+    groups: grouped.map((g) => ({
+      key: g.key,
+      hours: g.sum.hours,
+      amount: g.sum.amount,
+      ratedHours: g.sum.ratedHours,
+    })),
+  };
+}
+
+export async function cmdMonth(
+  deps: Deps,
+  monthArg?: string,
+  opts: { conceal?: boolean; groupBy?: GroupDim } = {},
+): Promise<CmdResult> {
   const conceal = opts.conceal === true;
   const { label, from, to } = monthRange(monthArg, deps.now);
   const me = await ensureMe(deps);
@@ -376,12 +461,12 @@ export async function cmdMonth(deps: Deps, monthArg?: string, opts: { conceal?: 
   // Exact tracked hours (raw `hours`, the rounding-agnostic ground truth).
   // Rate: config wins, entry rate fallback; the billable flag is
   // ignored — in practice the user's work is billable regardless of project flags.
-  const byProject = new Map<string, { hours: number; ratedHours: number; amount: number }>();
+  const byProject = new Map<string, MoneySum>();
   for (const e of entries) {
     const g = byProject.get(e.project.name) ?? { hours: 0, ratedHours: 0, amount: 0 };
     g.hours += e.hours;
-    const rate = deps.cfg.hourlyRate ?? e.billable_rate;
-    if (rate !== null && rate !== undefined) {
+    const rate = entryRate(deps.cfg, e);
+    if (rate !== null) {
       g.amount += e.hours * rate;
       g.ratedHours += e.hours;
     }
@@ -396,9 +481,14 @@ export async function cmdMonth(deps: Deps, monthArg?: string, opts: { conceal?: 
   const rateNote = deps.cfg.hourlyRate !== undefined ? ` (rate ${deps.cfg.hourlyRate})` : "";
   const headerMoney = !conceal && ratedHours > 0 ? ` — ${money(totalAmount)}${rateNote}` : "";
   const lines = [`${label}: ${formatHours(totalHours)} total${headerMoney}`];
-  for (const [name, g] of groups) {
-    const amount = !conceal && g.ratedHours > 0 && currency ? ` — ${money(g.amount)}` : "";
-    lines.push(`  ${formatHours(g.hours)}  ${name}${amount}`);
+  const dim = opts.groupBy;
+  if (dim) {
+    lines.push(...groupedLines(entries, dim, deps.cfg, currency, conceal).lines);
+  } else {
+    for (const [name, g] of groups) {
+      const amount = !conceal && g.ratedHours > 0 && currency ? ` — ${money(g.amount)}` : "";
+      lines.push(`  ${formatHours(g.hours)}  ${name}${amount}`);
+    }
   }
   const unrated = totalHours - ratedHours;
   if (unrated > 0.0001) {
@@ -411,24 +501,39 @@ export async function cmdMonth(deps: Deps, monthArg?: string, opts: { conceal?: 
       from,
       to,
       entries,
-      groups: groups.map(([name, g]) => ({
-        project: name,
-        hours: g.hours,
-        amount: g.amount,
-        ratedHours: g.ratedHours,
-      })),
+      groups: dim
+        ? groupEntries(entries, dim, deps.cfg).map((g) => ({
+            key: g.key,
+            hours: g.sum.hours,
+            amount: g.sum.amount,
+            ratedHours: g.sum.ratedHours,
+          }))
+        : groups.map(([name, g]) => ({
+            key: name,
+            hours: g.hours,
+            amount: g.amount,
+            ratedHours: g.ratedHours,
+          })),
       totalHours,
       totalAmount,
     },
   };
 }
 
-export async function cmdWeek(deps: Deps, opts: { conceal?: boolean } = {}): Promise<CmdResult> {
+export async function cmdWeek(deps: Deps, opts: { conceal?: boolean; groupBy?: GroupDim } = {}): Promise<CmdResult> {
   const conceal = opts.conceal === true;
   const me = await ensureMe(deps);
   const days = weekDates(deps.now);
   const entries = await deps.getApi().timeEntries({ user_id: me.id, from: days[0], to: days[days.length - 1] });
   const currency = await ensureCurrency(deps);
+  if (opts.groupBy) {
+    const grouped = groupedLines(entries, opts.groupBy, deps.cfg, currency, conceal);
+    const lines = [
+      `week: ${formatHours(totalHours(entries))}${moneySuffix(sumMoney(entries, deps.cfg), currency, deps.cfg, conceal)}`,
+      ...grouped.lines,
+    ];
+    return { text: lines.join("\n"), json: { entries, total: totalHours(entries), groups: grouped.groups } };
+  }
   const byDate = new Map<string, TimeEntry[]>();
   const byProject = new Map<string, number>();
   for (const e of entries) {
@@ -447,7 +552,7 @@ export async function cmdWeek(deps: Deps, opts: { conceal?: boolean } = {}): Pro
     for (const e of [...list].sort((a, b) => a.id - b.id)) {
       const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
       lines.push(
-        `  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}${e.notes ? ` — ${e.notes}` : ""}`,
+        ...withNotes(`  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}`, e.notes),
       );
     }
   }

@@ -26,6 +26,13 @@ export function formatMoney(amount: number, currency: string): string {
   return `${grouped}.${frac} ${currency}`;
 }
 
+/** Notes render in full: first line after the head, continuation lines indented. */
+export function withNotes(head: string, notes: string | null | undefined, indent = "  "): string[] {
+  if (!notes) return [head];
+  const [first = "", ...rest] = notes.split("\n");
+  return [`${head} — ${first}`, ...rest.map((l) => `${indent}      ${l}`)];
+}
+
 export function formatElapsed(startedIso: string, nowMs: number): string {
   const ms = Math.max(0, nowMs - Date.parse(startedIso));
   const mins = Math.floor(ms / 60000);
