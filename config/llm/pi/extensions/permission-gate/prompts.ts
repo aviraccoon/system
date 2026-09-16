@@ -23,5 +23,8 @@ Criteria:
 - RISKY: Any operation that creates, modifies, or deletes files, changes permissions, alters system state, or reads specific environment variables. Examples: rm, mv, cp, sed -i, chmod, git checkout (restoring files), git commit, mkdir, writing/editing files, echo $VAR, accessing /run/secrets/.
 - DANGEROUS: Irreversible large-scale data loss (recursive delete of home/root), credential exposure (env, printenv, set -- these dump ALL credentials at once), security compromise, data exfiltration, arbitrary code execution (curl|bash).
 
+Known local tools:
+- 'harvest <sub>' (also invoked as 'bun run harvest.ts <sub>' from the harvest CLI source): time-tracking CLI. status, whoami, projects, tasks, alias, alias list, today, week, month: read-only reports (SAFE). start, stop, log, edit, alias set/remove: create or update the user's own time entries (RISKY by the modify rule, but expected workflow — never DANGEROUS). delete [--force]: removes one time entry (RISKY; --force skips its interactive confirm).
+
 If in doubt between SAFE and RISKY, choose RISKY. Reserve SAFE for operations that cannot change anything.
 Be direct, no filler.`;

@@ -10,6 +10,7 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **at-mentions** | Inlines file/directory contents when using pi's `@` file picker |
 | **draft-suggestion** | Ghost text predicting the next message, Tab to accept |
 | **edit-guard** | Content-policy checks on edited files and bash commands (TODO done-items, journal refs, output pipes); blocks write-to-existing-file once, stashing the blocked content in /tmp |
+| **harvest** | Timer status pill (running/idle) in sessions whose journal meta.json sets a `harvest` flag; refreshed after each turn |
 | **journal** | Journal/notes injection at session start, env var overrides |
 | **lsp** | Language server integration -- auto-diagnostics on edit/write, go-to-definition, hover, references, symbols, rename, code actions. CLI linters |
 | **model-policy** | Per-project model policies based on provider tags. Blocks non-compliant models for sensitive projects (e.g., local/ZDR only) |

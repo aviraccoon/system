@@ -134,14 +134,14 @@ export default function editGuardExtension(pi: ExtensionAPI) {
     if (typeof content === "string") {
       const stashPath = join(tmpdir(), `edit-guard-write-${rel.replace(/[^a-zA-Z0-9._-]/g, "-")}-${Date.now()}`);
       writeFileSync(stashPath, content);
-      stashNote = ` The blocked content is saved at ${stashPath} — copy or edit it from there; it was NOT applied.`;
+      stashNote = ` The blocked content is saved at ${stashPath} (NOT applied). Either cp ${stashPath} <target> (preferred — cheaper than re-emitting long content), or simply re-issue the write (any content) — the path is now allowed for the rest of the session.`;
     }
     return {
       block: true,
       reason:
         `edit-guard: ${rel} already exists (${lines} lines). Don't use write to replace existing files — ` +
         "use patch for targeted changes (write is for genuinely new files only). " +
-        "If a full rewrite is genuinely intended, re-issue this exact write call and it will proceed." +
+        "If a full rewrite is genuinely intended, re-issue the write (any content) — the path is then allowed for the rest of the session." +
         stashNote,
     };
   });

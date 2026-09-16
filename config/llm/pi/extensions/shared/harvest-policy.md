@@ -1,0 +1,10 @@
+Time tracking: the `harvest` CLI.
+- Log only when the user asks. If a work session gets underway with no timer running (`harvest status`), ask once whether to start one; never start unprompted.
+- `harvest status` — running timer + today's total
+- `harvest start <alias> [-n note] [--offset 25m]` — stops any running timer first
+- `harvest stop`
+- `harvest log <hours> <alias> [-n note] [--date YYYY-MM-DD]` — hours: `1.5` | `1:30` | `90m`
+- `harvest edit <id> [--hours H] [-n note] [--date D]`
+- `harvest delete <id> [--force]` — confirms on a TTY, `--force` skips
+- `harvest projects` · `harvest tasks <project>` · `harvest alias list`
+- `harvest --help` for more (reports: today, week, month)
