@@ -75,6 +75,8 @@ The journal is private for you, the LLM. Write for yourself and future agents, n
 - **When something clicks**: Mid-task realizations, things that worked
 - **Session end**: What changed, what's unfinished, what to tell the next agent. Don't just summarize verbally — the journal is what persists.
 
+**Check the date:** run `date +%Y-%m-%d` before writing a journal entry or anything dated. Never infer the current date from context.
+
 **File naming:** `YYYY-MM-DD-NN-topic.md` (e.g. `2026-01-11-02-api-design.md`) — NN is the next sequence number for that day, check existing files. Inside the file, use descriptive headers for future search ("MySQL Retry Audit", "Code Review Feedback"), not generic session numbers.
 
 **Version control:** include the commit hash (or reflog state) in the entry so a later session can find and resume the work.
