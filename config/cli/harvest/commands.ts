@@ -93,6 +93,23 @@ function fail(message: string): never {
   throw new Error(message);
 }
 
+/** True when the note contains an http(s) URL. */
+export function noteHasLink(note: string | null | undefined): boolean {
+  return note !== null && note !== undefined && /https?:\/\//.test(note);
+}
+
+/**
+ * Warning lines appended after create/update when the resulting note has no
+ * link and requireNoteLinks is on. The entry exists either way — the warning
+ * points at the fix instead of blocking.
+ */
+function noteLinkWarnings(cfg: HarvestConfig, entry: TimeEntry): string[] {
+  if (cfg.requireNoteLinks !== true || noteHasLink(entry.notes)) return [];
+  return [
+    `⚠ note has no link (requireNoteLinks) — fix with: harvest edit ${entry.id} -n "<note with the work-thread link>"`,
+  ];
+}
+
 interface Target {
   projectId: number;
   projectName: string;
@@ -100,40 +117,46 @@ interface Target {
   taskName: string;
 }
 
+/**
+ * Alias-first project lookup, shared by every command that takes a project
+ * query: the alias name wins, otherwise a fuzzy match (fresh-cache retry on
+ * a miss).
+ */
+async function resolveProjectRef(
+  deps: Deps,
+  projectQuery: string,
+): Promise<{ id: number; name: string; viaAlias: Alias | null }> {
+  const alias = deps.cfg.aliases[projectQuery.trim().toLowerCase()];
+  if (alias) return { id: alias.projectId, name: alias.projectName, viaAlias: alias };
+  const projects = await ensureProjects(deps);
+  let hit = matchOne(projectQuery, projects);
+  if (hit.kind === "none") hit = matchOne(projectQuery, await ensureProjects(deps, true));
+  if (hit.kind === "none") {
+    fail(`no project matching "${projectQuery}". Known projects:\n${formatCandidates(await ensureProjects(deps))}`);
+  }
+  if (hit.kind === "ambiguous") {
+    fail(`ambiguous project "${projectQuery}":\n${formatCandidates(hit.candidates)}`);
+  }
+  return { id: hit.item.id, name: hit.item.name, viaAlias: null };
+}
+
 /** Resolve a user-typed name like "acme" or "Acme Website" to project + task ids. Alias names win. */
 async function resolveProjectAndTask(deps: Deps, projectQuery: string, taskQuery?: string): Promise<Target> {
-  const alias = deps.cfg.aliases[projectQuery.trim().toLowerCase()];
-  let projectId: number;
-  let projectName: string;
-  const effectiveTaskQuery = taskQuery;
+  const ref = await resolveProjectRef(deps, projectQuery);
+  const projectId = ref.id;
+  const projectName = ref.name;
 
-  if (alias) {
-    projectId = alias.projectId;
-    projectName = alias.projectName;
-    if (!effectiveTaskQuery && alias.taskId) {
-      return { projectId, projectName, taskId: alias.taskId, taskName: alias.taskName ?? "" };
-    }
-  } else {
-    const projects = await ensureProjects(deps);
-    let hit = matchOne(projectQuery, projects);
-    if (hit.kind === "none") hit = matchOne(projectQuery, await ensureProjects(deps, true));
-    if (hit.kind === "none") {
-      fail(`no project matching "${projectQuery}". Known projects:\n${formatCandidates(await ensureProjects(deps))}`);
-    }
-    if (hit.kind === "ambiguous") {
-      fail(`ambiguous project "${projectQuery}":\n${formatCandidates(hit.candidates)}`);
-    }
-    projectId = hit.item.id;
-    projectName = hit.item.name;
+  if (!taskQuery && ref.viaAlias?.taskId) {
+    return { projectId, projectName, taskId: ref.viaAlias.taskId, taskName: ref.viaAlias.taskName ?? "" };
   }
 
   const tasks = await ensureTasks(deps, projectId);
-  if (effectiveTaskQuery) {
-    const hit = matchOne(effectiveTaskQuery, tasks);
+  if (taskQuery) {
+    const hit = matchOne(taskQuery, tasks);
     if (hit.kind === "none")
-      fail(`no task matching "${effectiveTaskQuery}" on ${projectName}. Tasks:\n${formatCandidates(tasks)}`);
+      fail(`no task matching "${taskQuery}" on ${projectName}. Tasks:\n${formatCandidates(tasks)}`);
     if (hit.kind === "ambiguous")
-      fail(`ambiguous task "${effectiveTaskQuery}" on ${projectName}:\n${formatCandidates(hit.candidates)}`);
+      fail(`ambiguous task "${taskQuery}" on ${projectName}:\n${formatCandidates(hit.candidates)}`);
     return { projectId, projectName, taskId: hit.item.id, taskName: hit.item.name };
   }
   if (tasks.length === 1 && tasks[0]) {
@@ -247,28 +270,48 @@ export async function cmdStatus(deps: Deps, opts: { conceal?: boolean } = {}): P
   };
 }
 
+/** Parse an --offset duration ("25m", "1:30", "1h30m") to hours; must be > 0. */
+function parseOffsetHours(input: string): number {
+  const h = parseHours(input);
+  if (h === null || h <= 0) fail(`bad offset "${input}" (use e.g. 25m, 1:30, 1h30m)`);
+  return h;
+}
+
 export async function cmdStart(
   deps: Deps,
   projectQuery: string,
   taskQuery?: string,
   notes?: string,
+  opts: { offset?: string } = {},
 ): Promise<CmdResult> {
+  // Validate before any API work (same fail-fast order as cmdLog's hours).
+  const offsetHours = opts.offset !== undefined ? parseOffsetHours(opts.offset) : undefined;
   const target = await resolveProjectAndTask(deps, projectQuery, taskQuery);
   const stopped = await stopRunning(deps);
   const timestampTimers = await ensureTimerMode(deps);
-  const entry = await deps.getApi().createTimeEntry(
+  let entry = await deps.getApi().createTimeEntry(
     buildCreateEntryBody({
       timestampTimers,
       projectId: target.projectId,
       taskId: target.taskId,
       spentDate: localDateString(deps.now),
       notes,
+      // Timestamp accounts backdate natively via started_time.
+      hours: timestampTimers ? offsetHours : undefined,
       now: deps.now,
     }),
   );
+  let headStart = "";
+  if (!timestampTimers && offsetHours !== undefined) {
+    // Base hours on a running timer: the server records the patch as
+    // hours_without_timer and keeps the timer ticking on top.
+    entry = await deps.getApi().request<TimeEntry>("PATCH", `/time_entries/${entry.id}`, { hours: offsetHours });
+    headStart = ` (+${formatHours(offsetHours)} head start)`;
+  }
   const lines: string[] = [];
   for (const s of stopped) lines.push(`■ stopped ${entryLabel(s)} at ${formatHours(s.hours)}`);
-  lines.push(...withNotes(`▶ ${entryLabel(entry)} — started ${clockTime(deps.now)}`, notes ?? null));
+  lines.push(...withNotes(`▶ ${entryLabel(entry)} — started ${clockTime(deps.now)}${headStart}`, notes ?? null));
+  lines.push(...noteLinkWarnings(deps.cfg, entry));
   return { text: lines.join("\n"), json: { entry, stopped } };
 }
 
@@ -308,10 +351,10 @@ export async function cmdLog(
       now: deps.now,
     }),
   );
+  const lines = withNotes(`logged ${formatHours(hours)} → ${entryLabel(entry)} (${entry.spent_date})`, entry.notes, "");
+  lines.push(...noteLinkWarnings(deps.cfg, entry));
   return {
-    text: withNotes(`logged ${formatHours(hours)} → ${entryLabel(entry)} (${entry.spent_date})`, entry.notes, "").join(
-      "\n",
-    ),
+    text: lines.join("\n"),
     json: { entry },
   };
 }
@@ -333,12 +376,14 @@ export async function cmdEdit(
   if (opts.date !== undefined) body.spent_date = opts.date;
   if (Object.keys(body).length === 0) fail("nothing to edit (use --hours, --note, or --date)");
   const entry = await deps.getApi().request<TimeEntry>("PATCH", `/time_entries/${id}`, body);
+  const lines = withNotes(
+    `edited ${entryLabel(entry)} (${entry.spent_date}) → ${formatHours(entry.hours)}`,
+    entry.notes,
+    "",
+  );
+  lines.push(...noteLinkWarnings(deps.cfg, entry));
   return {
-    text: withNotes(
-      `edited ${entryLabel(entry)} (${entry.spent_date}) → ${formatHours(entry.hours)}`,
-      entry.notes,
-      "",
-    ).join("\n"),
+    text: lines.join("\n"),
     json: { entry },
   };
 }
@@ -574,16 +619,13 @@ export async function cmdProjects(deps: Deps): Promise<CmdResult> {
 }
 
 export async function cmdTasks(deps: Deps, projectQuery: string): Promise<CmdResult> {
-  const projects = await ensureProjects(deps);
-  let hit = matchOne(projectQuery, projects);
-  if (hit.kind === "none") hit = matchOne(projectQuery, await ensureProjects(deps, true));
-  if (hit.kind === "none")
-    fail(`no project matching "${projectQuery}". Known projects:\n${formatCandidates(await ensureProjects(deps))}`);
-  if (hit.kind === "ambiguous") fail(`ambiguous project "${projectQuery}":\n${formatCandidates(hit.candidates)}`);
-  const tasks = await ensureTasks(deps, hit.item.id);
+  const ref = await resolveProjectRef(deps, projectQuery);
+  const tasks = await ensureTasks(deps, ref.id);
+  const cached = (await ensureProjects(deps)).find((p) => p.id === ref.id);
+  const project = cached ?? { id: ref.id, name: ref.name, code: null, client: null };
   return {
     text: tasks.map((t) => `${t.id}  ${t.name}`).join("\n"),
-    json: { project: hit.item, tasks },
+    json: { project, tasks },
   };
 }
 

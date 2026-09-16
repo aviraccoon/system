@@ -32,7 +32,7 @@ usage: harvest [<command>] [args] [flags]
 
 commands:
   status                      running timer + today's entries and total
-  start <project> [<task>]    start a timer (stops the running one)
+  start <project> [<task>]    start a timer (stops the running one; --offset 25m credits prior time)
   stop                        stop the running timer
   log <hours> <project> [<task>] [--date D]   log past time (1.5, 1:30, 90m)
   edit <entry-id> [--hours H] [-n text] [--date D]   edit an entry
@@ -50,6 +50,7 @@ flags:
   -n, --note <text>           note for start/log
   --date <yyyy-mm-dd>         date for log
   --hours <hours>             hours for edit
+  --offset <duration>         with start: time already spent (25m, 1:30, 1h30m)
   -f, --force                 with delete: skip the confirm prompt
   --group-by <dim>            group today/week/month by project|task|note
   -r, --remove                with alias
@@ -70,6 +71,7 @@ interface Cli {
   note?: string;
   date?: string;
   hours?: string;
+  offset?: string;
   remove: boolean;
   force: boolean;
   groupBy?: "project" | "task" | "note";
@@ -88,6 +90,7 @@ export function parseCli(argv: string[]): Cli {
       note: { type: "string", short: "n" },
       date: { type: "string" },
       hours: { type: "string" },
+      offset: { type: "string" },
       remove: { type: "boolean", short: "r" },
       force: { type: "boolean", short: "f" },
       "group-by": { type: "string" },
@@ -107,6 +110,7 @@ export function parseCli(argv: string[]): Cli {
     note,
     date,
     hours: values.hours,
+    offset: values.offset,
     remove: values.remove === true,
     force: values.force === true,
     groupBy: parseGroupBy(values["group-by"]),
@@ -186,7 +190,7 @@ async function run(argv: string[]): Promise<number> {
     case "start": {
       const err = arity("start", p, 1, 2);
       if (err) return failArg(err);
-      result = await cmdStart(deps, p[0] ?? "", p[1], cli.note);
+      result = await cmdStart(deps, p[0] ?? "", p[1], cli.note, { offset: cli.offset });
       break;
     }
     case "stop": {

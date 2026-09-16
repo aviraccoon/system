@@ -31,6 +31,8 @@ export interface HarvestConfig {
   op?: OpConfig;
   /** Fallback hourly rate for money views when entries carry no rate (Member roles see none). */
   hourlyRate?: number;
+  /** Warn when a created/updated entry's note has no http(s) link (account policy). */
+  requireNoteLinks?: boolean;
 }
 
 export interface CachedProject {

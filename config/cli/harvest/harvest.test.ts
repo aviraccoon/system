@@ -4,13 +4,16 @@ import {
   aliasRemove,
   aliasSet,
   cmdDelete,
+  cmdEdit,
   cmdLog,
   cmdMonth,
   cmdStart,
   cmdStatus,
   cmdStop,
+  cmdTasks,
   type Deps,
   monthRange,
+  noteHasLink,
 } from "./commands";
 import { authSetupMessage, type HarvestCache, type HarvestConfig, isFresh, resolveAuth } from "./config";
 import {
@@ -471,6 +474,72 @@ describe("cmdStart", () => {
     const { deps } = makeDeps(api);
     expect(cmdStart(deps, "website")).rejects.toThrow(/no task given for Website/);
   });
+
+  test("--offset patches base hours onto the running entry (duration mode)", async () => {
+    const created = timeEntry({ id: 200, is_running: true, hours: 0 });
+    const patched = timeEntry({
+      id: 200,
+      is_running: true,
+      hours: 25 / 60,
+      hours_without_timer: 25 / 60,
+      notes: "thinking",
+    });
+    const bodies: unknown[] = [];
+    const patches: unknown[] = [];
+    const api = apiStub({
+      me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
+      timeEntries: [[], []],
+      company: [{ wants_timestamp_timers: false }],
+      projectAssignments: [[assignment({ id: 10, name: "Website" }, "Acme", [{ id: 20, name: "Development" }])]],
+      createTimeEntry: [
+        (body: unknown) => {
+          bodies.push(body);
+          return Promise.resolve(created);
+        },
+      ],
+      request: [
+        (_method: string, _path: string, body: unknown) => {
+          patches.push(body);
+          return Promise.resolve(patched);
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdStart(deps, "website", undefined, "thinking", { offset: "25m" });
+    expect(bodies[0]).toEqual({ project_id: 10, task_id: 20, spent_date: "2026-09-15", notes: "thinking" });
+    expect(patches[0]).toEqual({ hours: 25 / 60 });
+    expect(r.text).toContain("(+0:25 head start)");
+    const json = r.json as { entry: { hours_without_timer: number } };
+    expect(json.entry.hours_without_timer).toBeCloseTo(25 / 60);
+  });
+
+  test("--offset on timestamp accounts backdates started_time instead", async () => {
+    const created = timeEntry({ id: 200, is_running: true });
+    const bodies: unknown[] = [];
+    const api = apiStub({
+      me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
+      timeEntries: [[], []],
+      company: [{ wants_timestamp_timers: true }],
+      projectAssignments: [[assignment({ id: 10, name: "Website" }, "Acme", [{ id: 20, name: "Development" }])]],
+      createTimeEntry: [
+        (body: unknown) => {
+          bodies.push(body);
+          return Promise.resolve(created);
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdStart(deps, "website", undefined, undefined, { offset: "30m" });
+    expect(bodies[0]).toMatchObject({ started_time: "9:30am" });
+    expect(r.text).not.toContain("head start");
+  });
+
+  test("bad offset fails", async () => {
+    const api = apiStub({});
+    const { deps } = makeDeps(api);
+    expect(cmdStart(deps, "website", undefined, undefined, { offset: "xyz" })).rejects.toThrow(/bad offset/);
+    expect(cmdStart(deps, "website", undefined, undefined, { offset: "0" })).rejects.toThrow(/bad offset/);
+  });
 });
 
 describe("cmdStop", () => {
@@ -517,6 +586,63 @@ describe("cmdLog", () => {
   });
 });
 
+describe("requireNoteLinks", () => {
+  const base = {
+    me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
+    projectAssignments: [[assignment({ id: 10, name: "Website" }, "Acme", [{ id: 20, name: "Development" }])]],
+    company: [{ wants_timestamp_timers: false }],
+  };
+  const cfg: HarvestConfig = { aliases: {}, requireNoteLinks: true };
+
+  test("log warns on an unlinked note, silent with a link", async () => {
+    const unlinked = timeEntry({ id: 300, hours: 1.5, notes: "catch-up work" });
+    const api = apiStub({ ...base, createTimeEntry: [Promise.resolve(unlinked)] });
+    const { deps } = makeDeps(api, cfg);
+    const r = await cmdLog(deps, "1:30", "website", undefined, undefined, "catch-up work");
+    expect(r.text).toContain("⚠ note has no link");
+    expect(r.text).toContain("harvest edit 300");
+
+    const linked = timeEntry({ id: 301, hours: 1.5, notes: "fixing bug\nhttps://tracker.example/t/9" });
+    const api2 = apiStub({ ...base, createTimeEntry: [Promise.resolve(linked)] });
+    const { deps: deps2 } = makeDeps(api2, cfg);
+    const r2 = await cmdLog(deps2, "1:30", "website", undefined, undefined, "fixing bug");
+    expect(r2.text).not.toContain("⚠");
+  });
+
+  test("start warns for a noteless timer", async () => {
+    const created = timeEntry({ id: 200, is_running: true, notes: null });
+    const api = apiStub({ ...base, timeEntries: [[], []], createTimeEntry: [Promise.resolve(created)] });
+    const { deps } = makeDeps(api, cfg);
+    const r = await cmdStart(deps, "website");
+    expect(r.text).toContain("⚠ note has no link");
+  });
+
+  test("edit warns when the resulting note has no link", async () => {
+    const api = apiStub({ request: [Promise.resolve(timeEntry({ id: 55, hours: 2, notes: "still no link" }))] });
+    const { deps } = makeDeps(api, cfg);
+    const r = await cmdEdit(deps, "55", { notes: "still no link" });
+    expect(r.text).toContain("⚠ note has no link");
+  });
+
+  test("off by default", async () => {
+    const unlinked = timeEntry({ id: 300, hours: 1.5, notes: "catch-up work" });
+    const api = apiStub({ ...base, createTimeEntry: [Promise.resolve(unlinked)] });
+    const { deps } = makeDeps(api);
+    const r = await cmdLog(deps, "1:30", "website", undefined, undefined, "catch-up work");
+    expect(r.text).not.toContain("⚠");
+  });
+});
+
+describe("noteHasLink", () => {
+  test("detects http(s) urls", () => {
+    expect(noteHasLink("work\nhttps://tracker.example/t/1")).toBe(true);
+    expect(noteHasLink("http://intranet.example/x")).toBe(true);
+    expect(noteHasLink("plain note")).toBe(false);
+    expect(noteHasLink(null)).toBe(false);
+    expect(noteHasLink(undefined)).toBe(false);
+  });
+});
+
 describe("alias commands", () => {
   test("set stores ids + names; remove deletes", async () => {
     const api = apiStub({
@@ -530,6 +656,26 @@ describe("alias commands", () => {
     const removed = aliasRemove(deps, "WEB");
     expect(removed.text).toBe("removed alias web");
     expect(() => aliasRemove(deps, "web")).toThrow('no alias "web"');
+  });
+});
+
+describe("cmdTasks", () => {
+  test("aliases resolve wherever a project is passed", async () => {
+    const api = apiStub({
+      me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
+      projectAssignments: [
+        [assignment({ id: 10, name: "Website", code: "WEB" }, "Acme", [{ id: 20, name: "Development" }])],
+      ],
+    });
+    const cfg: HarvestConfig = {
+      aliases: { web: { projectId: 10, projectName: "Website", taskId: null, taskName: null } },
+    };
+    const { deps } = makeDeps(api, cfg);
+    const r = await cmdTasks(deps, "web");
+    expect(r.text).toContain("20  Development");
+    const json = r.json as { project: { id: number; name: string; code: string | null } };
+    expect(json.project.id).toBe(10);
+    expect(json.project.code).toBe("WEB");
   });
 });
 
@@ -684,6 +830,11 @@ describe("parseCli", () => {
   test("conceal flag parses", () => {
     expect(parseCli(["status"]).conceal).toBe(false);
     expect(parseCli(["status", "--conceal"]).conceal).toBe(true);
+  });
+
+  test("--offset parses", () => {
+    expect(parseCli(["start", "acme", "--offset", "25m"]).offset).toBe("25m");
+    expect(parseCli(["start", "acme"]).offset).toBeUndefined();
   });
 });
 

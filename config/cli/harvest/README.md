@@ -28,24 +28,25 @@ Harvest asks for a `User-Agent` with app name and contact; the default works, bu
 
 ## Commands
 
-```
-harvest                       # status (default)
-harvest status                # running timer + today's entries and total
-harvest start acme dev -n "fixing login"
-harvest stop
-harvest log 1:30 acme dev --date 2026-09-14   # hours: 1.5 | 1:30 | 90m
-harvest edit <entry-id> [--hours H] [-n text] [--date D]
-harvest delete <entry-id> [--force]             # prompts on a TTY; agents use --force
-harvest today
-harvest week                  # ISO week, per-day and per-project totals
-harvest month [YYYY-MM]       # monthly overview, per-project hours and money
-harvest projects              # list + refresh cache
-harvest tasks acme
-harvest alias                 # list
-harvest alias acme "Acme Website" Development   # task optional
-harvest alias -r acme
-harvest whoami
-```
+| Command | What it does |
+|---|---|
+| `harvest` | status (default) |
+| `harvest status` | running timer + today's entries and total |
+| `harvest start acme dev -n "fixing login"` | start a timer (stops any running one) |
+| `harvest start acme dev --offset 25m` | start, crediting time already spent |
+| `harvest stop` | stop the running timer |
+| `harvest log 1:30 acme dev --date 2026-09-14` | log past time; hours: `1.5`, `1:30`, `90m` |
+| `harvest edit <id> [--hours H] [-n text] [--date D]` | edit an entry |
+| `harvest delete <id> [--force]` | delete; prompts on a TTY, agents use `--force` |
+| `harvest today` | today's entries and total |
+| `harvest week` | ISO week, per-day and per-project totals |
+| `harvest month [YYYY-MM]` | monthly overview, per-project hours and money |
+| `harvest projects` | list projects + refresh cache |
+| `harvest tasks acme` | list tasks assigned to a project |
+| `harvest alias` | list aliases |
+| `harvest alias acme "Acme Website" Development` | set an alias (task optional) |
+| `harvest alias -r acme` | remove an alias |
+| `harvest whoami` | auth check: user, timer mode, cache state |
 
 Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space equivalent; matches name, code, or client). Ambiguous matches list the candidates. An alias without a task defers the task choice to each start/log; with one task assigned, it's picked automatically.
 
@@ -53,9 +54,12 @@ Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space eq
 
 `--group-by project|task|note` regroups today/week/month into a flat list with hours and money per group. Tasks are labelled `project / task`; notes group by their first line (the work-item summary), so the same item tracked across days merges. Multiline notes render in full — first line after the entry, continuation lines indented.
 
+`start --offset <duration>` credits time spent before the timer started. Duration accounts get it as base hours on the running entry; start/end accounts get a backdated `started_time`.
+
 ## Notes
 
 - `start` stops any running timer first (Harvest allows only one).
+- `requireNoteLinks: true` in `~/.config/harvest/config.json` warns when a created or updated entry's note contains no http(s) link (account policy: notes carry the work-thread/ticket link). It's a warning, not a block — legitimate entries can lack links; the fix line points at `harvest edit <id> -n`.
 - Timer mode follows the account setting (`wants_timestamp_timers`): duration accounts get a running entry from a bare `start`; start/end accounts get `started_time` set. `log` on start/end accounts derives a time range ending now.
 - Projects and tasks are cached in `~/.cache/harvest/cache.json` (24h TTL, refreshed by `harvest projects` and on lookup misses). The list comes from your Harvest project assignments — Member roles cannot list account-wide projects, and assignments are exactly what you can track time on. Config lives in `~/.config/harvest/config.json`. Neither file contains credentials.
 - A timer left running from a previous day is flagged `STALE` by `status`.
