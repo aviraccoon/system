@@ -3,10 +3,10 @@ import { formatDate, languageForPath, matches, parseGitHubUrl, renderBlob, rende
 
 describe("parseGitHubUrl", () => {
   test("repo root", () => {
-    expect(parseGitHubUrl("https://github.com/aviraccoon/forepaw")).toEqual({
+    expect(parseGitHubUrl("https://github.com/acme/widgets")).toEqual({
       kind: "repo",
-      owner: "aviraccoon",
-      repo: "forepaw",
+      owner: "acme",
+      repo: "widgets",
     });
   });
 
@@ -85,9 +85,9 @@ describe("languageForPath", () => {
 
 describe("renderRepo", () => {
   const meta = {
-    full_name: "aviraccoon/forepaw",
+    full_name: "acme/widgets",
     description: "A raccoon's paws.",
-    homepage: "https://crates.io/crates/forepaw",
+    homepage: "https://crates.io/crates/widgets",
     stargazers_count: 5,
     forks_count: 2,
     subscribers_count: 1,
@@ -108,11 +108,11 @@ describe("renderRepo", () => {
 
   test("renders title, description, all stats, facts, dates", () => {
     const out = renderRepo(meta, null, null);
-    expect(out).toContain("# aviraccoon/forepaw");
+    expect(out).toContain("# acme/widgets");
     expect(out).toContain("A raccoon's paws.");
     expect(out).toContain("Stars: 5 · Forks: 2 · Watching: 1 · Open issues: 3");
     expect(out).toContain("Language: Rust · License: Unlicense · Topics: a11y, ocr");
-    expect(out).toContain("Homepage: https://crates.io/crates/forepaw · Default branch: main");
+    expect(out).toContain("Homepage: https://crates.io/crates/widgets · Default branch: main");
     expect(out).toContain("Created 2026-03-31 · Last push 2026-06-09");
   });
 
@@ -135,9 +135,9 @@ describe("renderRepo", () => {
   });
 
   test("includes README under divider", () => {
-    const out = renderRepo(meta, null, "# forepaw\n\nbody");
+    const out = renderRepo(meta, null, "# widgets\n\nbody");
     expect(out).toContain("--- README ---");
-    expect(out).toContain("# forepaw");
+    expect(out).toContain("# widgets");
   });
 
   test("omits empty sections cleanly", () => {
