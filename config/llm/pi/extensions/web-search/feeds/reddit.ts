@@ -110,6 +110,7 @@ function renderComment(node: RedditThing, depth: number, lines: string[]): void 
 
 export const redditProvider: FeedProvider = {
   matches,
+  hint: "Reddit threads (reddit.com/r/.../comments/...) render as full comment trees with scores.",
   async fetch(url, ctx: FeedContext): Promise<FeedResult> {
     const jsonUrl = jsonUrlFor(url);
 

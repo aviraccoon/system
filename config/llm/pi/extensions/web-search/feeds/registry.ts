@@ -13,11 +13,19 @@ import { githubProvider } from "./github";
 import { redditProvider } from "./reddit";
 import type { FeedContext, FeedProvider, FeedResult } from "./types";
 
-const PROVIDERS: FeedProvider[] = [redditProvider, githubProvider, discourseProvider];
+export const PROVIDERS: FeedProvider[] = [redditProvider, githubProvider, discourseProvider];
 
 /** Return the first provider whose `matches()` accepts the URL, else undefined. */
 export function matchFeed(url: string): FeedProvider | undefined {
   return PROVIDERS.find((p) => p.matches(url));
+}
+
+/** Capability hints from providers that declare them, joined for the host's
+ * web_fetch tool description. */
+export function feedHints(): string {
+  return PROVIDERS.map((p) => p.hint)
+    .filter((h): h is string => Boolean(h))
+    .join("\n");
 }
 
 /**

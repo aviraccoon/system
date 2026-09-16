@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  blurbText,
+  type CategoryPath,
+  categoryJsonUrl,
   categoryPath,
   classify,
   cookedToText,
@@ -14,9 +17,15 @@ import {
   matches,
   mergePosts,
   paginationUrlFor,
+  parseCategoryPath,
   renderCategoryList,
+  renderCategoryTree,
   renderDiscourse,
+  renderSearch,
+  resolveCategoryId,
   resolveKeySpec,
+  type SearchResponse,
+  type SiteCategory,
   topicPath,
 } from "./discourse";
 
@@ -39,7 +48,8 @@ describe("matches", () => {
 
   test("rejects non-topic paths", () => {
     expect(matches("https://forum.example.com/u/someone")).toBe(false);
-    expect(matches("https://forum.example.com/c/general")).toBe(false);
+    expect(matches("https://forum.example.com/latest-posts")).toBe(false);
+    expect(matches("https://forum.example.com/searching")).toBe(false);
   });
 
   test("accepts category URLs", () => {
@@ -48,8 +58,18 @@ describe("matches", () => {
     expect(matches("https://forum.example.org/c/parent/child/33/l/top")).toBe(true);
   });
 
-  test("rejects slug-only category paths (no id)", () => {
-    expect(matches("https://forum.example.com/c/general/l/latest")).toBe(false);
+  test("accepts slug-only category paths (no id)", () => {
+    expect(matches("https://forum.example.com/c/general/l/latest")).toBe(true);
+    expect(matches("https://forum.example.com/c/parent/child")).toBe(true);
+  });
+
+  test("accepts search, site listings, and the category index", () => {
+    expect(matches("https://forum.example.com/search?q=term")).toBe(true);
+    expect(matches("https://forum.example.com/categories")).toBe(true);
+    expect(matches("https://forum.example.com/latest")).toBe(true);
+    expect(matches("https://forum.example.com/new")).toBe(true);
+    expect(matches("https://forum.example.com/unread")).toBe(true);
+    expect(matches("https://forum.example.com/top/weekly")).toBe(true);
   });
 
   test("rejects non-http", () => {
@@ -58,11 +78,22 @@ describe("matches", () => {
 });
 
 describe("classify / categoryPath / json URLs", () => {
-  test("classifies topic vs category", () => {
+  function partsOf(u: string): CategoryPath {
+    const p = parseCategoryPath(u);
+    if (!p) throw new Error(`not a category path: ${u}`);
+    return p;
+  }
+
+  test("classifies topic vs category vs the other shapes", () => {
     expect(classify("https://f.io/t/s/1")).toBe("topic");
     expect(classify("https://f.io/t/s/1/5")).toBe("topic");
     expect(classify("https://f.io/c/7/l/latest")).toBe("category");
     expect(classify("https://f.io/c/x/21?order=posts")).toBe("category");
+    expect(classify("https://f.io/c/general")).toBe("category");
+    expect(classify("https://f.io/search?q=x")).toBe("search");
+    expect(classify("https://f.io/categories")).toBe("categories");
+    expect(classify("https://f.io/latest")).toBe("sitelist");
+    expect(classify("https://f.io/top/weekly")).toBe("sitelist");
   });
 
   test("categoryPath keeps filter, strips query", () => {
@@ -70,14 +101,21 @@ describe("classify / categoryPath / json URLs", () => {
     expect(categoryPath("https://forum.example.org/c/project-x/21?ascending=false")).toBe("/c/project-x/21");
   });
 
-  test("category json URL preserves order/ascending, drops the rest", () => {
-    const url = jsonUrlFor("https://forum.example.org/c/project-x/21?ascending=false&order=posts&board=default");
-    const parsed = new URL(url);
+  test("category json URL: canonical path, order/ascending kept, rest dropped", () => {
+    const u = "https://forum.example.org/c/project-x/21?ascending=false&order=posts&board=default";
+    const parsed = new URL(categoryJsonUrl("https://forum.example.org", partsOf(u), 21, u));
     expect(parsed.pathname).toBe("/c/project-x/21.json");
     expect(parsed.searchParams.get("extras")).toBe("excerpts");
     expect(parsed.searchParams.get("order")).toBe("posts");
     expect(parsed.searchParams.get("ascending")).toBe("false");
     expect(parsed.searchParams.get("board")).toBe(null);
+  });
+
+  test("slug-only parts build the canonical id path with filter", () => {
+    const u = "https://forum.example.org/c/parent/child/l/latest";
+    const parsed = new URL(categoryJsonUrl("https://forum.example.org", partsOf(u), 33, u));
+    expect(parsed.pathname).toBe("/c/parent/child/33/l/latest.json");
+    expect(parsed.searchParams.get("extras")).toBe("excerpts");
   });
 
   test("paginationUrlFor json-ifies a more_topics_url with its query", () => {
@@ -153,6 +191,7 @@ describe("cookedToText", () => {
 
   test("decodes entities and drops inline tags", () => {
     expect(cookedToText("<p>a &amp; b &lt;= <b>c</b></p>")).toBe("a & b <= c");
+    expect(cookedToText("<p>end&hellip; mid&mdash;way</p>")).toBe("end… mid—way");
   });
 
   test("onebox link cards collapse to a single link line", () => {
@@ -418,6 +457,294 @@ describe("discourseProvider.fetch (categories)", () => {
     });
     const res = await discourseProvider.fetch("https://f.io/c/x/21", ctx);
     expect(res.title).toBe("Category 21");
+  });
+});
+
+describe("parseCategoryPath", () => {
+  test("splits slugs, id, filter", () => {
+    expect(parseCategoryPath("https://f.io/c/parent/child/33/l/top")).toEqual({
+      slugs: ["parent", "child"],
+      id: 33,
+      filter: "top",
+    });
+    expect(parseCategoryPath("https://f.io/c/general")).toEqual({
+      slugs: ["general"],
+      id: undefined,
+      filter: undefined,
+    });
+    expect(parseCategoryPath("https://f.io/c/7/l/latest?board=default")).toEqual({
+      slugs: [],
+      id: 7,
+      filter: "latest",
+    });
+    expect(parseCategoryPath("https://f.io/t/s/1")).toBeNull();
+  });
+});
+
+describe("resolveCategoryId", () => {
+  const cats: SiteCategory[] = [
+    { id: 1, name: "root", slug: "root" },
+    { id: 2, name: "child", slug: "child", parent_category_id: 1 },
+    { id: 3, name: "other", slug: "child", parent_category_id: 9 },
+  ];
+
+  test("single slug prefers the root category", () => {
+    expect(resolveCategoryId(cats, ["root"])).toBe(1);
+  });
+
+  test("walks nested slugs along the parent chain", () => {
+    expect(resolveCategoryId(cats, ["root", "child"])).toBe(2);
+  });
+
+  test("falls back to the bare last slug when the chain is broken", () => {
+    expect(resolveCategoryId(cats, ["missing", "child"])).toBe(2);
+  });
+
+  test("unknown slugs resolve to null", () => {
+    expect(resolveCategoryId(cats, ["nope"])).toBeNull();
+    expect(resolveCategoryId(cats, [])).toBeNull();
+  });
+});
+
+describe("blurbText", () => {
+  test("strips tags/entities, collapses whitespace, slices to 200", () => {
+    expect(blurbText("<b>bold</b> &amp; <i>text</i>\nmore   spaces")).toBe("bold & text more spaces");
+    expect(blurbText(undefined)).toBe("");
+    expect(blurbText("x".repeat(250)).length).toBe(200);
+  });
+});
+
+describe("renderSearch", () => {
+  const res: SearchResponse = {
+    topics: [
+      { id: 5, title: "T5", slug: "t5", posts_count: 3, category_id: 7, tags: ["x"] },
+      { id: 6, title: "T6", slug: "t6" },
+    ],
+    posts: [
+      {
+        topic_id: 5,
+        post_number: 1,
+        username: "u1",
+        blurb: "<b>bold</b> &amp; text",
+        created_at: "2026-09-01T10:00:00Z",
+      },
+      { topic_id: 5, post_number: 2, username: "u2" },
+      { topic_id: 6, post_number: 1, username: "u3", blurb: "other" },
+    ],
+    categories: [{ id: 7, name: "General" }],
+  };
+
+  test("groups posts under topics with /t/ paths, category, and tags", () => {
+    const md = renderSearch(res, "f.example", "hello world");
+    expect(md.split("\n")[0]).toBe("# Search: hello world");
+    expect(md).toContain("**T5** (3 posts, in General, #x) — /t/t5/5");
+    expect(md).toContain("  - **u1** (#1, 2026-09-01): bold & text");
+    expect(md).toContain("  - **u2** (#2): (no excerpt)");
+    expect(md).toContain("**T6** — /t/t6/6");
+  });
+
+  test("empty results say so", () => {
+    expect(renderSearch({ topics: [], posts: [] }, "f.example", "q")).toContain("No results.");
+  });
+
+  test("caps posts and points at the next page", () => {
+    const many = Array.from({ length: 51 }, (_, i) => ({ topic_id: 5, post_number: i + 1, username: "u" }));
+    const md = renderSearch({ topics: [{ id: 5, title: "T", slug: "t" }], posts: many }, "f.example", "q");
+    expect(md).toContain("[... 1 more posts — add &page=2 to the search URL for the next page]");
+  });
+});
+
+describe("renderCategoryTree", () => {
+  const cats: SiteCategory[] = [
+    { id: 1, name: "Root A", slug: "root-a", topic_count: 10, position: 0 },
+    { id: 2, name: "Child A", slug: "child-a", parent_category_id: 1, topic_count: 4, position: 0 },
+    {
+      id: 3,
+      name: "Root B",
+      slug: "root-b",
+      topic_count: 2,
+      position: 1,
+      description_text: "Board about things\nsecond line",
+    },
+  ];
+
+  test("nests children, orders by position, shows paths, counts, descriptions", () => {
+    const md = renderCategoryTree(cats, "f.example");
+    const lines = md.split("\n");
+    const iA = lines.findIndex((l) => l.includes("Root A"));
+    const iChild = lines.findIndex((l) => l.includes("Child A"));
+    const iB = lines.findIndex((l) => l.includes("Root B"));
+    expect(iA).toBeGreaterThan(-1);
+    expect(iChild).toBe(iA + 1);
+    expect(iB).toBeGreaterThan(iChild);
+    expect(lines[iA]).toContain("- **Root A** (/c/root-a/1, 10 topics)");
+    expect(lines[iChild]).toMatch(/^ {2}- \*\*Child A\*\* \(\/c\/root-a\/child-a\/2, 4 topics\)/);
+    expect(lines[iB]).toContain("/c/root-b/3, 2 topics");
+    expect(lines[iB]).toContain("Board about things");
+    expect(md).toContain("fetch a board: https://f.example/c/<slug-path>/<id>");
+  });
+});
+
+describe("discourseProvider.fetch (slug-only categories)", () => {
+  function key(url: string): string {
+    const u = new URL(url);
+    const params = [...u.searchParams.entries()]
+      .sort()
+      .map(([k, v]) => `${k}=${v}`)
+      .join("&");
+    return `${u.pathname}?${params}`;
+  }
+  function ctxWith(pages: Record<string, { status: number; text: string }>) {
+    const http = async (url: string) => pages[key(url)] ?? { status: 404, text: "" };
+    return { httpFetch: http } as never as Parameters<typeof discourseProvider.fetch>[1];
+  }
+
+  const siteJson = {
+    categories: [
+      { id: 21, name: "General", slug: "general" },
+      { id: 7, name: "beta-board", slug: "beta-board", parent_category_id: 21 },
+    ],
+  };
+
+  test("resolves slug-only URLs via site.json", async () => {
+    const ctx = ctxWith({
+      [key("https://f.io/site.json")]: { status: 200, text: JSON.stringify(siteJson) },
+      [key("https://f.io/c/general/beta-board/7.json?extras=excerpts")]: {
+        status: 200,
+        text: JSON.stringify({
+          topic_list: { topics: [{ id: 9, title: "T9", slug: "t9", posts_count: 1, category_id: 21 }] },
+        }),
+      },
+    });
+    const res = await discourseProvider.fetch("https://f.io/c/general/beta-board", ctx);
+    expect(res.title).toBe("beta-board");
+    expect(res.content).toContain("in General");
+  });
+
+  test("unknown slugs throw (tryFeed falls back to HTML)", async () => {
+    const ctx = ctxWith({
+      [key("https://f.io/site.json")]: { status: 200, text: JSON.stringify({ categories: [] }) },
+    });
+    expect(discourseProvider.fetch("https://f.io/c/ghost", ctx)).rejects.toThrow("not found");
+  });
+});
+
+describe("discourseProvider.fetch (search)", () => {
+  function key(url: string): string {
+    const u = new URL(url);
+    const params = [...u.searchParams.entries()]
+      .sort()
+      .map(([k, v]) => `${k}=${v}`)
+      .join("&");
+    return `${u.pathname}?${params}`;
+  }
+  function ctxWith(pages: Record<string, { status: number; text: string }>) {
+    const http = async (url: string) => pages[key(url)] ?? { status: 404, text: "" };
+    return { httpFetch: http } as never as Parameters<typeof discourseProvider.fetch>[1];
+  }
+
+  test("fetches search.json and renders grouped results", async () => {
+    const ctx = ctxWith({
+      [key("https://f.io/search.json?q=hello world")]: {
+        status: 200,
+        text: JSON.stringify({
+          topics: [{ id: 5, title: "T5", slug: "t5", posts_count: 2, category_id: 7 }],
+          posts: [
+            { topic_id: 5, post_number: 1, username: "u1", blurb: "hit one" },
+            { topic_id: 5, post_number: 2, username: "u2", blurb: "hit two" },
+          ],
+          categories: [{ id: 7, name: "General" }],
+        }),
+      },
+    });
+    const res = await discourseProvider.fetch("https://f.io/search?q=hello+world", ctx);
+    expect(res.title).toBe("Search: hello world");
+    expect(res.content).toContain("**T5** (2 posts, in General) — /t/t5/5");
+    expect(res.content).toContain("**u2** (#2): hit two");
+  });
+
+  test("missing q throws", async () => {
+    const ctx = ctxWith({});
+    expect(discourseProvider.fetch("https://f.io/search", ctx)).rejects.toThrow("?q=");
+  });
+});
+
+describe("discourseProvider.fetch (site listings)", () => {
+  function key(url: string): string {
+    const u = new URL(url);
+    const params = [...u.searchParams.entries()]
+      .sort()
+      .map(([k, v]) => `${k}=${v}`)
+      .join("&");
+    return `${u.pathname}?${params}`;
+  }
+  function ctxWith(pages: Record<string, { status: number; text: string }>) {
+    const http = async (url: string) => pages[key(url)] ?? { status: 404, text: "" };
+    return { httpFetch: http } as never as Parameters<typeof discourseProvider.fetch>[1];
+  }
+
+  test("renders /latest with per-topic board names", async () => {
+    const ctx = ctxWith({
+      [key("https://f.io/latest.json?extras=excerpts")]: {
+        status: 200,
+        text: JSON.stringify({
+          topic_list: { topics: [{ id: 1, title: "T1", slug: "t1", posts_count: 2, category_id: 7 }] },
+        }),
+      },
+      [key("https://f.io/site.json")]: {
+        status: 200,
+        text: JSON.stringify({ categories: [{ id: 7, name: "beta-board" }] }),
+      },
+    });
+    const res = await discourseProvider.fetch("https://f.io/latest", ctx);
+    expect(res.title).toBe("Latest topics");
+    expect(res.content).toContain("# Latest topics (listing)");
+    expect(res.content).toContain("in beta-board");
+    expect(res.content).toContain("All boards: /categories");
+  });
+
+  test("top period subpaths name the period", async () => {
+    const ctx = ctxWith({
+      [key("https://f.io/top/weekly.json?extras=excerpts")]: {
+        status: 200,
+        text: JSON.stringify({ topic_list: { topics: [] } }),
+      },
+    });
+    const res = await discourseProvider.fetch("https://f.io/top/weekly", ctx);
+    expect(res.title).toBe("Top topics (weekly)");
+  });
+});
+
+describe("discourseProvider.fetch (categories index)", () => {
+  function key(url: string): string {
+    const u = new URL(url);
+    const params = [...u.searchParams.entries()]
+      .sort()
+      .map(([k, v]) => `${k}=${v}`)
+      .join("&");
+    return `${u.pathname}?${params}`;
+  }
+  function ctxWith(pages: Record<string, { status: number; text: string }>) {
+    const http = async (url: string) => pages[key(url)] ?? { status: 404, text: "" };
+    return { httpFetch: http } as never as Parameters<typeof discourseProvider.fetch>[1];
+  }
+
+  test("renders the site.json tree", async () => {
+    const ctx = ctxWith({
+      [key("https://f.io/site.json")]: {
+        status: 200,
+        text: JSON.stringify({
+          categories: [
+            { id: 21, name: "General", slug: "general", topic_count: 10, position: 0 },
+            { id: 7, name: "beta-board", slug: "beta-board", parent_category_id: 21, topic_count: 4, position: 0 },
+          ],
+        }),
+      },
+    });
+    const res = await discourseProvider.fetch("https://f.io/categories", ctx);
+    expect(res.title).toBe("Categories");
+    expect(res.content).toContain("- **General** (/c/general/21, 10 topics)");
+    expect(res.content).toContain("  - **beta-board** (/c/general/beta-board/7, 4 topics)");
   });
 });
 

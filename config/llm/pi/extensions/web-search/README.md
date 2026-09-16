@@ -27,7 +27,7 @@ Default chain: kagi (primary), tavily (fallback on 401/403), claude (last resort
 
 Fetch a web page and extract its text content.
 
-**Structured-data fast path:** before spinning up a browser, tries sites that publish a structured feed/API (e.g. Reddit, GitHub). These return clean data with no page chrome. See `feeds/` for providers; adding one is a single file in `feeds/`. Falls back to browser rendering otherwise.
+**Structured-data fast path:** before spinning up a browser, tries sites that publish a structured feed/API (e.g. Reddit, GitHub). These return clean data with no page chrome. See `feeds/` for providers; adding one is a single file in `feeds/`. Falls back to browser rendering otherwise. Capability discovery: every provider declares a required one-line `hint` folded into the web_fetch tool description at registration, and feed renders advertise follow-up fetch paths so agents can chain requests.
 
 **Browser rendering:** uses `agent-browser` (headless Chrome daemon), which handles JavaScript rendering and bot detection. Renders HTML to **markdown via pandoc** (with table support), falling back to plain text. Uses agent-browser's **real User-Agent** (cached on first fetch) to clear edge/WAF bot checks.
 

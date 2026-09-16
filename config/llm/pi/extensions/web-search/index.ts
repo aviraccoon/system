@@ -22,6 +22,7 @@ import { Type } from "typebox";
 import { formatHits } from "../web-search-core/format";
 import { availableProviders, providerLabel, resolveProvider } from "../web-search-core/registry";
 import type { SearchFilters, SearchProvider } from "../web-search-core/types";
+import { feedHints } from "./feeds/registry";
 import { closeSession, FetchError, fetchPage, sessionName, spillToTmp, truncateContent } from "./web-fetch";
 
 function elapsed(start: number): string {
@@ -200,7 +201,8 @@ export default function (pi: ExtensionAPI) {
     name: "web_fetch",
     label: "Web Fetch",
     description:
-      "Fetch a web page and extract its text content. Uses a headless browser that handles JavaScript rendering and bot detection. Use after web_search to read a specific result page. For complex interactions (clicking, filling forms, screenshots), use bash with `agent-browser` CLI directly.",
+      "Fetch a web page and extract its text content. Uses a headless browser that handles JavaScript rendering and bot detection. Use after web_search to read a specific result page. For complex interactions (clicking, filling forms, screenshots), use bash with `agent-browser` CLI directly.\n\n" +
+      `Structured feeds (fetched as clean markdown, no page chrome):\n${feedHints()}`,
     promptSnippet: "web_fetch: Fetch a web page and extract its text content. Parameters: url (string, required)",
     promptGuidelines: [
       "Use web_fetch to read pages found via web_search. It handles JS-rendered pages and bot detection.",

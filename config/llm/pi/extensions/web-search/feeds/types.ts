@@ -46,6 +46,10 @@ export interface FeedContext {
 export interface FeedProvider {
   /** Eligibility — owns its own URL rules (subdomain normalization, path matching, etc). */
   matches(url: string): boolean;
+  /** Required one-line capability hint, folded into the host's web_fetch
+   * description — how an agent discovers feed support without reading
+   * feeds/ source. A hint-less provider would be undiscoverable. */
+  hint: string;
   /** Fetch + render to markdown. May use browserFetch, httpFetch, or both. */
   fetch(url: string, ctx: FeedContext): Promise<FeedResult>;
 }

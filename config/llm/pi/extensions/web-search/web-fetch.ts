@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { USER_AGENT } from "./feeds/http";
 import { tryFeed } from "./feeds/registry";
 import type { FeedContext, HttpFetchOptions } from "./feeds/types";
 
@@ -41,15 +42,6 @@ export class FetchError extends Error {
 // `Chrome/...` User-Agent header clears those server-side checks. This does
 // NOT defeat client-side fingerprinting (Cloudflare Turnstile/WAF, DataDome):
 // those read CDP artifacts no header can hide.
-
-/**
- * Fallback User-Agent (Chrome 149 = the currently bundled major version).
- * `resolveNavHeaders` normally reads the browser's real UA instead, so this
- * only matters if that probe fails. Bump when `agent-browser doctor` shows a
- * new major version — but in practice the dynamic read keeps it fresh.
- */
-export const USER_AGENT =
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36";
 
 /**
  * Swap the HeadlessChrome token for Chrome, keeping the exact version the

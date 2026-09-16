@@ -19,6 +19,12 @@
  * of a login-wall scrape.
  *
  * Transport: httpFetch only — no browser needed, works on browser-less hosts.
+ *
+ * Shapes: /t/<slug>/<id> topics, /c/<slugs>[/<id>][/l/<filter>] category listings
+ * (slug-only URLs resolve via site.json), /search?q=... (Discourse search filters:
+ * #category, @user, in:title, order:latest, status:...), /latest /new /unread /top
+ * site-wide listings, /categories index. Renders carry /t/ paths + a search hint
+ * so an agent can chain fetches without knowing the API.
  */
 
 import { execSync } from "node:child_process";
@@ -32,19 +38,41 @@ import type { FeedContext, FeedProvider, FeedResult } from "./types";
 /** Topic URL: /t/<slug>/<id> with optional trailing post number. */
 const TOPIC_RE = /^https?:\/\/[^/]+\/t\/(?:[^/]+\/)?\d+(?:\/\d+)?/i;
 
-/** Category URL: /c/ with one or more slugs then the id, optional /l/<filter>. */
-const CATEGORY_RE = /^https?:\/\/[^/]+\/c\/(?:[a-z0-9-]+\/)*\d+(?:\/l\/[a-z0-9-]+)?/i;
+/** Category URL: /c/ with slugs and/or a numeric id, optional /l/<filter>. The
+ * id is optional so slug-only pastes (/c/parent/child) match too — resolved
+ * against site.json at fetch time. Either branch ends in a mandatory segment
+ * (digits or slug) so bare /c/ never matches. */
+const CATEGORY_RE = /^https?:\/\/[^/]+\/c\/(?:(?:[a-z0-9-]+\/)*\d+|(?:[a-z0-9-]+\/)*[a-z0-9-]+)(?:\/l\/[a-z0-9-]+)?/i;
+
+/** Search: /search with a ?q= query (q presence is checked at fetch time). */
+const SEARCH_RE = /^https?:\/\/[^/]+\/search\/?$/i;
+
+/** Site-wide category index: /categories. */
+const CATEGORIES_RE = /^https?:\/\/[^/]+\/categories\/?$/i;
+
+/** Site-wide topic listings: /latest, /new, /unread, /top[/period]. */
+const SITELIST_RE = /^https?:\/\/[^/]+\/(?:latest|new|unread|top)(?:\/[a-z0-9-]+)?\/?$/i;
 
 export function matches(url: string): boolean {
   const noQuery = url.split(/[?#]/)[0];
-  return TOPIC_RE.test(noQuery) || CATEGORY_RE.test(noQuery);
+  return (
+    TOPIC_RE.test(noQuery) ||
+    CATEGORY_RE.test(noQuery) ||
+    SEARCH_RE.test(noQuery) ||
+    CATEGORIES_RE.test(noQuery) ||
+    SITELIST_RE.test(noQuery)
+  );
 }
 
-export type DiscourseKind = "topic" | "category";
+export type DiscourseKind = "topic" | "category" | "search" | "sitelist" | "categories";
 
-/** Which listing a URL points at. Topic unless it matches the category shape. */
+/** Which Discourse view a URL points at. */
 export function classify(url: string): DiscourseKind {
-  return CATEGORY_RE.test(url.split(/[?#]/)[0]) ? "category" : "topic";
+  const noQuery = url.split(/[?#]/)[0];
+  if (SEARCH_RE.test(noQuery)) return "search";
+  if (CATEGORIES_RE.test(noQuery)) return "categories";
+  if (SITELIST_RE.test(noQuery)) return "sitelist";
+  return CATEGORY_RE.test(noQuery) ? "category" : "topic";
 }
 
 /** Canonical topic path (/t/<slug>/<id> or /t/<id>), query/fragment/post-anchor stripped. */
@@ -62,13 +90,45 @@ export function categoryPath(url: string): string {
 }
 
 export function jsonUrlFor(url: string): string {
-  const origin = `https://${new URL(url).hostname}`;
-  if (classify(url) === "category") {
-    const path = categoryPath(url);
-    return `${origin}${path.endsWith("/") ? path.slice(0, -1) : path}.json?${categoryQuery(url).toString()}`;
-  }
   const path = topicPath(url);
-  return `${origin}${path.endsWith("/") ? path.slice(0, -1) : path}.json`;
+  return `https://${new URL(url).hostname}${path.endsWith("/") ? path.slice(0, -1) : path}.json`;
+}
+
+/** Parts of a category URL path: nested slugs, optional numeric id, optional
+ * /l/<filter>. The trailing all-digit segment is the id (canonical Discourse
+ * form ends with it). */
+export interface CategoryPath {
+  slugs: string[];
+  id?: number;
+  filter?: string;
+}
+
+export function parseCategoryPath(url: string): CategoryPath | null {
+  const path = url
+    .split(/[?#]/)[0]
+    .replace(/^https?:\/\/[^/]+/i, "")
+    .replace(/\/+$/, "");
+  const m = path.match(/^\/c\/(.+)$/i);
+  if (!m) return null;
+  const segs = m[1].split("/").filter(Boolean);
+  let filter: string | undefined;
+  if (segs.length >= 2 && segs[segs.length - 2] === "l") {
+    filter = segs.pop() as string;
+    segs.pop();
+  }
+  let id: number | undefined;
+  if (segs.length > 0 && /^\d+$/.test(segs[segs.length - 1])) {
+    id = Number(segs.pop());
+  }
+  return { slugs: segs, id, filter };
+}
+
+/** Canonical listing JSON URL: /c/<slugs>/<id>[/<filter>].json, keeping listing
+ * query params (order/ascending) from the original URL. */
+export function categoryJsonUrl(origin: string, parts: CategoryPath, id: number, url: string): string {
+  const segs = [...parts.slugs, String(id)];
+  const path = `/c/${segs.join("/")}${parts.filter ? `/l/${parts.filter}` : ""}`;
+  return `${origin}${path}.json?${categoryQuery(url).toString()}`;
 }
 
 /** Turn a relative more_topics_url ("/c/x/8/l/latest?page=1") into its .json form. */
@@ -186,6 +246,21 @@ export interface CategoryRef {
   subcategory_list?: CategoryRef[];
 }
 
+/** site.json category entry (superset of CategoryRef). */
+export interface SiteCategory extends CategoryRef {
+  parent_category_id?: number | null;
+  topic_count?: number;
+  position?: number;
+  description_text?: string;
+  description?: string;
+}
+
+/** site.json payload used for name lookups, slug→id resolution, and the tree. */
+export interface SiteInfo {
+  names: Map<number, string>;
+  categories: SiteCategory[];
+}
+
 // ── Pure rendering ──
 
 /** Convert Discourse cooked HTML to plain text (code blocks kept as fences). */
@@ -239,7 +314,10 @@ export function cookedToText(cooked: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&nbsp;/g, " ");
+    .replace(/&nbsp;/g, " ")
+    .replace(/&hellip;/g, "…")
+    .replace(/&mdash;/g, "—")
+    .replace(/&ndash;/g, "–");
   // Trim trailing whitespace per line; collapse whitespace-only line runs.
   return text
     .split("\n")
@@ -292,6 +370,7 @@ export function renderDiscourse(topic: DiscourseTopic, host: string, renderedCou
   if (renderedCount < topic.posts_count) {
     lines.push("", `[... ${topic.posts_count - renderedCount} more posts not fetched]`);
   }
+  lines.push("", SEARCH_HINT);
   return lines.join("\n").trim();
 }
 
@@ -322,9 +401,9 @@ export function renderCategoryList(
   host: string,
   listingName: string,
   truncated: boolean,
-  opts: { listingId?: number; nameOf?: (id: number) => string | undefined } = {},
+  opts: { listingId?: number; kindLabel?: string; nameOf?: (id: number) => string | undefined } = {},
 ): string {
-  const lines: string[] = [`# ${listingName} (category)`, ""];
+  const lines: string[] = [`# ${listingName} (${opts.kindLabel ?? "category"})`, ""];
   const meta = [host, `${topics.length} topics listed`];
   lines.push(meta.join(" · "), "");
 
@@ -349,6 +428,143 @@ export function renderCategoryList(
   }
 
   if (truncated) lines.push("", "[... more topics available — list truncated]");
+  lines.push("", `${SEARCH_HINT} · All boards: /categories`);
+  return lines.join("\n").trim();
+}
+
+/** One-line discovery pointer appended to listings/topic renders — the agent
+ * learns the search syntax in context instead of needing it in a prompt. */
+const SEARCH_HINT = "Search: /search?q=<terms> (#category, @user, in:title, order:latest)";
+
+// ── Search rendering ──
+
+export interface SearchPost {
+  topic_id: number;
+  post_number?: number;
+  username: string;
+  blurb?: string;
+  created_at?: string;
+}
+
+export interface SearchTopic {
+  id: number;
+  title: string;
+  slug: string;
+  posts_count?: number;
+  category_id?: number;
+  tags?: (string | { name?: string; slug?: string })[];
+}
+
+export interface SearchResponse {
+  topics?: SearchTopic[];
+  posts?: SearchPost[];
+  categories?: { id: number; name: string }[];
+}
+
+/** Posts rendered per search page; the server's own page size is 50. */
+const MAX_SEARCH_POSTS = 50;
+
+/** Search blurbs to plain one-line text (occasional HTML/entities stripped). */
+export function blurbText(blurb: string | undefined): string {
+  if (!blurb) return "";
+  const t = cookedToText(blurb);
+  return t.replace(/\s+/g, " ").trim().slice(0, 200);
+}
+
+/** Render search results: posts grouped under their topic, each topic carrying
+ * its /t/ path so the agent can fetch the full thread next. */
+export function renderSearch(res: SearchResponse, host: string, query: string): string {
+  const lines: string[] = [`# Search: ${query}`, ""];
+  const topics = new Map((res.topics ?? []).map((t) => [t.id, t]));
+  const cats = new Map((res.categories ?? []).map((c) => [c.id, c.name]));
+  const posts = res.posts ?? [];
+  if (posts.length === 0) {
+    lines.push(`${host} · No results.`, "", SEARCH_HINT);
+    return lines.join("\n").trim();
+  }
+  lines.push(`${host} · ${posts.length} posts in ${topics.size} topics`, "");
+
+  const groups = new Map<number, SearchPost[]>();
+  for (const p of posts) {
+    const arr = groups.get(p.topic_id);
+    if (arr) arr.push(p);
+    else groups.set(p.topic_id, [p]);
+  }
+  let shown = 0;
+  for (const [topicId, group] of groups) {
+    if (shown >= MAX_SEARCH_POSTS) break;
+    const t = topics.get(topicId);
+    const head: string[] = [];
+    if (t?.posts_count != null) head.push(`${t.posts_count} posts`);
+    if (t?.category_id != null) {
+      const n = cats.get(t.category_id);
+      if (n) head.push(`in ${n}`);
+    }
+    const tags = tagNames(t?.tags);
+    if (tags.length > 0) head.push(tags.map((tag) => `#${tag}`).join(" "));
+    const headStr = head.length > 0 ? ` (${head.join(", ")})` : "";
+    lines.push(`- **${t?.title ?? `topic ${topicId}`}**${headStr} — /t/${t?.slug ?? "topic"}/${topicId}`);
+    for (const p of group) {
+      if (shown >= MAX_SEARCH_POSTS) break;
+      shown++;
+      const date = p.created_at ? `, ${p.created_at.slice(0, 10)}` : "";
+      const blurb = blurbText(p.blurb);
+      lines.push(`  - **${p.username}** (#${p.post_number ?? "?"}${date}): ${blurb || "(no excerpt)"}`);
+    }
+  }
+  if (posts.length > shown) {
+    lines.push("", `[... ${posts.length - shown} more posts — add &page=2 to the search URL for the next page]`);
+  }
+  return lines.join("\n").trim();
+}
+
+// ── Category tree rendering ──
+
+/** Render the site category index from site.json: one bullet per category,
+ * children nested under parents, each with its canonical /c/ path (the URL to
+ * fetch next), topic count, and one-line description. */
+export function renderCategoryTree(cats: SiteCategory[], host: string): string {
+  const byId = new Map(cats.map((c) => [c.id, c]));
+  const byParent = new Map<number | null, SiteCategory[]>();
+  for (const c of cats) {
+    const k = c.parent_category_id ?? null;
+    const arr = byParent.get(k) ?? [];
+    arr.push(c);
+    byParent.set(k, arr);
+  }
+  const slugPath = (c: SiteCategory): string => {
+    const parts: string[] = [];
+    const guard = new Set<number>();
+    let cur: SiteCategory | undefined = c;
+    while (cur && !guard.has(cur.id)) {
+      guard.add(cur.id);
+      parts.unshift(cur.slug ?? String(cur.id));
+      cur = cur.parent_category_id != null ? byId.get(cur.parent_category_id) : undefined;
+    }
+    return parts.join("/");
+  };
+  const lines: string[] = [
+    `# Categories (${host})`,
+    "",
+    `${cats.length} categories · fetch a board: https://${host}/c/<slug-path>/<id>[/l/latest|new|top]`,
+    "",
+  ];
+  const pos = (c: SiteCategory) => c.position ?? Number.MAX_SAFE_INTEGER;
+  const walk = (parent: number | null, depth: number) => {
+    if (depth > 10) return;
+    const kids = (byParent.get(parent) ?? []).sort((a, b) => pos(a) - pos(b));
+    for (const c of kids) {
+      const raw = c.description_text ?? c.description;
+      const descLine = raw
+        ? ` — ${raw.split("\n")[0].replace(/\s+/g, " ").trim().slice(0, 100)}${raw.length > 100 ? "…" : ""}`
+        : "";
+      lines.push(
+        `${"  ".repeat(depth)}- **${c.name}** (/c/${slugPath(c)}/${c.id}, ${c.topic_count ?? "?"} topics)${descLine}`,
+      );
+      walk(c.id, depth + 1);
+    }
+  };
+  walk(null, 0);
   return lines.join("\n").trim();
 }
 
@@ -357,14 +573,43 @@ export function renderCategoryList(
 const MAX_PAGES = 50;
 const MAX_CATEGORY_PAGES = 3;
 
+/** Names for site-wide listings, keyed by the first path segment. */
+const SITELIST_NAMES: Record<string, string> = {
+  latest: "Latest topics",
+  new: "New topics",
+  unread: "Unread topics",
+  top: "Top topics",
+};
+
+function sitelistName(path: string): string {
+  const segs = path.split("/").filter(Boolean);
+  const base = SITELIST_NAMES[segs[0] ?? ""] ?? segs[0] ?? "Topics";
+  return segs[1] ? `${base} (${segs[1]})` : base;
+}
+
 type HttpFetch = NonNullable<FeedContext["httpFetch"]>;
 
 export const discourseProvider: FeedProvider = {
   matches,
+  hint:
+    "Discourse forums (any host): /t/<slug>/<id> topics, /c/<slugs>[/<id>][/l/<filter>] boards, " +
+    "/categories index, /latest|/new|/unread|/top listings, /search?q=... (filters: #category, @user, " +
+    "in:title, order:latest, status:...) — all render as structured markdown.",
   async fetch(url, ctx: FeedContext): Promise<FeedResult> {
     const http = ctx.httpFetch;
     if (!http) throw new Error("discourse: no httpFetch transport");
-    return classify(url) === "category" ? fetchCategory(url, http) : fetchTopic(url, http);
+    switch (classify(url)) {
+      case "category":
+        return fetchCategory(url, http);
+      case "search":
+        return fetchSearch(url, http);
+      case "sitelist":
+        return fetchSitelist(url, http);
+      case "categories":
+        return fetchCategories(url, http);
+      default:
+        return fetchTopic(url, http);
+    }
   },
 };
 
@@ -408,12 +653,101 @@ async function fetchTopic(url: string, http: HttpFetch): Promise<FeedResult> {
 async function fetchCategory(url: string, http: HttpFetch): Promise<FeedResult> {
   const headers = authHeadersFor(url);
   const origin = `https://${new URL(url).hostname}`;
-  const jsonUrl = jsonUrlFor(url);
+  const parts = parseCategoryPath(url);
+  if (!parts) throw new Error("discourse: unparseable category path");
+
+  // site.json first: it carries the slug→id map (slug-only URLs have no id in
+  // the path) AND the id→name map for listing/subcategory labels.
+  const site = await fetchSite(origin, http, headers);
+  let id = parts.id;
+  if (id == null) {
+    const resolved = resolveCategoryId(site?.categories ?? [], parts.slugs);
+    if (resolved == null) {
+      throw new Error(`discourse: category /c/${parts.slugs.join("/")} not found on ${origin}`);
+    }
+    id = resolved;
+  }
+
+  const listing = await fetchTopicList(origin, categoryJsonUrl(origin, parts, id, url), url, headers, http);
+  if (listing.denied) return listing.denied;
+
+  const name = site?.names.get(id) ?? `Category ${id}`;
+  return {
+    url,
+    title: name,
+    content: renderCategoryList(listing.topics, new URL(url).hostname, name, listing.truncated, {
+      listingId: id,
+      nameOf: (cid) => site?.names.get(cid),
+    }),
+  };
+}
+
+async function fetchSitelist(url: string, http: HttpFetch): Promise<FeedResult> {
+  const headers = authHeadersFor(url);
+  const origin = `https://${new URL(url).hostname}`;
+  const path = url
+    .split(/[?#]/)[0]
+    .replace(/^https?:\/\/[^/]+/i, "")
+    .replace(/\/+$/, "");
+  const name = sitelistName(path);
+
+  const listing = await fetchTopicList(
+    origin,
+    `${origin}${path}.json?${categoryQuery(url).toString()}`,
+    url,
+    headers,
+    http,
+  );
+  if (listing.denied) return listing.denied;
+
+  // No listingId — every topic shows which board it belongs to.
+  const site = await fetchSite(origin, http, headers);
+  return {
+    url,
+    title: name,
+    content: renderCategoryList(listing.topics, new URL(url).hostname, name, listing.truncated, {
+      kindLabel: "listing",
+      nameOf: (cid) => site?.names.get(cid),
+    }),
+  };
+}
+
+async function fetchSearch(url: string, http: HttpFetch): Promise<FeedResult> {
+  const headers = authHeadersFor(url);
+  const u = new URL(url);
+  const q = u.searchParams.get("q")?.trim();
+  if (!q) throw new Error("discourse: /search needs a ?q= parameter");
+  const jsonUrl = `https://${u.hostname}/search.json?${u.searchParams.toString()}`;
 
   const first = await http(jsonUrl, { headers });
   const denied = gatedNote(url, first.status);
   if (denied) return denied;
-  if (first.status !== 200) throw new Error(`discourse: category JSON returned HTTP ${first.status}`);
+  if (first.status !== 200) throw new Error(`discourse: search JSON returned HTTP ${first.status}`);
+  const res = JSON.parse(first.text) as SearchResponse;
+  return { url, title: `Search: ${q}`, content: renderSearch(res, u.hostname, q) };
+}
+
+async function fetchCategories(url: string, http: HttpFetch): Promise<FeedResult> {
+  const headers = authHeadersFor(url);
+  const origin = `https://${new URL(url).hostname}`;
+  const site = await fetchSite(origin, http, headers);
+  if (!site) throw new Error(`discourse: site.json unavailable on ${origin}`);
+  return { url, title: "Categories", content: renderCategoryTree(site.categories, new URL(url).hostname) };
+}
+
+/** Fetch a topic-listing endpoint and follow more_topics_url pagination.
+ * denied is set on an auth-gated response (caller returns it verbatim). */
+async function fetchTopicList(
+  origin: string,
+  jsonUrl: string,
+  url: string,
+  headers: Record<string, string>,
+  http: HttpFetch,
+): Promise<{ topics: CategoryTopic[]; truncated: boolean; denied: FeedResult | null }> {
+  const first = await http(jsonUrl, { headers });
+  const denied = gatedNote(url, first.status);
+  if (denied) return { topics: [], truncated: false, denied };
+  if (first.status !== 200) throw new Error(`discourse: listing JSON returned HTTP ${first.status}`);
 
   // Parent listings include subcategory topics — each topic carries its own
   // category_id. Follow more_topics_url (verified: relative path + ?page=N).
@@ -431,39 +765,40 @@ async function fetchCategory(url: string, http: HttpFetch): Promise<FeedResult> 
       break;
     }
   }
-  const truncated = Boolean(list.topic_list.more_topics_url);
-
-  // id → name for the listing category and per-topic subcategory tags.
-  // site.json carries every category including subcategories (verified:
-  // categories.json does NOT). Name lookups are best-effort.
-  const listingId = Number(categoryPath(url).match(/\d+/)?.[0]);
-  const names = await categoryNames(origin, http, headers);
-  const name = names.get(listingId) ?? `Category ${listingId || "?"}`;
-
-  return {
-    url,
-    title: name,
-    content: renderCategoryList(topics, new URL(url).hostname, name, truncated, {
-      listingId,
-      nameOf: (id) => names.get(id),
-    }),
-  };
+  return { topics, truncated: Boolean(list.topic_list.more_topics_url), denied: null };
 }
 
-/** Fetch site.json and map category id → name. Empty map on any failure. */
-async function categoryNames(
-  origin: string,
-  http: HttpFetch,
-  headers: Record<string, string>,
-): Promise<Map<number, string>> {
+/** Fetch site.json: category entries + id→name map. Null on any failure. */
+async function fetchSite(origin: string, http: HttpFetch, headers: Record<string, string>): Promise<SiteInfo | null> {
   try {
     const r = await http(`${origin}/site.json`, { headers });
-    if (r.status !== 200) return new Map();
-    const cats = (JSON.parse(r.text) as { categories?: CategoryRef[] }).categories ?? [];
-    return new Map(cats.map((c) => [c.id, c.name]));
+    if (r.status !== 200) return null;
+    const cats = (JSON.parse(r.text) as { categories?: SiteCategory[] }).categories ?? [];
+    return { names: new Map(cats.map((c) => [c.id, c.name])), categories: cats };
   } catch {
-    return new Map();
+    return null;
   }
+}
+
+/** Resolve a category slug path against site.json. Walks the parent chain for
+ * nested slugs (/c/parent/child); falls back to the last slug alone (Discourse
+ * slugs are unique site-wide by default). Best-effort — null when unknown. */
+export function resolveCategoryId(cats: SiteCategory[], slugs: string[]): number | null {
+  if (slugs.length === 0) return null;
+  let parent: number | null = null;
+  let cur: SiteCategory | undefined;
+  for (const slug of slugs) {
+    const next = cats.find((c) => c.slug === slug && (c.parent_category_id ?? null) === parent);
+    if (!next) {
+      cur = undefined;
+      break;
+    }
+    cur = next;
+    parent = next.id;
+  }
+  if (cur) return cur.id;
+  const fallback = cats.find((c) => c.slug === slugs[slugs.length - 1]);
+  return fallback?.id ?? null;
 }
 
 /** Actionable note for auth-denied fetches, or null when status is fine. */

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
+import { USER_AGENT } from "./feeds/http";
 import {
   buildNavHeaders,
   cleanMarkdown,
@@ -11,7 +12,6 @@ import {
   spoofUserAgent,
   stripAnsi,
   truncateContent,
-  USER_AGENT,
   unwrapLayoutTables,
 } from "./web-fetch";
 

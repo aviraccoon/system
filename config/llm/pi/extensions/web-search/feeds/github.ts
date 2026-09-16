@@ -19,7 +19,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { USER_AGENT } from "../web-fetch";
+import { USER_AGENT } from "./http";
 import type { FeedContext, FeedProvider, FeedResult } from "./types";
 
 // ── URL parsing ──
@@ -322,6 +322,7 @@ async function apiGetText(path: string, ctx: FeedContext): Promise<string | null
 
 export const githubProvider: FeedProvider = {
   matches,
+  hint: "GitHub repos, issues, and PRs (github.com) render as structured markdown — READMEs, metadata, comment threads.",
   async fetch(url, ctx: FeedContext): Promise<FeedResult> {
     const target = parseGitHubUrl(url);
     if (!target) throw new Error("github: unsupported URL");
