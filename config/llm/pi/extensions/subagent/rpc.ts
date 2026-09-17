@@ -13,6 +13,7 @@ import type { Message } from "@earendil-works/pi-ai";
 import { type ExtensionContext, type ThemeColor, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { createDebugLogger } from "../shared/debug";
 import { loadConfig, resolveRole } from "../shared/model-roles";
+import { BASH_SANDBOX_ENV } from "../shared/sandbox";
 import type { AgentConfig } from "./agents";
 
 const SUBAGENT_SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-sessions");
@@ -497,13 +498,20 @@ export async function runSingleAgent(
       args.push("--append-system-prompt", tmpPromptPath);
     }
 
+    // A sandbox marker inherited from the parent must not survive into a child that
+    // did not ask for a sandbox: the child's gate would skip confirming its own,
+    // unconfined shell. Children run with --no-extensions, so one that does not
+    // declare sandbox-bash never clears the marker itself.
+    const childEnv: Record<string, string | undefined> = { ...process.env, PI_SUBAGENT: "1" };
+    delete childEnv[BASH_SANDBOX_ENV];
+
     const exitCode = await new Promise<number>((resolve) => {
       const invocation = getPiInvocation(args);
       const proc = spawn(invocation.command, invocation.args, {
         cwd: cwd ?? defaultCwd,
         shell: false,
         stdio: ["pipe", "pipe", "pipe"], // stdin for steering commands
-        env: { ...process.env, PI_SUBAGENT: "1" },
+        env: childEnv,
       });
       let stdoutBuffer = "";
       let stderrBuffer = "";

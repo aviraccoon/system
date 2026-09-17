@@ -13,9 +13,11 @@
  *   tools: read,grep,find,ls,bash
  *   extensions: sandbox-bash
  *
- * Loading it is the whole opt-in — there is no mode to configure. On a platform
- * without seatbelt, or if the profile fails a smoke test, the override is not
- * registered and bash stays as it was.
+ * That is the per-agent opt-in. Activation additionally requires being a spawned
+ * subagent, because pi auto-discovers every extension in the extensions
+ * directory and this file therefore loads in the main session too — see
+ * `shouldActivate`. Off macOS, or if the profile fails a smoke test, the override
+ * is not registered and bash stays as it was.
  *
  * `PI_BASH_SANDBOX` is set while active so the permission gate can stop
  * confirming a call the OS already confines.
@@ -28,7 +30,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBashTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BASH_SANDBOX_ENV, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
-import { profileParams, SANDBOX_EXEC, sandboxCommand } from "./wrap";
+import { profileParams, SANDBOX_EXEC, sandboxCommand, shouldActivate } from "./wrap";
 
 const PROFILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "profile.sbpl");
 
@@ -42,7 +44,19 @@ function real(pathname: string): string {
 }
 
 export default function sandboxBash(pi: ExtensionAPI) {
-  if (process.platform !== "darwin" || !existsSync(SANDBOX_EXEC) || !existsSync(PROFILE)) return;
+  const activate = shouldActivate({
+    platform: process.platform,
+    subagent: process.env.PI_SUBAGENT,
+    hasSandboxExec: existsSync(SANDBOX_EXEC),
+    hasProfile: existsSync(PROFILE),
+  });
+
+  // Clear immediately, then set only once every check has passed. The gate
+  // auto-allows `bash` on the strength of this value, so a marker left behind by
+  // a previous reload would silently skip confirmation for an unconfined shell —
+  // and setting it before the smoke test would do the same on a profile failure.
+  delete process.env[BASH_SANDBOX_ENV];
+  if (!activate) return;
 
   const params = profileParams({
     home: real(os.homedir()),

@@ -1,7 +1,12 @@
 /**
  * Names shared between the sandboxed-bash override and the permission gate.
- * Both run in the same process; the environment is the channel because the
- * override may also be loaded where the gate is not.
+ * Both run in the same process, and the environment is the only channel between
+ * extensions: pi loads each one through its own jiti instance with
+ * `moduleCache: false`, so a module imported by both is two separate instances.
+ *
+ * The gate auto-allows `bash` on the strength of this value, so whoever sets it
+ * must set or clear it deterministically — a stale value silently skips
+ * confirmation for an unconfined shell.
  */
 
 /** Set by the sandbox-bash extension when `bash` is confined by the OS. */

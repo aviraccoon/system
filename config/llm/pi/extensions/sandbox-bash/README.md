@@ -50,16 +50,15 @@ its quoting cannot break out of the wrapper.
 
 ## Behaviour
 
-- Loading it *is* the opt-in.
-- Off macOS, or if the profile fails a smoke test at load, the override is not
-  registered: bash stays as it was and the permission gate keeps confirming it.
-  No silent fallback to unsandboxed.
-- `PI_BASH_SANDBOX` is set while active, so the permission gate stops confirming
-  a call the OS already confines.
-- `GIT_OPTIONAL_LOCKS=0` is set: read-only git commands would otherwise refresh
-  the index, which is a write the profile denies.
-- This confines `bash`, not the process. `web_fetch`/`web_search` are extension
-  tools running in the agent process, so they are outside it.
+- Opt in with `extensions: sandbox-bash` on a subagent. It does not activate in the
+  main session.
+- Off macOS, or if the profile fails at load: bash is left alone and the gate keeps
+  confirming it.
+- While active the gate does not confirm `bash`, since the OS already confines it.
+- `GIT_OPTIONAL_LOCKS=0` is set, so read-only git commands do not try to refresh the
+  index.
+- This confines `bash`, not the process: `web_fetch`/`web_search` run in the agent
+  process and are outside it.
 
 ## Files
 

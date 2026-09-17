@@ -36,6 +36,27 @@ export function profileParams(paths: SandboxPaths): string[] {
   ];
 }
 
+export interface ActivationInput {
+  platform: string;
+  /** Value of PI_SUBAGENT — set by the subagent extension for spawned children. */
+  subagent: string | undefined;
+  hasSandboxExec: boolean;
+  hasProfile: boolean;
+}
+
+/**
+ * Whether to take over `bash` for this process.
+ *
+ * Delegated agents only. Pi auto-discovers every extension in the extensions
+ * directory, so this file is loaded in the main session too — activating there
+ * would make the user's own shell read-only. Per-agent opt-in is the
+ * `extensions:` frontmatter, which decides what a spawned child loads; the
+ * `PI_SUBAGENT` marker is what distinguishes a child from the main session.
+ */
+export function shouldActivate(input: ActivationInput): boolean {
+  return input.platform === "darwin" && input.subagent === "1" && input.hasSandboxExec && input.hasProfile;
+}
+
 /** Single-quote for the shell string the wrapper is built in. */
 export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;

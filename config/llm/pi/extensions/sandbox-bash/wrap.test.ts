@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { BASH_SANDBOX_ENV, bashSandboxed, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
-import { profileParams, SANDBOX_EXEC, sandboxCommand, shellQuote } from "./wrap";
+import { profileParams, SANDBOX_EXEC, sandboxCommand, shellQuote, shouldActivate } from "./wrap";
 
 const PATHS = { home: "/Users/foo", tmpdir: "/private/var/folders/ab/T", tmp: "/private/tmp" };
 
@@ -41,6 +41,31 @@ describe("sandboxCommand", () => {
 
   it("quotes a profile path containing a quote", () => {
     expect(sandboxCommand("/it's/profile.sbpl", [])).toContain("-f '/it'\\''s/profile.sbpl'");
+  });
+});
+
+describe("shouldActivate", () => {
+  const base = { platform: "darwin", subagent: "1", hasSandboxExec: true, hasProfile: true };
+
+  it("activates for a spawned subagent on macOS", () => {
+    expect(shouldActivate(base)).toBe(true);
+  });
+
+  it("stays inert in the main session", () => {
+    // Pi auto-discovers every extension in the extensions directory, so this
+    // file loads in the main session too. Activating there takes the user's own
+    // shell read-only.
+    expect(shouldActivate({ ...base, subagent: undefined })).toBe(false);
+    expect(shouldActivate({ ...base, subagent: "" })).toBe(false);
+  });
+
+  it("stays inert off macOS", () => {
+    expect(shouldActivate({ ...base, platform: "linux" })).toBe(false);
+  });
+
+  it("stays inert without sandbox-exec or the profile", () => {
+    expect(shouldActivate({ ...base, hasSandboxExec: false })).toBe(false);
+    expect(shouldActivate({ ...base, hasProfile: false })).toBe(false);
   });
 });
 
