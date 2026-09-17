@@ -73,15 +73,29 @@ export const MODE_SHORT: Record<Mode, string> = {
 
 export const MODE_CYCLE: Mode[] = ["careful", "trust-project", "allow-all"];
 
-/** Tools that mutate nothing in this session and delegate the work to a child
- *  whose own gate decides what it may do (subagent). Confirming them buys no
- *  safety and costs one dialog per delegation. */
-export const DELEGATION_TOOLS = ["subagent"];
+/** Tools that only read, never mutate. Built-ins plus extension tools whose
+ *  execute only inspects. A read-only tool that is missing here falls through
+ *  to the unknown-tool branch and confirms on every call in Careful mode, which
+ *  is pure friction — add new read-only tools here.
+ *
+ *  `web_fetch` is a network read (no local side effect); its one blind spot
+ *  (data smuggled in a URL) is accepted the same way Claude Code accepts it for
+ *  WebFetch. */
+export const READ_ONLY_TOOLS = [
+  "read",
+  "ls",
+  "grep",
+  "find",
+  "web_search",
+  "web_fetch",
+  "todo_check",
+  "describe_image",
+];
 
-/** Tools that only read. `web_fetch` is a network read with no local side
- *  effect; its one blind spot (data smuggled in a URL) is accepted here the
- *  same way Claude Code accepts it for WebFetch. */
-export const READ_ONLY_TOOLS = ["read", "ls", "grep", "find", "web_search", "web_fetch"];
+// `subagent` is deliberately NOT in any allowlist above. Its confirmation is
+// the only cheap veto point: the delegation can be declined before the child
+// starts. Once it is running, "not now" means interrupting it instead. Session
+// history has this used roughly a quarter of the time it is offered.
 
 export const SENSITIVE_PATTERNS: RegExp[] = [
   /^\.env$/,
@@ -375,13 +389,6 @@ export function cacheKey(toolName: string, input: Record<string, unknown>): stri
 export function decide(toolName: string, input: Record<string, unknown>, cwd: string, state: GateState): GateDecision {
   // Allow-all mode: pass everything
   if (state.mode === "allow-all") {
-    return { action: "allow" };
-  }
-
-  // Delegation: the child's own gate decides what it may do, and this call
-  // touches nothing in the parent. The subagent extension still confirms
-  // project-local agent definitions itself (subagent/index.ts).
-  if (DELEGATION_TOOLS.includes(toolName)) {
     return { action: "allow" };
   }
 

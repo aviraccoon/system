@@ -104,7 +104,7 @@ Subagents run with:
 - `--no-extensions` — no auto-discovered extensions; loads `agents-loader` + `permission-gate` plus agent-declared ones
 - `--session-dir ~/.pi/agent/subagent-sessions/` — isolated session storage
 - Tool allowlist from agent frontmatter `tools` field
-- **Gate dialogs**: the child's `permission-gate` starts fresh (Careful mode, no grants inherited from the parent) and in RPC mode falls back to the relayed `confirm()` above, so any gated call blocks in the parent TUI. An agent whose `tools` list omits `bash`/`write`/`edit`/`patch` never triggers it. The parent gate exempts the `subagent` tool itself and treats `web_fetch` as read-only, so neither prompts.
+- **Gate dialogs**: the child's `permission-gate` starts fresh (Careful mode, no grants inherited from the parent) and in RPC mode falls back to the relayed `confirm()` above, so any gated call blocks in the parent TUI. An agent whose `tools` list omits `bash`/`write`/`edit`/`patch` never triggers it. The parent gate treats `web_fetch` as read-only, so it does not prompt; the `subagent` tool itself still confirms, and that prompt is deliberate — it is the veto point for declining a delegation before the child starts.
 - Same working directory as the parent (or `cwd` param)
 
 ### RPC UI behavior
