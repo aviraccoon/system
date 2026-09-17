@@ -543,7 +543,7 @@ export async function runSingleAgent(
           // a capped or failed run can still be read afterwards.
           if (!sentSessionQuery) {
             sentSessionQuery = true;
-            writeRpcCommand(proc, { type: "get_session_state" });
+            writeRpcCommand(proc, { type: "get_state" });
           }
           // Reset streaming state for live display
           isStreaming = false;
@@ -637,7 +637,7 @@ export async function runSingleAgent(
 
         // ── Command responses ──
         if (eventType === "response") {
-          if (event.command === "get_session_state") {
+          if (event.command === "get_state") {
             const data = event.data as { sessionFile?: unknown } | undefined;
             if (typeof data?.sessionFile === "string") currentResult.sessionFile = data.sessionFile;
           }
