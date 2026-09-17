@@ -41,7 +41,7 @@ Harvest asks for a `User-Agent` with app name and contact; the default works, bu
 | `harvest today` | today's entries and total |
 | `harvest week` | ISO week, per-day and per-project totals |
 | `harvest month [YYYY-MM]` | monthly overview, per-project hours and money |
-| `harvest audit [YYYY-MM]` | month scan for entries needing attention |
+| `harvest audit [YYYY-MM \| --days N \| --from D --to D]` | scan a range for entries needing attention |
 | `harvest projects` | list projects + refresh cache |
 | `harvest tasks acme` | list tasks assigned to a project |
 | `harvest alias` | list aliases |
@@ -55,7 +55,7 @@ Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space eq
 
 Entry lists (status, today, week) lead each line with the entry id, so `edit`/`delete` need no `--json` detour.
 
-`harvest audit [YYYY-MM]` scans a month (default: current) for data-quality flags: notes with no link, notes missing entirely, and whole-hour durations (a smell of guessed rather than tracked time; running entries are exempt from that check). It only reports — fix with `harvest edit <id>` and add whatever is missing. `--json` returns the flagged entries with their issue tags.
+`harvest audit [YYYY-MM | --days N | --from D --to D]` scans a date range (default: current month, one range mode at a time) for data-quality flags: notes missing entirely, notes with no link, zero-hour entries, whole-hour durations (a smell of guessed rather than tracked time), and entries that repeat another entry's date/project/task/hours/notes. Running entries are exempt from the duration checks. A locked entry (its timesheet was submitted) is tagged only when it also has a flag — a clean locked entry needs no action, a flagged one needs the timesheet reopened. It only reports: fix with `harvest edit <id>`. `--json` returns the flagged entries with their issue tags and the resolved `range`.
 
 `--group-by project|task|note` regroups today/week/month into a flat list with hours and money per group. Tasks are labelled `project / task`; notes group by their first line (the work-item summary), so the same item tracked across days merges. Multiline notes render in full — first line after the entry, continuation lines indented.
 

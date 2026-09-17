@@ -41,6 +41,7 @@ commands:
   week                        this ISO week, per-day and per-project totals
   month [YYYY-MM]             monthly overview, per-project hours and money
   audit [YYYY-MM]             entries needing attention: missing/URL-less note, whole-hour duration
+                              ranges: --days 7, or --from D --to D
   projects                    list active projects (refreshes the cache)
   tasks <project>             list tasks assigned to a project
   alias                       list aliases
@@ -51,6 +52,9 @@ commands:
 flags:
   -n, --note <text>           note for start/log
   --date <yyyy-mm-dd>         date for log
+  --from <yyyy-mm-dd>         audit range start (with --to)
+  --to <yyyy-mm-dd>           audit range end (with --from)
+  --days <n>                  audit: last n days including today
   --hours <hours>             hours for edit
   --offset <duration>         with start: time already spent (25m, 1:30, 1h30m)
   -f, --force                 with delete: skip the confirm prompt
@@ -72,6 +76,9 @@ error message for other options.
 interface Cli {
   note?: string;
   date?: string;
+  from?: string;
+  to?: string;
+  days?: string;
   hours?: string;
   offset?: string;
   remove: boolean;
@@ -91,6 +98,9 @@ export function parseCli(argv: string[]): Cli {
     options: {
       note: { type: "string", short: "n" },
       date: { type: "string" },
+      from: { type: "string" },
+      to: { type: "string" },
+      days: { type: "string" },
       hours: { type: "string" },
       offset: { type: "string" },
       remove: { type: "boolean", short: "r" },
@@ -103,14 +113,25 @@ export function parseCli(argv: string[]): Cli {
   });
   const note = values.note;
   const date = values.date;
+  const from = values.from;
+  const to = values.to;
   if (typeof note !== "string" && note !== undefined) throw new Error("--note takes a string");
   if (typeof date !== "string" && date !== undefined) throw new Error("--date takes a string");
   if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new Error(`--date must be yyyy-mm-dd, got "${date}"`);
   }
+  if (from !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+    throw new Error(`--from must be yyyy-mm-dd, got "${from}"`);
+  }
+  if (to !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+    throw new Error(`--to must be yyyy-mm-dd, got "${to}"`);
+  }
   return {
     note,
     date,
+    from,
+    to,
+    days: values.days,
     hours: values.hours,
     offset: values.offset,
     remove: values.remove === true,
@@ -234,7 +255,7 @@ async function run(argv: string[]): Promise<number> {
     case "audit": {
       const err = arity("audit", p, 0, 1);
       if (err) return failArg(err);
-      result = await cmdAudit(deps, p[0]);
+      result = await cmdAudit(deps, { month: p[0], from: cli.from, to: cli.to, days: cli.days });
       break;
     }
     case "delete": {

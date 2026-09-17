@@ -4,6 +4,7 @@ import {
   aliasRemove,
   aliasSet,
   auditIssues,
+  auditRange,
   cmdAudit,
   cmdDelete,
   cmdEdit,
@@ -16,6 +17,7 @@ import {
   cmdToday,
   cmdWeek,
   type Deps,
+  duplicateEntryIds,
   isWholeHour,
   monthRange,
   noteHasLink,
@@ -448,8 +450,8 @@ describe("cmdStart", () => {
     };
     const { deps, caches } = makeDeps(api, cfg);
     const r = await cmdStart(deps, "web", undefined, "new work");
-    expect(r.text).toContain("■ stopped Acme / Website / Development at 1:00");
-    expect(r.text).toContain("▶ Acme / Website / Development — started 10:00am — new work");
+    expect(r.text).toContain("■ stopped Acme / Website / Development (id 100) at 1:00");
+    expect(r.text).toContain("▶ Acme / Website / Development (id 200) — started 10:00am — new work");
     expect(bodies[0]).toEqual({ project_id: 10, task_id: 20, spent_date: "2026-09-15", notes: "new work" });
     expect(caches.at(-1)?.tasksByProject?.["10"]).toEqual([{ id: 20, name: "Development" }]);
   });
@@ -558,7 +560,7 @@ describe("cmdStop", () => {
     });
     const { deps } = makeDeps(api);
     const r = await cmdStop(deps);
-    expect(r.text).toBe("■ Acme / Website / Development — stopped at 0:30");
+    expect(r.text).toBe("■ Acme / Website / Development (id 100) — stopped at 0:30");
   });
 
   test("nothing running errors", async () => {
@@ -588,7 +590,7 @@ describe("cmdLog", () => {
     });
     const { deps } = makeDeps(api);
     const r = await cmdLog(deps, "1:30", "site", "dev", "2026-09-14", "catch-up");
-    expect(r.text).toBe("logged 1:30 → Acme / Website / Development (2026-09-14) — catch-up");
+    expect(r.text).toBe("logged 1:30 → Acme / Website / Development (2026-09-14, id 300) — catch-up");
   });
 });
 
@@ -713,8 +715,8 @@ describe("entry ids in list output", () => {
 
 describe("auditIssues", () => {
   test("missing and blank notes count as no-note", () => {
-    expect(auditIssues(timeEntry({ notes: null }))).toEqual(["no-note"]);
-    expect(auditIssues(timeEntry({ notes: "   " }))).toEqual(["no-note"]);
+    expect(auditIssues(timeEntry({ notes: null }))).toEqual(["no-note", "zero-hours"]);
+    expect(auditIssues(timeEntry({ notes: "   " }))).toEqual(["no-note", "zero-hours"]);
   });
 
   test("a linked note is clean", () => {
@@ -742,7 +744,7 @@ describe("cmdAudit", () => {
 
   test("flags note and duration smells, keeps clean entries out", async () => {
     const { deps } = makeDeps(api());
-    const r = await cmdAudit(deps, "2026-09");
+    const r = await cmdAudit(deps, { month: "2026-09" });
     expect(r.text).toContain("audit 2026-09: 2 of 4 entries flagged");
     expect(r.text).toContain("2026-09-03  2  2:00  Acme / Website / Development  [no link, whole hour]");
     expect(r.text).toContain("2026-09-04  3  1:15  Acme / Website / Development  [no note]");
@@ -752,7 +754,7 @@ describe("cmdAudit", () => {
 
   test("json carries per-entry issues", async () => {
     const { deps } = makeDeps(api());
-    const r = await cmdAudit(deps, "2026-09");
+    const r = await cmdAudit(deps, { month: "2026-09" });
     const json = r.json as { total: number; flagged: { id: number; issues: string[] }[] };
     expect(json.total).toBe(4);
     expect(json.flagged.map((f) => f.id)).toEqual([2, 3]);
@@ -763,8 +765,91 @@ describe("cmdAudit", () => {
     const clean = [timeEntry({ id: 1, hours: 4.25, notes: "work\nhttps://tracker.example/t/1" })];
     const api2 = apiStub({ me: [me], timeEntries: [clean] });
     const { deps } = makeDeps(api2);
-    const r = await cmdAudit(deps, "2026-09");
+    const r = await cmdAudit(deps, { month: "2026-09" });
     expect(r.text).toBe("audit 2026-09: nothing flagged (1 entry)");
+  });
+});
+describe("audit issue extras", () => {
+  test("zero-hour, locked, and duplicate flags", () => {
+    expect(auditIssues(timeEntry({ hours: 0, notes: "x\nhttps://t.example/1" }))).toEqual(["zero-hours"]);
+    expect(auditIssues(timeEntry({ hours: 1.5, notes: "no link", is_locked: true }))).toEqual(["no-link", "locked"]);
+    expect(auditIssues(timeEntry({ hours: 1.5, notes: "x\nhttps://t.example/1", is_locked: true }))).toEqual([]);
+    expect(auditIssues(timeEntry({ hours: 1.5, notes: "x\nhttps://t.example/1" }), true)).toEqual(["duplicate"]);
+  });
+});
+
+describe("duplicateEntryIds", () => {
+  test("same date, project, task, hours, and notes", () => {
+    const a = timeEntry({ id: 1, hours: 2, notes: "x" });
+    const b = timeEntry({ id: 2, hours: 2, notes: "x" });
+    const c = timeEntry({ id: 3, hours: 2, notes: "y" });
+    expect([...duplicateEntryIds([a, b, c])]).toEqual([1, 2]);
+  });
+
+  test("running entries are ignored", () => {
+    const a = timeEntry({ id: 1, hours: 2, notes: "x" });
+    const b = timeEntry({ id: 2, hours: 2, notes: "x", is_running: true });
+    expect(duplicateEntryIds([a, b]).size).toBe(0);
+  });
+});
+
+describe("auditRange", () => {
+  const now = new Date(2026, 8, 17); // Thursday
+
+  test("month by default; --days ends today and includes it", () => {
+    expect(auditRange(now, {})).toEqual({ label: "2026-09", from: "2026-09-01", to: "2026-09-30" });
+    expect(auditRange(now, { days: "7" })).toEqual({ label: "last 7 days", from: "2026-09-11", to: "2026-09-17" });
+    expect(auditRange(now, { days: "1" }).label).toBe("last 1 day");
+  });
+
+  test("explicit from/to", () => {
+    expect(auditRange(now, { from: "2026-08-01", to: "2026-08-15" })).toEqual({
+      label: "2026-08-01..2026-08-15",
+      from: "2026-08-01",
+      to: "2026-08-15",
+    });
+  });
+
+  test("rejects mixed modes, half ranges, bad days, reversed ranges", () => {
+    expect(() => auditRange(now, { month: "2026-08", days: "7" })).toThrow(/pick one range/);
+    expect(() => auditRange(now, { from: "2026-08-01" })).toThrow(/--from and --to go together/);
+    expect(() => auditRange(now, { days: "0" })).toThrow(/bad --days/);
+    expect(() => auditRange(now, { from: "2026-08-02", to: "2026-08-01" })).toThrow(/after/);
+  });
+});
+
+describe("cmdAudit ranges", () => {
+  const me = { id: 7, first_name: "A", last_name: "B", email: "a@b.c" };
+
+  test("--days narrows the query window and labels the report", async () => {
+    const params: unknown[] = [];
+    const clean = timeEntry({ id: 1, spent_date: "2026-09-17", hours: 1.5, notes: "x\nhttps://t.example/1" });
+    const api = apiStub({
+      me: [me],
+      timeEntries: [
+        (p: unknown) => {
+          params.push(p);
+          return Promise.resolve([clean]);
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdAudit(deps, { days: "3" });
+    expect(params[0]).toMatchObject({ from: "2026-09-13", to: "2026-09-15" });
+    expect(r.text).toBe("audit last 3 days: nothing flagged (1 entry)");
+    expect((r.json as { range: string }).range).toBe("last 3 days");
+  });
+
+  test("duplicates in a range are flagged together", async () => {
+    const note = "x\nhttps://t.example/1";
+    const a = timeEntry({ id: 1, hours: 2.25, notes: note });
+    const b = timeEntry({ id: 2, hours: 2.25, notes: note });
+    const api = apiStub({ me: [me], timeEntries: [[a, b]] });
+    const { deps } = makeDeps(api);
+    const r = await cmdAudit(deps, { month: "2026-09" });
+    expect(r.text).toContain("audit 2026-09: 2 of 2 entries flagged");
+    expect(r.text).toContain("1  2:15  Acme / Website / Development  [possible duplicate]");
+    expect(r.text).toContain("2  2:15  Acme / Website / Development  [possible duplicate]");
   });
 });
 describe("cmdMonth", () => {
@@ -826,7 +911,7 @@ describe("cmdDelete", () => {
     const api = apiStub({ timeEntry: [entry], deleteEntry: [null] });
     const { deps } = makeDeps(api);
     const r = await cmdDelete(deps, "42", { confirm: async () => true });
-    expect(r.text).toContain("deleted Acme / Website / Development (2026-09-15, 0:00) — summary line");
+    expect(r.text).toContain("deleted Acme / Website / Development (2026-09-15, 0:00, id 42) — summary line");
     expect(r.text).toContain("https://tracker.example/t/42");
     const json = r.json as { deleted: boolean };
     expect(json.deleted).toBe(true);
@@ -923,6 +1008,14 @@ describe("parseCli", () => {
   test("--offset parses", () => {
     expect(parseCli(["start", "acme", "--offset", "25m"]).offset).toBe("25m");
     expect(parseCli(["start", "acme"]).offset).toBeUndefined();
+  });
+
+  test("audit range flags parse and validate", () => {
+    expect(parseCli(["audit", "--days", "7"]).days).toBe("7");
+    const r = parseCli(["audit", "--from", "2026-08-01", "--to", "2026-08-15"]);
+    expect([r.from, r.to]).toEqual(["2026-08-01", "2026-08-15"]);
+    expect(() => parseCli(["audit", "--from", "yesterday"])).toThrow(/yyyy-mm-dd/);
+    expect(() => parseCli(["audit", "--to", "2026/08/15"])).toThrow(/yyyy-mm-dd/);
   });
 });
 

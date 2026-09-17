@@ -318,8 +318,10 @@ export async function cmdStart(
     headStart = ` (+${formatHours(offsetHours)} head start)`;
   }
   const lines: string[] = [];
-  for (const s of stopped) lines.push(`■ stopped ${entryLabel(s)} at ${formatHours(s.hours)}`);
-  lines.push(...withNotes(`▶ ${entryLabel(entry)} — started ${clockTime(deps.now)}${headStart}`, notes ?? null));
+  for (const s of stopped) lines.push(`■ stopped ${entryLabel(s)} (id ${s.id}) at ${formatHours(s.hours)}`);
+  lines.push(
+    ...withNotes(`▶ ${entryLabel(entry)} (id ${entry.id}) — started ${clockTime(deps.now)}${headStart}`, notes ?? null),
+  );
   lines.push(...noteLinkWarnings(deps.cfg, entry));
   return { text: lines.join("\n"), json: { entry, stopped } };
 }
@@ -332,7 +334,7 @@ export async function cmdStop(deps: Deps): Promise<CmdResult> {
     stopped.push(await deps.getApi().stopEntry(entry.id));
   }
   return {
-    text: stopped.map((s) => `■ ${entryLabel(s)} — stopped at ${formatHours(s.hours)}`).join("\n"),
+    text: stopped.map((s) => `■ ${entryLabel(s)} (id ${s.id}) — stopped at ${formatHours(s.hours)}`).join("\n"),
     json: { stopped },
   };
 }
@@ -360,7 +362,11 @@ export async function cmdLog(
       now: deps.now,
     }),
   );
-  const lines = withNotes(`logged ${formatHours(hours)} → ${entryLabel(entry)} (${entry.spent_date})`, entry.notes, "");
+  const lines = withNotes(
+    `logged ${formatHours(hours)} → ${entryLabel(entry)} (${entry.spent_date}, id ${entry.id})`,
+    entry.notes,
+    "",
+  );
   lines.push(...noteLinkWarnings(deps.cfg, entry));
   return {
     text: lines.join("\n"),
@@ -386,7 +392,7 @@ export async function cmdEdit(
   if (Object.keys(body).length === 0) fail("nothing to edit (use --hours, --note, or --date)");
   const entry = await deps.getApi().request<TimeEntry>("PATCH", `/time_entries/${id}`, body);
   const lines = withNotes(
-    `edited ${entryLabel(entry)} (${entry.spent_date}) → ${formatHours(entry.hours)}`,
+    `edited ${entryLabel(entry)} (${entry.spent_date}, id ${entry.id}) → ${formatHours(entry.hours)}`,
     entry.notes,
     "",
   );
@@ -405,7 +411,7 @@ export async function cmdDelete(
   const id = Number(entryId);
   if (!Number.isInteger(id) || id <= 0) fail(`bad entry id "${entryId}"`);
   const entry = await deps.getApi().timeEntry(id);
-  const summary = `${entryLabel(entry)} (${entry.spent_date}, ${formatHours(entry.hours)})`;
+  const summary = `${entryLabel(entry)} (${entry.spent_date}, ${formatHours(entry.hours)}, id ${entry.id})`;
   const summaryLines = withNotes(summary, entry.notes, "");
   if (!opts.force) {
     if (!opts.confirm) fail("refusing to delete without --force (non-interactive shell)");
@@ -454,12 +460,15 @@ export function monthRange(monthArg: string | undefined, now: Date): { label: st
   return { label, from: `${label}-01`, to: localDateString(to) };
 }
 
-export type AuditIssue = "no-note" | "no-link" | "whole-hour";
+export type AuditIssue = "no-note" | "no-link" | "zero-hours" | "whole-hour" | "duplicate" | "locked";
 
 const AUDIT_LABELS: Record<AuditIssue, string> = {
   "no-note": "no note",
   "no-link": "no link",
+  "zero-hours": "zero hours",
   "whole-hour": "whole hour",
+  duplicate: "possible duplicate",
+  locked: "locked",
 };
 
 /** Whole-hour durations read as guessed logging; zero-duration entries are a different problem. */
@@ -469,21 +478,69 @@ export function isWholeHour(hours: number): boolean {
 }
 
 /** Data-quality flags for one entry, in report order. */
-export function auditIssues(entry: TimeEntry): AuditIssue[] {
+export function auditIssues(entry: TimeEntry, duplicate = false): AuditIssue[] {
   const issues: AuditIssue[] = [];
   if (!entry.notes || entry.notes.trim() === "") issues.push("no-note");
   else if (!noteHasLink(entry.notes)) issues.push("no-link");
-  if (!entry.is_running && isWholeHour(entry.hours)) issues.push("whole-hour");
+  if (!entry.is_running) {
+    if (entry.hours <= 0) issues.push("zero-hours");
+    else if (isWholeHour(entry.hours)) issues.push("whole-hour");
+  }
+  if (duplicate) issues.push("duplicate");
+  // Locked is an annotation, not a problem: a clean locked entry needs no action,
+  // but a flagged one needs the timesheet reopened before it can be fixed.
+  if (entry.is_locked && issues.length > 0) issues.push("locked");
   return issues;
 }
 
-/** Report-only scan of a month's entries for note and duration smells. */
-export async function cmdAudit(deps: Deps, monthArg?: string): Promise<CmdResult> {
-  const { label, from, to } = monthRange(monthArg, deps.now);
+/** Ids of stopped entries that repeat another entry's date, project, task, hours, and notes. */
+export function duplicateEntryIds(entries: TimeEntry[]): Set<number> {
+  const byKey = new Map<string, number[]>();
+  for (const e of entries) {
+    if (e.is_running) continue;
+    const key = [e.spent_date, e.project.id, e.task.id, e.hours, e.notes ?? ""].join("|");
+    byKey.set(key, [...(byKey.get(key) ?? []), e.id]);
+  }
+  const out = new Set<number>();
+  for (const ids of byKey.values()) {
+    if (ids.length > 1) for (const id of ids) out.add(id);
+  }
+  return out;
+}
+
+export interface AuditRangeOpts {
+  month?: string;
+  from?: string;
+  to?: string;
+  days?: string;
+}
+
+/** Resolve an audit range: a YYYY-MM month, --days N, or --from/--to. */
+export function auditRange(now: Date, opts: AuditRangeOpts): { label: string; from: string; to: string } {
+  const modes = [opts.month !== undefined, opts.days !== undefined, opts.from !== undefined || opts.to !== undefined];
+  if (modes.filter(Boolean).length > 1) fail("pick one range: [YYYY-MM], --days N, or --from/--to");
+  if (opts.days !== undefined) {
+    const n = Number(opts.days);
+    if (!Number.isInteger(n) || n <= 0) fail(`bad --days "${opts.days}" (positive integer)`);
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (n - 1));
+    return { label: `last ${n} ${n === 1 ? "day" : "days"}`, from: localDateString(start), to: localDateString(now) };
+  }
+  if (opts.from !== undefined || opts.to !== undefined) {
+    if (opts.from === undefined || opts.to === undefined) fail("--from and --to go together");
+    if (opts.from > opts.to) fail(`--from ${opts.from} is after --to ${opts.to}`);
+    return { label: `${opts.from}..${opts.to}`, from: opts.from, to: opts.to };
+  }
+  return monthRange(opts.month, now);
+}
+
+/** Report-only scan of a date range for note and duration smells. */
+export async function cmdAudit(deps: Deps, opts: AuditRangeOpts = {}): Promise<CmdResult> {
+  const { label, from, to } = auditRange(deps.now, opts);
   const me = await ensureMe(deps);
   const entries = await deps.getApi().timeEntries({ user_id: me.id, from, to });
+  const dupes = duplicateEntryIds(entries);
   const flagged = entries
-    .map((entry) => ({ entry, issues: auditIssues(entry) }))
+    .map((entry) => ({ entry, issues: auditIssues(entry, dupes.has(entry.id)) }))
     .filter((f) => f.issues.length > 0)
     .sort((a, b) => a.entry.spent_date.localeCompare(b.entry.spent_date) || a.entry.id - b.entry.id);
   const lines: string[] = [];
@@ -504,7 +561,7 @@ export async function cmdAudit(deps: Deps, monthArg?: string): Promise<CmdResult
   return {
     text: lines.join("\n"),
     json: {
-      month: label,
+      range: label,
       from,
       to,
       total: entries.length,
