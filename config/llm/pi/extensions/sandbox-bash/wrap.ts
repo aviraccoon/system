@@ -93,6 +93,33 @@ export function shellQuote(value: string): string {
 }
 
 /**
+ * Shell script the load-time probe runs inside the profile. Exit 0 means the
+ * boundary held: a write outside scratch was refused, no credential path was
+ * readable, and a scratch write succeeded. Any other exit means the profile
+ * parsed but no longer confines — an exit 0 from `sandbox-exec /bin/sh -c :` only
+ * says it parsed, which is why this exists.
+ */
+export function boundaryProbeScript(): string {
+  return [
+    `if touch "$HOME/.pi-sandbox-probe" 2>/dev/null; then rm -f "$HOME/.pi-sandbox-probe"; exit 1; fi`,
+    `for p in "$HOME/.ssh" "$HOME/.aws" "$HOME/.gnupg" "$HOME/.docker"; do`,
+    `  if [ -e "$p" ] && ls "$p" >/dev/null 2>&1; then exit 1; fi`,
+    `done`,
+    `f=$(mktemp 2>/dev/null) || exit 1`,
+    `rm -f "$f" || exit 1`,
+    `exit 0`,
+  ].join("\n");
+}
+
+/** argv for running `script` under a profile: `sandbox-exec -D… -f… /bin/sh -c…`. */
+export function sandboxArgs(profilePath: string, params: string[], script: string): string[] {
+  const args: string[] = [];
+  for (const param of params) args.push("-D", param);
+  args.push("-f", profilePath, "/bin/sh", "-c", script);
+  return args;
+}
+
+/**
  * The command the spawn hook substitutes in: sandbox-exec with the profile, and
  * an inner shell that reads the agent's command out of the environment.
  */

@@ -34,7 +34,15 @@ import { createBashToolDefinition, type ExtensionAPI } from "@earendil-works/pi-
 import { Text } from "@earendil-works/pi-tui";
 import { BASH_SANDBOX_ENV, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
 import { CONFINED_TOOL, READONLY_TOOL } from "../shared/shell-tools";
-import { formatReadonlyCall, profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode } from "./wrap";
+import {
+  boundaryProbeScript,
+  formatReadonlyCall,
+  profileParams,
+  SANDBOX_EXEC,
+  sandboxArgs,
+  sandboxCommand,
+  sandboxMode,
+} from "./wrap";
 
 const PROFILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "profile.sbpl");
 
@@ -64,26 +72,13 @@ export default function sandboxBash(pi: ExtensionAPI) {
 
   const params = profileParams({ home: real(os.homedir()) });
 
-  // Smoke-test the boundary, not the profile's syntax. `sandbox-exec ... -c :`
-  // exits 0 as long as the profile parses, so a deny that stops working would
-  // still set the marker and let the gate auto-allow a shell that only looks
-  // confined. The probe asserts what the boundary is for: a write outside scratch
-  // fails, a credential read fails, and a scratch write succeeds. Exit 0 means
-  // "boundary verified"; anything else refuses to register, which leaves bash
-  // unsandboxed and gate-confirmed.
-  const probe: string[] = [];
-  for (const param of params) probe.push("-D", param);
-  const boundaryProbe = [
-    `if touch "$HOME/.pi-sandbox-probe" 2>/dev/null; then rm -f "$HOME/.pi-sandbox-probe"; exit 1; fi`,
-    `for p in "$HOME/.ssh" "$HOME/.aws" "$HOME/.gnupg" "$HOME/.config/sops"; do`,
-    `  if [ -e "$p" ] && ls "$p" >/dev/null 2>&1; then exit 1; fi`,
-    `done`,
-    `f=$(mktemp 2>/dev/null) || exit 1`,
-    `rm -f "$f" || exit 1`,
-    `exit 0`,
-  ].join("\n");
+  // Smoke-test the boundary, not the profile's syntax. A profile that parses but
+  // no longer confines would still set the marker and let the gate auto-allow a
+  // shell that only looks confined, so this refuses to register unless the probe
+  // can show a $HOME write refused, a credential path unreadable, and a scratch
+  // write allowed.
   try {
-    execFileSync(SANDBOX_EXEC, [...probe, "-f", PROFILE, "/bin/sh", "-c", boundaryProbe], { stdio: "ignore" });
+    execFileSync(SANDBOX_EXEC, sandboxArgs(PROFILE, params, boundaryProbeScript()), { stdio: "ignore" });
   } catch {
     return;
   }
