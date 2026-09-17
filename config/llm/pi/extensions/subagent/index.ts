@@ -95,7 +95,8 @@ const SubagentParams = Type.Object({
   ),
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
   maxTurns: Type.Optional(
-    Type.Number({
+    Type.Integer({
+      minimum: 1,
       description: `Maximum turns before aborting. Prevents runaway loops. Default: ${DEFAULT_MAX_TURNS}.`,
       default: DEFAULT_MAX_TURNS,
     }),

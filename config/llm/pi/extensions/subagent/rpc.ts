@@ -15,7 +15,7 @@ import { createDebugLogger } from "../shared/debug";
 import { loadConfig, resolveRole } from "../shared/model-roles";
 import { BASH_SANDBOX_ENV } from "../shared/sandbox";
 import type { AgentConfig } from "./agents";
-import { nudgeAt, nudgeMessage } from "./turn-budget";
+import { nudgeAt, nudgeMessage, taskWithBudget } from "./turn-budget";
 
 const SUBAGENT_SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-sessions");
 const debugLog = createDebugLogger("subagent", "renderResult.log");
@@ -859,7 +859,7 @@ export async function runSingleAgent(
       }
 
       // Send initial prompt
-      writeRpcCommand(proc, { type: "prompt", message: `Task: ${task}` });
+      writeRpcCommand(proc, { type: "prompt", message: taskWithBudget(task, maxTurns) });
     });
 
     currentResult.exitCode = exitCode;
