@@ -1,14 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { BASH_SANDBOX_ENV, isConfinedBash, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
-import {
-  CONFINED_TOOL,
-  profileParams,
-  READONLY_TOOL,
-  SANDBOX_EXEC,
-  sandboxCommand,
-  sandboxMode,
-  shellQuote,
-} from "./wrap";
+import { CONFINED_TOOL, READONLY_TOOL } from "../shared/shell-tools";
+import { profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode, shellQuote } from "./wrap";
 
 const PATHS = { home: "/Users/foo", tmpdir: "/private/var/folders/ab/T", tmp: "/private/tmp" };
 

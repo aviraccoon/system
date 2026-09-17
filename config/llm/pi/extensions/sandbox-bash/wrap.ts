@@ -36,10 +36,6 @@ export function profileParams(paths: SandboxPaths): string[] {
   ];
 }
 
-/** Tool name the confined shell takes, per mode. */
-export const CONFINED_TOOL = "bash"; // subagent: replaces the built-in
-export const READONLY_TOOL = "bash_readonly"; // main session: an extra tool
-
 export type SandboxMode = "override" | "extra" | null;
 
 export interface ActivationInput {

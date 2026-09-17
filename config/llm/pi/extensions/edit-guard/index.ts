@@ -21,6 +21,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { loadJournalConfig } from "../shared/journal-context";
+import { isShellTool } from "../shared/shell-tools";
 import {
   type CompiledPathRule,
   compileRules,
@@ -157,8 +158,10 @@ export default function editGuardExtension(pi: ExtensionAPI) {
       sessionsDir: join(homedir(), ".pi", "agent", "sessions"),
     };
 
-    // ── Bash commands: run the bash-kind rules over the command string ──
-    if (event.toolName === "bash") {
+    // ── Shell commands: run the bash-kind rules over the command string ──
+    // Any shell tool, not just `bash`: these rules read the command text
+    // (output filtering, flag misuse), and a confined shell filters output too.
+    if (isShellTool(event.toolName)) {
       const input = event.input as { command?: unknown };
       const command = typeof input.command === "string" ? input.command : "";
       if (command.length === 0) return;
@@ -172,7 +175,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
         labels.push(...violations.flatMap((v) => v.labels));
       }
       if (blocks.length === 0) return;
-      ctx.ui.notify(`edit-guard: ${[...new Set(labels)].join(", ")} (bash command)`, "warning");
+      ctx.ui.notify(`edit-guard: ${[...new Set(labels)].join(", ")} (shell command)`, "warning");
       const existing = event.content[0]?.type === "text" ? event.content[0].text : "";
       return {
         content: [{ type: "text" as const, text: `${existing}\n\n${blocks.join("\n\n")}` }],

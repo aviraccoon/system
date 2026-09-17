@@ -57,7 +57,7 @@ defaults.
 - `match.kind: "basename"` — case-insensitive basename set.
 - `match.kind: "allExcept"` — every edited file except paths under the listed
   roots; `{notesDir}`, `{sessionsDir}`, `{cwd}` placeholders expand at runtime.
-- `match.kind: "bash"` — the rule runs against every bash command instead of
+- `match.kind: "bash"` — the rule runs against every shell command instead of
   file contents.
 - Broken regexes and an invalid config file are reported as warnings and the
   affected pattern/rule is skipped — a broken rule must never silently stop

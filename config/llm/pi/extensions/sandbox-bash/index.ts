@@ -30,9 +30,10 @@ import { existsSync, realpathSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createBashTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createBashToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BASH_SANDBOX_ENV, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
-import { CONFINED_TOOL, profileParams, READONLY_TOOL, SANDBOX_EXEC, sandboxCommand, sandboxMode } from "./wrap";
+import { CONFINED_TOOL, READONLY_TOOL } from "../shared/shell-tools";
+import { profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode } from "./wrap";
 
 const PROFILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "profile.sbpl");
 
@@ -81,7 +82,11 @@ export default function sandboxBash(pi: ExtensionAPI) {
   const confinedTool = mode === "override" ? CONFINED_TOOL : READONLY_TOOL;
   process.env[BASH_SANDBOX_ENV] = confinedTool;
 
-  const tool = createBashTool(process.cwd(), {
+  // The *definition*, not `createBashTool`: that one wraps the definition into an
+  // AgentTool, and `wrapToolDefinition` copies only name/label/description/
+  // parameters/execute — renderCall and renderResult are dropped. A tool with no
+  // renderCall shows its output in the TUI with no command above it.
+  const tool = createBashToolDefinition(process.cwd(), {
     spawnHook: ({ command, cwd, env }) => ({
       command: sandboxCommand(PROFILE, params),
       cwd,
@@ -103,8 +108,9 @@ export default function sandboxBash(pi: ExtensionAPI) {
     args: { command: string; timeout?: number },
     signal: AbortSignal | undefined,
     onUpdate: Parameters<typeof tool.execute>[3],
+    ctx: Parameters<typeof tool.execute>[4],
   ) => {
-    return tool.execute(id, args, signal, onUpdate);
+    return tool.execute(id, args, signal, onUpdate, ctx);
   };
 
   if (mode === "override") {
