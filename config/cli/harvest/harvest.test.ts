@@ -3,6 +3,8 @@ import { createClient, HarvestApiError, type HarvestClient, type TimeEntry } fro
 import {
   aliasRemove,
   aliasSet,
+  auditIssues,
+  cmdAudit,
   cmdDelete,
   cmdEdit,
   cmdLog,
@@ -11,7 +13,10 @@ import {
   cmdStatus,
   cmdStop,
   cmdTasks,
+  cmdToday,
+  cmdWeek,
   type Deps,
+  isWholeHour,
   monthRange,
   noteHasLink,
 } from "./commands";
@@ -393,6 +398,7 @@ describe("cmdStatus", () => {
     expect(r.text).toContain("fixing bug");
     expect(r.text).toContain("today: 2:00 (1 entry)");
     expect(r.text).toContain("2:00  Acme / Website / Development");
+    expect(r.text).toContain("90  2:00  Acme / Website / Development");
     const json = r.json as { running: { id: number }; today: unknown[]; total: number };
     expect(json.running.id).toBe(100);
     expect(json.total).toBeCloseTo(2);
@@ -679,6 +685,88 @@ describe("cmdTasks", () => {
   });
 });
 
+describe("entry ids in list output", () => {
+  const me = { id: 7, first_name: "A", last_name: "B", email: "a@b.c" };
+
+  test("today leads each line with the id", async () => {
+    const api = apiStub({
+      me: [me],
+      timeEntries: [[timeEntry({ id: 3009843632, hours: 1.5, notes: "fix login" })]],
+      company: [{ wants_timestamp_timers: false, currency: "czk" }],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdToday(deps);
+    expect(r.text).toContain("3009843632  1:30  Acme / Website / Development");
+  });
+
+  test("week leads each line with the id", async () => {
+    const api = apiStub({
+      me: [me],
+      timeEntries: [[timeEntry({ id: 3009843640, hours: 2.25 })]],
+      company: [{ wants_timestamp_timers: false, currency: "czk" }],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdWeek(deps);
+    expect(r.text).toContain("3009843640  2:15  Acme / Website / Development");
+  });
+});
+
+describe("auditIssues", () => {
+  test("missing and blank notes count as no-note", () => {
+    expect(auditIssues(timeEntry({ notes: null }))).toEqual(["no-note"]);
+    expect(auditIssues(timeEntry({ notes: "   " }))).toEqual(["no-note"]);
+  });
+
+  test("a linked note is clean", () => {
+    expect(auditIssues(timeEntry({ hours: 1.5, notes: "summary\nhttps://tracker.example/t/1" }))).toEqual([]);
+  });
+
+  test("whole hours only, and never while running", () => {
+    expect(isWholeHour(2)).toBe(true);
+    expect(isWholeHour(2.5)).toBe(false);
+    expect(isWholeHour(0)).toBe(false);
+    expect(auditIssues(timeEntry({ hours: 2, is_running: true, notes: "https://x.example/1" }))).toEqual([]);
+    expect(auditIssues(timeEntry({ hours: 2, notes: "https://x.example/1" }))).toEqual(["whole-hour"]);
+  });
+});
+
+describe("cmdAudit", () => {
+  const me = { id: 7, first_name: "A", last_name: "B", email: "a@b.c" };
+  const entries = [
+    timeEntry({ id: 1, spent_date: "2026-09-02", hours: 4.5, notes: "shipped it\nhttps://tracker.example/t/1" }),
+    timeEntry({ id: 2, spent_date: "2026-09-03", hours: 2, notes: "no link here" }),
+    timeEntry({ id: 3, spent_date: "2026-09-04", hours: 1.25, notes: null }),
+    timeEntry({ id: 4, spent_date: "2026-09-05", hours: 1, is_running: true, notes: "https://tracker.example/t/4" }),
+  ];
+  const api = () => apiStub({ me: [me], timeEntries: [entries] });
+
+  test("flags note and duration smells, keeps clean entries out", async () => {
+    const { deps } = makeDeps(api());
+    const r = await cmdAudit(deps, "2026-09");
+    expect(r.text).toContain("audit 2026-09: 2 of 4 entries flagged");
+    expect(r.text).toContain("2026-09-03  2  2:00  Acme / Website / Development  [no link, whole hour]");
+    expect(r.text).toContain("2026-09-04  3  1:15  Acme / Website / Development  [no note]");
+    expect(r.text).not.toContain("2026-09-02");
+    expect(r.text).not.toContain("2026-09-05");
+  });
+
+  test("json carries per-entry issues", async () => {
+    const { deps } = makeDeps(api());
+    const r = await cmdAudit(deps, "2026-09");
+    const json = r.json as { total: number; flagged: { id: number; issues: string[] }[] };
+    expect(json.total).toBe(4);
+    expect(json.flagged.map((f) => f.id)).toEqual([2, 3]);
+    expect(json.flagged[0]?.issues).toEqual(["no-link", "whole-hour"]);
+  });
+
+  test("a clean month reports nothing flagged", async () => {
+    const clean = [timeEntry({ id: 1, hours: 4.25, notes: "work\nhttps://tracker.example/t/1" })];
+    const api2 = apiStub({ me: [me], timeEntries: [clean] });
+    const { deps } = makeDeps(api2);
+    const r = await cmdAudit(deps, "2026-09");
+    expect(r.text).toBe("audit 2026-09: nothing flagged (1 entry)");
+  });
+});
 describe("cmdMonth", () => {
   const entries = [
     timeEntry({ id: 1, project: { id: 10, name: "Website" }, hours: 4.5, billable_rate: null }),

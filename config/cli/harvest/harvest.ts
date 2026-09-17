@@ -10,6 +10,7 @@ import {
   aliasRemove,
   aliasSet,
   type CmdResult,
+  cmdAudit,
   cmdDelete,
   cmdEdit,
   cmdLog,
@@ -39,6 +40,7 @@ commands:
   today                       today's entries and total
   week                        this ISO week, per-day and per-project totals
   month [YYYY-MM]             monthly overview, per-project hours and money
+  audit [YYYY-MM]             entries needing attention: missing/URL-less note, whole-hour duration
   projects                    list active projects (refreshes the cache)
   tasks <project>             list tasks assigned to a project
   alias                       list aliases
@@ -227,6 +229,12 @@ async function run(argv: string[]): Promise<number> {
       const err = arity("month", p, 0, 1);
       if (err) return failArg(err);
       result = await cmdMonth(deps, p[0], { conceal: cli.conceal, groupBy: cli.groupBy });
+      break;
+    }
+    case "audit": {
+      const err = arity("audit", p, 0, 1);
+      if (err) return failArg(err);
+      result = await cmdAudit(deps, p[0]);
       break;
     }
     case "delete": {

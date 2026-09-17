@@ -223,6 +223,16 @@ function moneySuffix(
   return ` — ${formatMoney(sum.amount, currency)}${rateNote}`;
 }
 
+/**
+ * One entry line for the list views. The id leads so every edit/delete target
+ * is visible without a --json detour; notes render in full.
+ */
+function entryLines(e: TimeEntry, deps: Deps, currency: string | null, conceal: boolean): string[] {
+  const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
+  const marker = e.is_running ? " ▶" : "";
+  return withNotes(`  ${e.id}  ${formatHours(e.hours)}${marker}  ${entryLabel(e)}${money}`, e.notes);
+}
+
 async function stopRunning(deps: Deps): Promise<TimeEntry[]> {
   const running = await runningEntries(deps);
   const stopped: TimeEntry[] = [];
@@ -261,8 +271,7 @@ export async function cmdStatus(deps: Deps, opts: { conceal?: boolean } = {}): P
     `today: ${formatHours(todaySum.hours)} (${today.length} ${today.length === 1 ? "entry" : "entries"})${moneySuffix(todaySum, currency, deps.cfg, conceal)}`,
   );
   for (const e of [...today].sort((a, b) => a.id - b.id)) {
-    const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
-    lines.push(...withNotes(`  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}`, e.notes));
+    lines.push(...entryLines(e, deps, currency, conceal));
   }
   return {
     text: lines.join("\n"),
@@ -429,8 +438,7 @@ export async function cmdToday(deps: Deps, opts: { conceal?: boolean; groupBy?: 
     `today: ${formatHours(todaySum.hours)} (${today.length} ${today.length === 1 ? "entry" : "entries"})${moneySuffix(todaySum, currency, deps.cfg, conceal)}`,
   ];
   for (const e of [...today].sort((a, b) => a.id - b.id)) {
-    const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
-    lines.push(...withNotes(`  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}`, e.notes));
+    lines.push(...entryLines(e, deps, currency, conceal));
   }
   return { text: lines.join("\n"), json: { entries: today, total: totalHours(today), totalAmount: todaySum.amount } };
 }
@@ -444,6 +452,65 @@ export function monthRange(monthArg: string | undefined, now: Date): { label: st
   if (mo < 1 || mo > 12) fail(`month must be YYYY-MM, got "${label}"`);
   const to = new Date(y, mo, 0); // day 0 of month index mo = last day of month mo
   return { label, from: `${label}-01`, to: localDateString(to) };
+}
+
+export type AuditIssue = "no-note" | "no-link" | "whole-hour";
+
+const AUDIT_LABELS: Record<AuditIssue, string> = {
+  "no-note": "no note",
+  "no-link": "no link",
+  "whole-hour": "whole hour",
+};
+
+/** Whole-hour durations read as guessed logging; zero-duration entries are a different problem. */
+export function isWholeHour(hours: number): boolean {
+  const minutes = Math.round(hours * 60);
+  return minutes > 0 && minutes % 60 === 0;
+}
+
+/** Data-quality flags for one entry, in report order. */
+export function auditIssues(entry: TimeEntry): AuditIssue[] {
+  const issues: AuditIssue[] = [];
+  if (!entry.notes || entry.notes.trim() === "") issues.push("no-note");
+  else if (!noteHasLink(entry.notes)) issues.push("no-link");
+  if (!entry.is_running && isWholeHour(entry.hours)) issues.push("whole-hour");
+  return issues;
+}
+
+/** Report-only scan of a month's entries for note and duration smells. */
+export async function cmdAudit(deps: Deps, monthArg?: string): Promise<CmdResult> {
+  const { label, from, to } = monthRange(monthArg, deps.now);
+  const me = await ensureMe(deps);
+  const entries = await deps.getApi().timeEntries({ user_id: me.id, from, to });
+  const flagged = entries
+    .map((entry) => ({ entry, issues: auditIssues(entry) }))
+    .filter((f) => f.issues.length > 0)
+    .sort((a, b) => a.entry.spent_date.localeCompare(b.entry.spent_date) || a.entry.id - b.entry.id);
+  const lines: string[] = [];
+  if (flagged.length === 0) {
+    lines.push(`audit ${label}: nothing flagged (${entries.length} ${entries.length === 1 ? "entry" : "entries"})`);
+  } else {
+    lines.push(`audit ${label}: ${flagged.length} of ${entries.length} entries flagged`);
+    for (const { entry, issues } of flagged) {
+      const tags = issues.map((i) => AUDIT_LABELS[i]).join(", ");
+      lines.push(
+        ...withNotes(
+          `  ${entry.spent_date}  ${entry.id}  ${formatHours(entry.hours)}  ${entryLabel(entry)}  [${tags}]`,
+          entry.notes,
+        ),
+      );
+    }
+  }
+  return {
+    text: lines.join("\n"),
+    json: {
+      month: label,
+      from,
+      to,
+      total: entries.length,
+      flagged: flagged.map(({ entry, issues }) => ({ ...entry, issues })),
+    },
+  };
 }
 
 export type GroupDim = "project" | "task" | "note";
@@ -595,10 +662,7 @@ export async function cmdWeek(deps: Deps, opts: { conceal?: boolean; groupBy?: G
       `${day}: ${formatHours(totalHours(list))}${moneySuffix(sumMoney(list, deps.cfg), currency, deps.cfg, conceal)}`,
     );
     for (const e of [...list].sort((a, b) => a.id - b.id)) {
-      const money = moneySuffix(sumMoney([e], deps.cfg), currency, deps.cfg, conceal);
-      lines.push(
-        ...withNotes(`  ${formatHours(e.hours)}${e.is_running ? " ▶" : ""}  ${entryLabel(e)}${money}`, e.notes),
-      );
+      lines.push(...entryLines(e, deps, currency, conceal));
     }
   }
   lines.push(

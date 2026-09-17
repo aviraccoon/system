@@ -6,5 +6,6 @@ Time tracking: the `harvest` CLI.
 - `harvest log <hours> <alias> [-n note] [--date YYYY-MM-DD]` — hours: `1.5` | `1:30` | `90m`
 - `harvest edit <id> [--hours H] [-n note] [--date D]`
 - `harvest delete <id> [--force]` — confirms on a TTY, `--force` skips
+- `harvest audit [YYYY-MM]` — month scan: missing/URL-less notes, whole-hour durations
 - `harvest projects` · `harvest tasks <project>` · `harvest alias list`
 - `harvest --help` for more (reports: today, week, month)
