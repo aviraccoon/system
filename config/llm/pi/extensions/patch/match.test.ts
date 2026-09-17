@@ -438,14 +438,58 @@ describe("planAll / applyPreservingOriginal: insert modes", () => {
     expect(applyPreservingOriginal(content, plan)).toBe("alpha\nbeta\ntail\n");
   });
 
-  test("mixed insert + replace in one call is rejected", () => {
-    const plan = planAll("a\nb\n", [
-      { oldText: "a", newText: "A" },
-      { oldText: "b", newText: "B", mode: "insertAfter" },
+  test("insert and replace mix in one call", () => {
+    const content = "alpha\nbeta\n";
+    const plan = planAll(content, [
+      { oldText: "alpha", newText: "ALPHA" },
+      { oldText: "beta", newText: "INSERTED", mode: "insertBefore" },
     ]);
-    expect(plan.outcomes.every((o) => o.status === "mixed-mode")).toBe(true);
-    expect(plan.replacements).toHaveLength(0);
+    expect(plan.replacements).toHaveLength(1);
+    expect(plan.insertions).toHaveLength(1);
+    expect(plan.outcomes.every((o) => o.status === "applied")).toBe(true);
+    expect(applyPreservingOriginal(content, plan)).toBe("ALPHA\nINSERTED\nbeta\n");
+  });
+
+  test("insert at a boundary of the replaced block still applies", () => {
+    const content = "one\ntwo\nthree\n";
+    const plan = planAll(content, [
+      { oldText: "two", newText: "TWO" },
+      { oldText: "two", newText: "BEFORE", mode: "insertBefore" },
+    ]);
+    expect(plan.outcomes.every((o) => o.status === "applied")).toBe(true);
+    expect(applyPreservingOriginal(content, plan)).toBe("one\nBEFORE\nTWO\nthree\n");
+  });
+
+  test("insert inside a replaced block is rejected, not misplaced", () => {
+    const content = "one\ntwo\nthree\nfour\n";
+    const plan = planAll(content, [
+      { oldText: "two\nthree", newText: "TWO_THREE" },
+      { oldText: "two", newText: "MID", mode: "insertAfter" },
+    ]);
+    expect(plan.outcomes[1]?.status).toBe("ambiguous");
     expect(plan.insertions).toHaveLength(0);
+    expect(plan.replacements).toHaveLength(1);
+    expect(applyPreservingOriginal(content, plan)).toBe("one\nTWO_THREE\nfour\n");
+  });
+
+  test("mix works in normalized space", () => {
+    const content = "one \u201Cq\u201D\ntwo\nthree\n";
+    const plan = planAll(content, [
+      { oldText: 'one "q"', newText: "ONE" },
+      { oldText: "three", newText: "INSERTED", mode: "insertBefore" },
+    ]);
+    expect(plan.space).toBe("normalized");
+    expect(plan.outcomes.every((o) => o.status === "applied")).toBe(true);
+    expect(applyPreservingOriginal(content, plan)).toBe("ONE\ntwo\nINSERTED\nthree\n");
+  });
+
+  test("mix of replace and append-at-end adds the separator", () => {
+    const content = "alpha\nbeta"; // no trailing newline
+    const plan = planAll(content, [
+      { oldText: "alpha", newText: "ALPHA" },
+      { oldText: "beta", newText: "TAIL", mode: "insertAfter" },
+    ]);
+    expect(applyPreservingOriginal(content, plan)).toBe("ALPHA\nbeta\nTAIL\n");
   });
 
   test("empty newText on an insert edit is flagged empty", () => {

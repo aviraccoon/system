@@ -342,8 +342,7 @@ export type EditOutcome =
   | { editIndex: number; status: "no-op"; hits: MatchHit[] }
   | { editIndex: number; status: "no-match" }
   | { editIndex: number; status: "ambiguous"; hits: MatchHit[] }
-  | { editIndex: number; status: "empty" }
-  | { editIndex: number; status: "mixed-mode" };
+  | { editIndex: number; status: "empty" };
 
 export interface PlanResult {
   /** The match space used for the whole batch. */
@@ -395,20 +394,6 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
   });
   const space: "exact" | "normalized" = useNormalized ? "normalized" : "exact";
   const matchSpace = space === "normalized" ? normalized : content;
-
-  // Mixed insert + replace in one call is rejected: composing normalized-space
-  // replacements (offset + line-group rebuild) with line-boundary insertions
-  // needs a unified applier not worth the complexity. Split into separate calls.
-  const hasInsert = edits.some((e) => e.mode === "insertAfter" || e.mode === "insertBefore");
-  const hasReplace = edits.some((e) => (e.mode ?? "replace") === "replace");
-  if (hasInsert && hasReplace) {
-    return {
-      space,
-      replacements: [],
-      insertions: [],
-      outcomes: edits.map((_, i) => ({ editIndex: i, status: "mixed-mode" as const })),
-    };
-  }
 
   const replacements: PlannedReplacement[] = [];
   const insertions: PlannedInsertion[] = [];
@@ -558,6 +543,31 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
     }
   }
 
+  // An insertion boundary strictly inside a replaced block has no meaningful
+  // position — the anchor region is being rewritten. Reject just that edit
+  // instead of letting it land somewhere it did not ask for.
+  if (insertions.length > 0 && replacements.length > 0) {
+    const spans = getLineSpans(matchSpace);
+    const replaced = replacements.map((r) => replacementLineRange(spans, r));
+    const blocked = new Set(
+      insertions
+        .filter((ins) => {
+          const boundary = ins.beforeLine - 1; // 0-based line index
+          return replaced.some((range) => range.startLine < boundary && boundary < range.endLine);
+        })
+        .map((ins) => ins.editIndex),
+    );
+    if (blocked.size > 0) {
+      for (let i = insertions.length - 1; i >= 0; i--) {
+        if (blocked.has(insertions[i].editIndex)) insertions.splice(i, 1);
+      }
+      for (const editIndex of blocked) {
+        const at = outcomes.findIndex((o) => o.editIndex === editIndex);
+        if (at >= 0) outcomes[at] = { editIndex, status: "ambiguous", hits: [] };
+      }
+    }
+  }
+
   return { space, replacements, insertions, outcomes };
 }
 
@@ -590,33 +600,34 @@ function nearestOccurrence(
  * touched line groups from the normalized base, and copy all other lines
  * verbatim from the original — so untouched regions keep their original bytes.
  */
-export function applyPreservingOriginal(content: string, plan: PlanResult): string {
-  const { replacements, insertions } = plan;
-  // Insert-only path. Mixed insert+replace is rejected at plan time, so
-  // insertions.length > 0 implies replacements.length === 0.
-  if (insertions.length > 0) return applyInsertions(content, insertions);
-  if (replacements.length === 0) return content;
-  const { space } = plan;
+/** One edit's effect on the original bytes: replace [start, end) with text.
+ * Insertions are zero-width (start === end). */
+interface ApplyOp {
+  start: number;
+  end: number;
+  text: string;
+  /** Insertions sort before replacements at the same offset, so "insert before
+   * line N" lands ahead of a replacement starting at line N. */
+  rank: number;
+  /** Plan order, preserved among ops at the same offset. */
+  order: number;
+}
 
-  if (space === "exact") {
-    const sorted = [...replacements].sort((a, b) => b.start - a.start);
-    let result = content;
-    for (const r of sorted) {
-      result = result.slice(0, r.start) + r.newText + result.slice(r.start + r.length);
-    }
-    return result;
-  }
+/** Byte offset of the 1-based line before which to insert (totalLines + 1 =
+ * end of content). */
+function lineStartOffset(content: string, beforeLine: number): number {
+  const spans = getLineSpans(content);
+  const idx = beforeLine - 1;
+  if (idx >= spans.length) return content.length;
+  return spans[idx]?.start ?? 0;
+}
 
-  // Normalized space: port of pi's applyReplacementsPreservingUnchangedLines.
-  const baseContent = normalizeForFuzzyMatch(content);
-  const originalLines = splitLinesWithEndings(content);
-  const baseLines = getLineSpans(baseContent);
-  if (originalLines.length !== baseLines.length) {
-    // Line-count divergence (shouldn't happen for trim/collapse-only
-    // normalization); fall back to splicing the normalized base directly.
-    return spliceBase(baseContent, replacements);
-  }
-
+/** Merge replacements into line-range groups, widening each to whole lines and
+ * merging ones that touch the same lines (normalized-space rebuild unit). */
+function groupReplacements(
+  baseLines: LineSpan[],
+  replacements: PlannedReplacement[],
+): Array<{ startLine: number; endLine: number; reps: PlannedReplacement[] }> {
   const groups: Array<{ startLine: number; endLine: number; reps: PlannedReplacement[] }> = [];
   const sorted = [...replacements].sort((a, b) => a.start - b.start);
   for (const r of sorted) {
@@ -629,22 +640,84 @@ export function applyPreservingOriginal(content: string, plan: PlanResult): stri
       groups.push({ ...range, reps: [r] });
     }
   }
+  return groups;
+}
 
-  let result = "";
-  let lineIdx = 0;
-  for (const group of groups) {
-    result += originalLines.slice(lineIdx, group.startLine).join("");
-    const groupStartOffset = baseLines[group.startLine]?.start ?? 0;
-    const groupEndOffset = baseLines[group.endLine - 1]?.end ?? groupStartOffset;
-    const slice = baseContent.slice(groupStartOffset, groupEndOffset);
-    result += spliceBase(
-      slice,
-      group.reps.map((r) => ({ ...r, start: r.start - groupStartOffset })),
-    );
-    lineIdx = group.endLine;
+/**
+ * Apply a plan's replacements and insertions in one pass over the original
+ * bytes. Insertions become zero-width ops at their line start; replacements
+ * become byte-range ops (exact space) or whole-line-group ops (normalized
+ * space, rebuilt from the normalized base). Untouched bytes are copied
+ * verbatim either way.
+ */
+export function applyPreservingOriginal(content: string, plan: PlanResult): string {
+  const { replacements, insertions } = plan;
+  if (replacements.length === 0 && insertions.length === 0) return content;
+
+  const ops: ApplyOp[] = [];
+  let order = 0;
+
+  if (plan.space === "exact") {
+    for (const r of replacements) {
+      ops.push({ start: r.start, end: r.start + r.length, text: r.newText, rank: 1, order: order++ });
+    }
+  } else if (replacements.length > 0) {
+    const baseContent = normalizeForFuzzyMatch(content);
+    const originalSpans = getLineSpans(content);
+    const baseLines = getLineSpans(baseContent);
+    if (originalSpans.length !== baseLines.length) {
+      // Line-count divergence (normalization preserves it); splice the
+      // normalized base and fall back to line-based insertions.
+      const replaced = spliceBase(baseContent, replacements);
+      return insertions.length > 0 ? applyInsertions(replaced, insertions) : replaced;
+    }
+    for (const group of groupReplacements(baseLines, replacements)) {
+      const groupStartOffset = baseLines[group.startLine]?.start ?? 0;
+      const groupEndOffset = baseLines[group.endLine - 1]?.end ?? groupStartOffset;
+      const slice = baseContent.slice(groupStartOffset, groupEndOffset);
+      const text = spliceBase(
+        slice,
+        group.reps.map((r) => ({ ...r, start: r.start - groupStartOffset })),
+      );
+      const start = originalSpans[group.startLine]?.start ?? content.length;
+      const end =
+        group.endLine < originalSpans.length ? (originalSpans[group.endLine]?.start ?? content.length) : content.length;
+      ops.push({ start, end, text, rank: 1, order: order++ });
+    }
   }
-  result += originalLines.slice(lineIdx).join("");
-  return result;
+
+  for (const ins of insertions) {
+    const at = lineStartOffset(content, ins.beforeLine);
+    ops.push({
+      start: at,
+      end: at,
+      text: ins.newText.endsWith("\n") ? ins.newText : `${ins.newText}\n`,
+      rank: 0,
+      order: order++,
+    });
+  }
+
+  ops.sort((a, b) => a.start - b.start || a.rank - b.rank || a.order - b.order);
+
+  let out = "";
+  let cursor = 0;
+  for (const op of ops) {
+    out += content.slice(cursor, op.start);
+    if (op.end > op.start) {
+      out += op.text;
+      cursor = op.end;
+    } else {
+      // Appending past a file with no trailing newline needs a separator;
+      // out.endsWith also covers several insertions at the same end position.
+      if (op.start === content.length && content.length > 0 && !out.endsWith("\n") && !op.text.startsWith("\n")) {
+        out += "\n";
+      }
+      out += op.text;
+      cursor = op.start;
+    }
+  }
+  out += content.slice(cursor);
+  return out;
 }
 
 /**

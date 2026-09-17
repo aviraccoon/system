@@ -642,14 +642,6 @@ export function formatOutcomes(content: string, plan: PlanResult, edits: { oldTe
           ),
         );
         break;
-      case "mixed-mode":
-        messages.push(
-          "edits[".concat(
-            String(outcome.editIndex),
-            "]: insert and replace modes cannot be mixed in one patch call. Split insert and replace edits into separate calls.",
-          ),
-        );
-        break;
       case "no-match": {
         const closest = closestMatches(content, edit.oldText);
         messages.push(`edits[${outcome.editIndex}]: not found.\n${formatClosestMatches(closest)}`);

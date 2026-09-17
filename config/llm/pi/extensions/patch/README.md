@@ -44,8 +44,9 @@ after/before the matched block. The anchor is never re-emitted from newText, so
 its bytes and indentation are preserved byte-for-byte and there is no
 indentation-drift surface — this is the structural fix for the "paste the anchor
 into both oldText and newText" footgun that `replace` invites. newText is
-inserted verbatim (no auto-indent). Insert and replace cannot be mixed in one
-call (split into two). Supports `anchor`/`replaceAll` like replace. A
+inserted verbatim (no auto-indent). Insert and replace edits mix in one call
+(an insertion whose boundary falls inside a replaced block is rejected rather
+than guessed at). Supports `anchor`/`replaceAll` like replace. A
 duplicate-line guard flags newText that re-includes the anchor; opt out per-edit
 with `allowAnchorRepeat: true` for the legitimate "repeat and extend" idiom.
 
