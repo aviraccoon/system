@@ -104,7 +104,7 @@ Subagents run with:
 - `--no-extensions` — no auto-discovered extensions; loads `agents-loader` + `permission-gate` plus agent-declared ones
 - `--session-dir ~/.pi/agent/subagent-sessions/` — isolated session storage
 - Tool allowlist from agent frontmatter `tools` field
-- **Gate dialogs**: the child's `permission-gate` starts fresh (Careful mode, no grants inherited from the parent), so any gated call blocks in the parent TUI. An agent whose `tools` list omits `bash`/`write`/`edit`/`patch` never triggers it. The `subagent` tool itself always confirms — that prompt is the delegation veto.
+- **Gate dialogs**: the child's `permission-gate` starts fresh (Careful mode, no grants inherited from the parent), so any gated call blocks in the parent TUI. `bash` confirms unless the agent opts into `sandbox-bash`, which the gate trusts because the OS confines it. The `subagent` tool itself always confirms — that prompt is the delegation veto.
 - Same working directory as the parent (or `cwd` param)
 
 ### RPC UI behavior

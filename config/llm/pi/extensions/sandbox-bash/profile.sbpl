@@ -1,0 +1,45 @@
+(version 1)
+
+; Read-only shell for a delegated agent. Nothing here inspects the command —
+; bash is a program launcher, so a command-name filter would check the string
+; while the program it launches stays free. The kernel decides instead.
+
+(allow default)
+
+; No writes anywhere. Dotfiles, .git/hooks and .mcp.json need no explicit
+; protection: with writes denied by default and only scratch space re-allowed,
+; they are covered by construction.
+(deny file-write*)
+(allow file-write*
+  (subpath (param "TMPDIR"))
+  (subpath (param "TMP"))
+  (literal "/dev/null")
+  (literal "/dev/stdout")
+  (literal "/dev/stderr")
+  (literal "/dev/tty"))
+
+; No outbound network. This is what makes "reads everywhere" safe — without it a
+; command could ship whatever it read to anywhere.
+(deny network-outbound)
+
+; Credential directories are unreadable. Reads are otherwise unrestricted,
+; because delegated work legitimately spans other repositories and note dirs.
+(deny file-read*
+  (subpath (param "HOME_SSH"))
+  (subpath (param "HOME_GPG"))
+  (subpath (param "HOME_AWS"))
+  (subpath (param "HOME_GH"))
+  (subpath (param "HOME_DOCKER"))
+  (subpath (param "HOME_OP"))
+  (subpath (param "HOME_KEYCHAINS"))
+  (literal (param "HOME_NETRC")))
+
+; Secret files by name — the same set the permission gate treats as sensitive,
+; because a key or token quoted into the agent's report travels to the model
+; provider, so blocking network alone is not enough.
+(deny file-read*
+  (regex #"/\.env(\.[^/]*)?$")
+  (regex #"/secrets?$")
+  (regex #"/secrets/")
+  (regex #"/[^/]*\.(pem|key|p12|pfx|cert|keystore)$")
+  (regex #"/id_(rsa|ed25519|ecdsa|dsa)"))
