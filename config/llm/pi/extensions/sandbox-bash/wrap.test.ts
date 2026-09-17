@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { BASH_SANDBOX_ENV, isConfinedBash, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
 import { CONFINED_TOOL, READONLY_TOOL } from "../shared/shell-tools";
-import { profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode, shellQuote } from "./wrap";
+import { formatReadonlyCall, profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode, shellQuote } from "./wrap";
 
 const PATHS = { home: "/Users/foo", tmpdir: "/private/var/folders/ab/T", tmp: "/private/tmp" };
 
@@ -70,6 +70,27 @@ describe("sandboxMode", () => {
 describe("shellQuote", () => {
   it("closes and reopens around a single quote", () => {
     expect(shellQuote("a'b")).toBe("'a'\\''b'");
+  });
+});
+
+describe("formatReadonlyCall", () => {
+  const plain = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+
+  it("names the tool so it is distinguishable from bash", () => {
+    // The built-in shell renderer prints `$ <command>`, the same prompt `bash`
+    // shows, which made the two tools identical in the TUI.
+    expect(formatReadonlyCall({ command: "git log" }, plain)).toBe(`${READONLY_TOOL} git log`);
+  });
+
+  it("keeps the timeout suffix the built-in renderer shows", () => {
+    expect(formatReadonlyCall({ command: "rg x", timeout: 30 }, plain)).toBe(`${READONLY_TOOL} rg x (timeout 30s)`);
+  });
+
+  it("falls back like the built-in does for missing and invalid args", () => {
+    expect(formatReadonlyCall({}, plain)).toBe(`${READONLY_TOOL} ...`);
+    expect(formatReadonlyCall({ command: "" }, plain)).toBe(`${READONLY_TOOL} ...`);
+    expect(formatReadonlyCall({ command: 42 }, plain)).toBe(`${READONLY_TOOL} [invalid arg]`);
+    expect(formatReadonlyCall(null, plain)).toBe(`${READONLY_TOOL} ...`);
   });
 });
 

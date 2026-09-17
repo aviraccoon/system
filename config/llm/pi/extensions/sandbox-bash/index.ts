@@ -31,9 +31,10 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBashToolDefinition, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { BASH_SANDBOX_ENV, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
 import { CONFINED_TOOL, READONLY_TOOL } from "../shared/shell-tools";
-import { profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode } from "./wrap";
+import { formatReadonlyCall, profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode } from "./wrap";
 
 const PROFILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "profile.sbpl");
 
@@ -113,6 +114,18 @@ export default function sandboxBash(pi: ExtensionAPI) {
     return tool.execute(id, args, signal, onUpdate, ctx);
   };
 
+  // The built-in shell renderer titles every call `$ <command>`, which is the same
+  // prompt `bash` shows. Delegate to it — it also records the start time the
+  // elapsed-time line reads — and restate only the title. The subagent override
+  // keeps the original: there is no TUI there to confuse.
+  const baseRenderCall = tool.renderCall;
+  const renderCall = (...params: Parameters<NonNullable<typeof baseRenderCall>>) => {
+    const [args, theme, context] = params;
+    const component = baseRenderCall?.(args, theme, context) ?? new Text("", 0, 0);
+    if (component instanceof Text) component.setText(formatReadonlyCall(args, theme));
+    return component;
+  };
+
   if (mode === "override") {
     pi.registerTool({ ...tool, execute });
     return;
@@ -131,6 +144,7 @@ export default function sandboxBash(pi: ExtensionAPI) {
     promptGuidelines: [
       "ALWAYS reach for `bash_readonly` before `bash` when inspecting state: it is confined by the OS and never prompts, while `bash` prompts on every call.",
     ],
+    renderCall,
     execute,
   });
 }

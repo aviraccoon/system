@@ -6,6 +6,7 @@
  */
 
 import { SANDBOX_COMMAND_ENV } from "../shared/sandbox";
+import { READONLY_TOOL } from "../shared/shell-tools";
 
 /** Absolute path — the extension only activates where this exists. */
 export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
@@ -73,4 +74,26 @@ export function sandboxCommand(profilePath: string, params: string[]): string {
   for (const param of params) parts.push("-D", shellQuote(param));
   parts.push("-f", shellQuote(profilePath), "/bin/sh", "-c", `"$${SANDBOX_COMMAND_ENV}"`);
   return parts.join(" ");
+}
+
+/** Minimal slice of pi's Theme — keeps this module importable without pi. */
+export interface ThemeLike {
+  fg(color: string, text: string): string;
+  bold(text: string): string;
+}
+
+/**
+ * Call line for the confined shell in the main session. The built-in shell
+ * renderer titles every call `$ <command>`, which is the same prompt `bash`
+ * shows, so the two tools are indistinguishable in the TUI. This names the tool
+ * instead. Field order matches the built-in: title, then timeout suffix.
+ */
+export function formatReadonlyCall(args: unknown, theme: ThemeLike): string {
+  const { command: raw, timeout } = (args ?? {}) as { command?: unknown; timeout?: unknown };
+  const command = typeof raw === "string" ? raw : raw == null ? "" : null;
+  const invalidArg = theme.fg("error", "[invalid arg]");
+  const emptyArg = theme.fg("toolOutput", "...");
+  const commandDisplay = command === null ? invalidArg : command || emptyArg;
+  const timeoutSuffix = timeout ? theme.fg("muted", ` (timeout ${timeout}s)`) : "";
+  return theme.fg("toolTitle", theme.bold(`${READONLY_TOOL} ${commandDisplay}`)) + timeoutSuffix;
 }
