@@ -13,7 +13,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { computePatchPreview } from "../patch/preview";
 import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
-import { bashSandboxed } from "../shared/sandbox";
+import { isConfinedBash } from "../shared/sandbox";
 import { computeEditPreview } from "./edit-preview";
 
 /** Preview couldn't be computed (load/computation failure). Distinct from
@@ -593,11 +593,12 @@ export default function permissionGate(pi: ExtensionAPI) {
 
   // Main permission gate
   pi.on("tool_call", async (event, ctx) => {
-    // A sandboxed bash call is already confined by the OS: reads outside the
-    // workspace are allowed, writes are denied, and there is no network. There
-    // is nothing for the gate to decide, and tirith's findings are moot for a
-    // process that can neither write nor send. See extensions/sandbox-bash.
-    if (event.toolName === "bash" && bashSandboxed()) return undefined;
+    // A confined bash call needs no decision: reads outside the workspace are
+    // allowed, writes are denied, and there is no network, so the gate has nothing
+    // to add and tirith's findings are moot for a process that can neither write
+    // nor send. The marker names the confined tool, so an unrestricted `bash` in
+    // the same session still confirms. See extensions/sandbox-bash.
+    if (isConfinedBash(event.toolName)) return undefined;
 
     let decision = decide(event.toolName, event.input as Record<string, unknown>, ctx.cwd, state);
     let tirithWarning: string | undefined;

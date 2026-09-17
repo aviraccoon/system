@@ -50,14 +50,15 @@ its quoting cannot break out of the wrapper.
 
 ## Behaviour
 
-- Opt in with `extensions: sandbox-bash` on a subagent. It does not activate in the
-  main session.
-- Off macOS, or if the profile fails at load: bash is left alone and the gate keeps
-  confirming it.
-- While active the gate does not confirm `bash`, since the OS already confines it.
+- **Subagent**, opted in with `extensions: sandbox-bash`: the confined shell replaces
+  `bash`, and the gate stops confirming it.
+- **Main session**: a second tool, `bash_readonly`, with the unrestricted `bash` left
+  in place. Nothing to configure.
+- Off macOS, or if the profile fails at load: nothing is registered, and the gate
+  keeps confirming `bash`.
 - `GIT_OPTIONAL_LOCKS=0` is set, so read-only git commands do not try to refresh the
   index.
-- This confines `bash`, not the process: `web_fetch`/`web_search` run in the agent
+- This confines the shell, not the process: `web_fetch`/`web_search` run in the agent
   process and are outside it.
 
 ## Files

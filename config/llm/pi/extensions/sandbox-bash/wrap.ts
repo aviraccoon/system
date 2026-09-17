@@ -36,6 +36,12 @@ export function profileParams(paths: SandboxPaths): string[] {
   ];
 }
 
+/** Tool name the confined shell takes, per mode. */
+export const CONFINED_TOOL = "bash"; // subagent: replaces the built-in
+export const READONLY_TOOL = "bash_readonly"; // main session: an extra tool
+
+export type SandboxMode = "override" | "extra" | null;
+
 export interface ActivationInput {
   platform: string;
   /** Value of PI_SUBAGENT — set by the subagent extension for spawned children. */
@@ -45,16 +51,16 @@ export interface ActivationInput {
 }
 
 /**
- * Whether to take over `bash` for this process.
+ * Which registration this process should make, if any.
  *
- * Delegated agents only. Pi auto-discovers every extension in the extensions
- * directory, so this file is loaded in the main session too — activating there
- * would make the user's own shell read-only. Per-agent opt-in is the
- * `extensions:` frontmatter, which decides what a spawned child loads; the
- * `PI_SUBAGENT` marker is what distinguishes a child from the main session.
+ * A spawned subagent replaces `bash`: it declared the extension, so it has no
+ * business running anything else. The main session keeps its unrestricted `bash`
+ * and gets the confined shell under a second name, because that shell cannot
+ * write — making it the default there would break commits, tests and builds.
  */
-export function shouldActivate(input: ActivationInput): boolean {
-  return input.platform === "darwin" && input.subagent === "1" && input.hasSandboxExec && input.hasProfile;
+export function sandboxMode(input: ActivationInput): SandboxMode {
+  if (input.platform !== "darwin" || !input.hasSandboxExec || !input.hasProfile) return null;
+  return input.subagent === "1" ? "override" : "extra";
 }
 
 /** Single-quote for the shell string the wrapper is built in. */

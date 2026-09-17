@@ -13,11 +13,13 @@
  *   tools: read,grep,find,ls,bash
  *   extensions: sandbox-bash
  *
- * That is the per-agent opt-in. Activation additionally requires being a spawned
- * subagent, because pi auto-discovers every extension in the extensions
- * directory and this file therefore loads in the main session too — see
- * `shouldActivate`. Off macOS, or if the profile fails a smoke test, the override
- * is not registered and bash stays as it was.
+ * That is the per-agent opt-in for the *subagent* case, where the confined shell
+ * replaces `bash` outright. Pi auto-discovers every extension in the extensions
+ * directory, so this file also loads in the main session; there it registers the
+ * same confined shell under a second name and leaves the unrestricted `bash`
+ * alone, because that shell cannot write and the main session has to commit, test
+ * and build. See `sandboxMode`. Off macOS, or if the profile fails a smoke test,
+ * nothing is registered and `bash` stays as it was.
  *
  * `PI_BASH_SANDBOX` is set while active so the permission gate can stop
  * confirming a call the OS already confines.
@@ -30,7 +32,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createBashTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { BASH_SANDBOX_ENV, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
-import { profileParams, SANDBOX_EXEC, sandboxCommand, shouldActivate } from "./wrap";
+import { CONFINED_TOOL, profileParams, READONLY_TOOL, SANDBOX_EXEC, sandboxCommand, sandboxMode } from "./wrap";
 
 const PROFILE = path.join(path.dirname(fileURLToPath(import.meta.url)), "profile.sbpl");
 
@@ -44,7 +46,7 @@ function real(pathname: string): string {
 }
 
 export default function sandboxBash(pi: ExtensionAPI) {
-  const activate = shouldActivate({
+  const mode = sandboxMode({
     platform: process.platform,
     subagent: process.env.PI_SUBAGENT,
     hasSandboxExec: existsSync(SANDBOX_EXEC),
@@ -56,7 +58,7 @@ export default function sandboxBash(pi: ExtensionAPI) {
   // a previous reload would silently skip confirmation for an unconfined shell —
   // and setting it before the smoke test would do the same on a profile failure.
   delete process.env[BASH_SANDBOX_ENV];
-  if (!activate) return;
+  if (mode === null) return;
 
   const params = profileParams({
     home: real(os.homedir()),
@@ -76,7 +78,8 @@ export default function sandboxBash(pi: ExtensionAPI) {
     return;
   }
 
-  process.env[BASH_SANDBOX_ENV] = "read-only";
+  const confinedTool = mode === "override" ? CONFINED_TOOL : READONLY_TOOL;
+  process.env[BASH_SANDBOX_ENV] = confinedTool;
 
   const tool = createBashTool(process.cwd(), {
     spawnHook: ({ command, cwd, env }) => ({
@@ -95,10 +98,33 @@ export default function sandboxBash(pi: ExtensionAPI) {
     }),
   });
 
+  const execute = async (
+    id: string,
+    args: { command: string; timeout?: number },
+    signal: AbortSignal | undefined,
+    onUpdate: Parameters<typeof tool.execute>[3],
+  ) => {
+    return tool.execute(id, args, signal, onUpdate);
+  };
+
+  if (mode === "override") {
+    pi.registerTool({ ...tool, execute });
+    return;
+  }
+
+  // Main session: a second tool, not a replacement. The description carries the
+  // choice — this one cannot write, so anything that commits, installs or fetches
+  // has to go through `bash` and its confirmation.
   pi.registerTool({
     ...tool,
-    execute: async (id, args, signal, onUpdate, _ctx) => {
-      return tool.execute(id, args, signal, onUpdate);
-    },
+    name: READONLY_TOOL,
+    label: "bash (read-only)",
+    description:
+      "Execute a shell command in a read-only sandbox: no writes outside the temp dir, no network. Use it to inspect state — git log/diff/show/status, rg, find, cat, jq, wc. It cannot write, install or fetch; those need `bash`. Returns stdout and stderr, truncated to the last lines or 50KB.",
+    promptSnippet: "bash_readonly: read-only shell — never prompts",
+    promptGuidelines: [
+      "ALWAYS reach for `bash_readonly` before `bash` when inspecting state: it is confined by the OS and never prompts, while `bash` prompts on every call.",
+    ],
+    execute,
   });
 }

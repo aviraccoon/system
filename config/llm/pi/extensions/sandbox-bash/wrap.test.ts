@@ -1,6 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { BASH_SANDBOX_ENV, bashSandboxed, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
-import { profileParams, SANDBOX_EXEC, sandboxCommand, shellQuote, shouldActivate } from "./wrap";
+import { BASH_SANDBOX_ENV, isConfinedBash, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
+import {
+  CONFINED_TOOL,
+  profileParams,
+  READONLY_TOOL,
+  SANDBOX_EXEC,
+  sandboxCommand,
+  sandboxMode,
+  shellQuote,
+} from "./wrap";
 
 const PATHS = { home: "/Users/foo", tmpdir: "/private/var/folders/ab/T", tmp: "/private/tmp" };
 
@@ -44,28 +52,25 @@ describe("sandboxCommand", () => {
   });
 });
 
-describe("shouldActivate", () => {
+describe("sandboxMode", () => {
   const base = { platform: "darwin", subagent: "1", hasSandboxExec: true, hasProfile: true };
 
-  it("activates for a spawned subagent on macOS", () => {
-    expect(shouldActivate(base)).toBe(true);
+  it("replaces bash in a spawned subagent", () => {
+    expect(sandboxMode(base)).toBe("override");
   });
 
-  it("stays inert in the main session", () => {
-    // Pi auto-discovers every extension in the extensions directory, so this
-    // file loads in the main session too. Activating there takes the user's own
-    // shell read-only.
-    expect(shouldActivate({ ...base, subagent: undefined })).toBe(false);
-    expect(shouldActivate({ ...base, subagent: "" })).toBe(false);
+  it("adds a second tool in the main session", () => {
+    // Pi auto-discovers every extension in the extensions directory, so this file
+    // loads in the main session too. Replacing `bash` there would take the user's
+    // own shell read-only; a separate tool leaves the unrestricted one alone.
+    expect(sandboxMode({ ...base, subagent: undefined })).toBe("extra");
+    expect(sandboxMode({ ...base, subagent: "" })).toBe("extra");
   });
 
-  it("stays inert off macOS", () => {
-    expect(shouldActivate({ ...base, platform: "linux" })).toBe(false);
-  });
-
-  it("stays inert without sandbox-exec or the profile", () => {
-    expect(shouldActivate({ ...base, hasSandboxExec: false })).toBe(false);
-    expect(shouldActivate({ ...base, hasProfile: false })).toBe(false);
+  it("registers nothing off macOS or without the sandbox pieces", () => {
+    expect(sandboxMode({ ...base, platform: "linux" })).toBeNull();
+    expect(sandboxMode({ ...base, hasSandboxExec: false })).toBeNull();
+    expect(sandboxMode({ ...base, hasProfile: false })).toBeNull();
   });
 });
 
@@ -75,12 +80,18 @@ describe("shellQuote", () => {
   });
 });
 
-describe("bashSandboxed", () => {
-  it("follows the environment marker", () => {
+describe("isConfinedBash", () => {
+  it("matches only the tool the marker names", () => {
+    process.env[BASH_SANDBOX_ENV] = READONLY_TOOL;
+    expect(isConfinedBash(READONLY_TOOL)).toBe(true);
+    expect(isConfinedBash("bash")).toBe(false);
+
+    process.env[BASH_SANDBOX_ENV] = CONFINED_TOOL;
+    expect(isConfinedBash("bash")).toBe(true);
+    expect(isConfinedBash(READONLY_TOOL)).toBe(false);
+
     delete process.env[BASH_SANDBOX_ENV];
-    expect(bashSandboxed()).toBe(false);
-    process.env[BASH_SANDBOX_ENV] = "read-only";
-    expect(bashSandboxed()).toBe(true);
-    delete process.env[BASH_SANDBOX_ENV];
+    expect(isConfinedBash("bash")).toBe(false);
+    expect(isConfinedBash("")).toBe(false);
   });
 });
