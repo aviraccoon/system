@@ -7,9 +7,10 @@
  * prefix-blind (an allowed "curl"/"npm" prefix doesn't see the URL or package
  * name), so tirith catches what prefix matching and the sidecar classifier miss.
  *
- * Scope: bash only, and only when the gate would otherwise ALLOW (the blind
- * spot). Commands the gate already confirms are human-reviewed via the dialog +
- * sidecar; running tirith there adds latency without changing the outcome.
+ * Scope: bash only, on every bash call. It can only change the outcome when the
+ * gate would otherwise ALLOW (the blind spot) — there the verdict is enforced.
+ * On a path the gate already confirms, the verdict is surfaced in the dialog so
+ * the human decides informed rather than enforced on top.
  *
  * Graceful degradation:
  *  - tirith not on PATH (other machines, uninstalled) → no-op, gate unchanged.
@@ -46,6 +47,20 @@ interface TirithJson {
 }
 
 /**
+ * Rules whose finding means "could not prove this is safe" rather than "this is
+ * unsafe". tirith's tier-3 analyzer cannot resolve some ordinary static POSIX —
+ * `if [ … ]; then …; fi`, `while [ … ]`, and `$(…)` inside `$(( ))` — and
+ * reports `analysis_incomplete` at HIGH (upstream issue #260). A coverage gap is
+ * not a detection: honouring it as a block makes the gate reject shell whose
+ * body is fully visible in the source.
+ *
+ * Downgraded only when EVERY finding is a coverage gap. A real detection
+ * alongside one keeps the block — "could not prove it" plus "here is a concrete
+ * problem" still means stop.
+ */
+const COVERAGE_GAP_RULES = new Set(["analysis_incomplete"]);
+
+/**
  * Pure: map a parsed tirith JSON result to a gate verdict. Exported for tests.
  * Prefers the top-level `action` field (schema v3); falls back to exit codes
  * (0 allow, 1 block, 2 warn) only if JSON is missing or lacks an action.
@@ -58,7 +73,12 @@ export function mapTirithResult(parsed: TirithJson | null, exitCode: number): Ti
       title: f.title ?? "",
       description: f.description ?? "",
     }));
-    if (parsed.action === "block") return { action: "block", reason: formatBlockReason(findings), findings };
+    if (parsed.action === "block") {
+      if (findings.length > 0 && findings.every((f) => COVERAGE_GAP_RULES.has(f.ruleId))) {
+        return { action: "warn", findings };
+      }
+      return { action: "block", reason: formatBlockReason(findings), findings };
+    }
     if (parsed.action === "warn") return { action: "warn", findings };
     return { action: "pass" };
   }

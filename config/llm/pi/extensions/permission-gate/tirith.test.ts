@@ -52,8 +52,51 @@ const warnJson = {
 };
 
 const allowJson = { schema_version: 3, action: "allow", findings: [] };
-
 describe("mapTirithResult", () => {
+  it("downgrades a coverage-gap-only block to a warning (tirith #260)", () => {
+    // Captured from tirith 0.4.2 for `for d in …; do n=$(rg …); done`.
+    // `analysis_incomplete` means "could not prove it", which is not a
+    // detection; blocking it rejects shell whose body is right there in the source.
+    const coverageGapJson = {
+      schema_version: 3,
+      action: "block",
+      tier_reached: 3,
+      findings: [
+        {
+          rule_id: "analysis_incomplete",
+          severity: "HIGH",
+          title: "Nested executable body could not be resolved",
+          description: "The command is blocked instead of trusting its benign-looking outer leader.",
+        },
+        { rule_id: "analysis_incomplete", severity: "HIGH", title: "nested command analysis was incomplete" },
+      ],
+    };
+    const v = mapTirithResult(coverageGapJson, 1);
+    expect(v.action).toBe("warn");
+    if (v.action !== "warn") throw new Error("unreachable");
+    expect(v.findings).toHaveLength(2);
+  });
+
+  it("keeps the block when a real detection accompanies a coverage gap", () => {
+    const v = mapTirithResult(
+      {
+        action: "block",
+        findings: [
+          { rule_id: "analysis_incomplete", severity: "HIGH", title: "coverage gap" },
+          { rule_id: "curl_pipe_shell", severity: "HIGH", title: "Pipe to interpreter" },
+        ],
+      },
+      1,
+    );
+    expect(v.action).toBe("block");
+    if (v.action !== "block") throw new Error("unreachable");
+    expect(v.reason).toContain("curl_pipe_shell");
+  });
+
+  it("keeps a block that carries no findings (cannot classify, stay fail-closed)", () => {
+    expect(mapTirithResult({ action: "block", findings: [] }, 1).action).toBe("block");
+  });
+
   it("maps a block action, carrying rule + remedy into the reason", () => {
     const v = mapTirithResult(blockJson, 1);
     expect(v.action).toBe("block");

@@ -127,6 +127,9 @@ prefix logic, the sidecar classifier, and a human reviewer all miss these
   remediation as the reason (overrides allows/prefixes/modes; agent reformulates).
   On a confirm, surfaces as a HIGH finding in the dialog — the human decides,
   informed (the homograph-save case: eyes miss Cyrillic `е`, tirith doesn't).
+- **coverage gaps warn, not block:** a block whose findings are all
+  `analysis_incomplete` is downgraded — "could not prove it" is not a detection
+  ([tirith #260](https://github.com/sheeki03/tirith/issues/260)).
 - **warn (MEDIUM, e.g. shortened URLs):** on allow, downgrades to confirm; on
   confirm, surfaces at the top of the dialog body. Either way the human sees it —
   the move standalone tirith-guard can't make (pi's extension API has no "allow
