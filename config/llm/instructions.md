@@ -7,7 +7,7 @@
 - Test fixtures, examples, and sample data are fully synthetic. Write them from scratch — never adapt them from the user's real files, project names, work topics, or any other private content, even "neutralized". Generic names only: `foo`, `acme`, `example.com`.
 - No emoji by default, unless a project's AGENTS.md says otherwise
 - No marketing language ("comprehensive", "robust", "cutting-edge", etc.)
-- Writing style: read and follow `~/raccoon-life/system/ai/reference/llm-writing-guide.md` for any prose output (docs, posts, handouts, commit messages, READMEs). It's the authority on style: specificity over grandiosity, plain words over jargon, and avoid the AI-writing patterns it lists.
+- Writing style: follow the `writing-style` skill for any prose output (docs, posts, handouts, commit messages, READMEs). It's the authority on style: specificity over grandiosity, plain words over jargon, and avoid the AI-writing patterns it lists.
 - Direct, technical, concise
 - Be honest - disagree when you have reason to
 - Pronouns: Avi always uses they/them pronouns. Every reference to Avi — chat, docs, files, paraphrases of their words — uses they/them.
