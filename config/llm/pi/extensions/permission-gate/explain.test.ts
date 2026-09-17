@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { blockReason, describeToolCall, findVerdictLine, parseExplanation, userInstruction } from "./explain";
+import { blockReason, describeToolCall, findVerdictLine, noteMessage, notesMessage, parseExplanation } from "./explain";
 
 // ── describeToolCall ──
 
@@ -199,45 +199,78 @@ describe("findVerdictLine", () => {
   });
 });
 
-// ── blockReason ──
+// ── noteMessage ──
 
-describe("blockReason", () => {
-  test("note only for bash", () => {
-    expect(blockReason("don't do that", null, "bash")).toBe(
-      "BLOCKED by user. The command was NOT executed. Do not retry unless the user asks.\n[Mandatory instruction from the user — act on this now: don't do that]",
+describe("noteMessage", () => {
+  test("keeps the note verbatim and appends the call it refers to", () => {
+    expect(noteMessage("don't do that", "bash", { command: "rm -rf build" })).toBe(
+      "don't do that\n\n[note on the bash call: rm -rf build]",
     );
   });
 
-  test("explanation only for edit", () => {
+  test("uses the path for file tools, including patch's per-edit paths", () => {
+    expect(noteMessage("use staging", "write", { path: "/srv/app/config.yml" })).toBe(
+      "use staging\n\n[note on the write call: /srv/app/config.yml]",
+    );
+    expect(noteMessage("no", "patch", { edits: [{ path: "src/a.ts" }] })).toContain("src/a.ts");
+  });
+
+  test("collapses whitespace and clips long input", () => {
+    expect(noteMessage("no", "bash", { command: "echo a\necho b" })).toBe(
+      "no\n\n[note on the bash call: echo a echo b]",
+    );
+    const long = noteMessage("careful", "bash", { command: "x".repeat(300) });
+    expect(long).toContain(`${"x".repeat(99)}...`);
+    expect(long.length).toBeLessThan(200);
+  });
+
+  test("falls back to the tool description for unknown tools", () => {
+    expect(noteMessage("hmm", "weird_tool", { query: "abc" })).toContain("[note on the weird_tool call: ");
+  });
+});
+
+// ── notesMessage ──
+
+describe("notesMessage", () => {
+  test("joins blocks in order with a blank line", () => {
+    expect(notesMessage(["a\n\n[bash: one]", "b\n\n[bash: two]"])).toBe("a\n\n[bash: one]\n\nb\n\n[bash: two]");
+  });
+
+  test("a single note is unchanged", () => {
+    expect(notesMessage(["only"])).toBe("only");
+  });
+});
+
+// ── blockReason ──
+
+describe("blockReason", () => {
+  test("bash: blocked status only, no user note", () => {
+    expect(blockReason(null, "bash")).toBe(
+      "BLOCKED by user. The command was NOT executed. Do not retry unless the user asks.",
+    );
+  });
+
+  test("explanation for edit", () => {
     const expl = { verdict: "dangerous" as const, short: "Deletes everything", detail: "" };
-    expect(blockReason("", expl, "edit")).toBe(
+    expect(blockReason(expl, "edit")).toBe(
       "BLOCKED by user. The file was NOT modified. Do not retry unless the user asks.\n[Automated command classification: DANGEROUS \u2014 Deletes everything]",
     );
   });
 
-  test("classification before note for write", () => {
+  test("tirith note follows the classification", () => {
     const expl = { verdict: "risky" as const, short: "Modifies config", detail: "" };
-    expect(blockReason("be careful", expl, "write")).toBe(
-      "BLOCKED by user. The file was NOT written. Do not retry unless the user asks.\n[Automated command classification: RISKY \u2014 Modifies config]\n[Mandatory instruction from the user — act on this now: be careful]",
-    );
-  });
-
-  test("userInstruction keeps multiline notes verbatim inside brackets", () => {
-    const note = "first line\nsecond line\n\nfourth line";
-    expect(userInstruction(note)).toBe(
-      "[Mandatory instruction from the user — act on this now: first line\nsecond line\n\nfourth line]",
+    expect(blockReason(expl, "write", "tirith: HIGH")).toBe(
+      "BLOCKED by user. The file was NOT written. Do not retry unless the user asks.\n[Automated command classification: RISKY \u2014 Modifies config]\ntirith: HIGH",
     );
   });
 
   test("unknown tool uses generic verb", () => {
-    expect(blockReason("", null, "unknown_tool")).toBe(
+    expect(blockReason(null, "unknown_tool")).toBe(
       "BLOCKED by user. The action was NOT performed. Do not retry unless the user asks.",
     );
   });
 
   test("no tool name uses generic verb", () => {
-    expect(blockReason("", null)).toBe(
-      "BLOCKED by user. The action was NOT performed. Do not retry unless the user asks.",
-    );
+    expect(blockReason(null)).toBe("BLOCKED by user. The action was NOT performed. Do not retry unless the user asks.");
   });
 });

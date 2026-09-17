@@ -31,7 +31,7 @@ import {
   type ExplanationProvider,
   type ExplanationResult,
 } from "./confirm-ui";
-import { blockReason, describeToolCall, parseExplanation, userInstruction } from "./explain";
+import { blockReason, describeToolCall, noteMessage, notesMessage, parseExplanation } from "./explain";
 import {
   cacheKey,
   createInitialState,
@@ -50,7 +50,29 @@ import { checkCommand, detectTirith, formatFindingSummary, type TirithVerdict, t
 
 export default function permissionGate(pi: ExtensionAPI) {
   const state: GateState = createInitialState();
-  const pendingNotes: Map<string, string> = new Map();
+  /** Notes captured this turn, flushed together as one user message. */
+  const pendingNotes: string[] = [];
+
+  /**
+   * Queue a dialog note as a user message. A note embedded in a tool result
+   * reads as untrusted third-party content to the model, so the user's words go
+   * in a user turn. Notes are batched and sent at turn end: pi's default
+   * steering mode delivers one steer message per assistant turn, so sending
+   * them one by one would make every note after the first arrive a turn late.
+   * Each block carries an attribution naming the call it refers to.
+   */
+  function queueNote(note: string, event: { toolName: string; input: unknown }): void {
+    pendingNotes.push(noteMessage(note, event.toolName, event.input));
+  }
+
+  /** Send queued notes as one user message: steer delivers it after this turn's
+   * tool results and before the next LLM call. */
+  function flushNotes(): void {
+    if (pendingNotes.length === 0) return;
+    const text = notesMessage(pendingNotes);
+    pendingNotes.length = 0;
+    pi.sendUserMessage(text, { deliverAs: "steer" });
+  }
   let explainEnabled = false;
   /** Latest auto-allow verdict for the widget. Cleared each agent turn. */
   let lastVerdict: string | null = null;
@@ -237,6 +259,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     tirithAvailable = await detectTirith();
     tirithCache.clear();
     pendingTirith.clear();
+    pendingNotes.length = 0;
     updateStatus(ctx);
   });
 
@@ -499,7 +522,8 @@ export default function permissionGate(pi: ExtensionAPI) {
       const { choice, note, explanation: explResult } = result;
 
       if (choice === "Block" || choice === null) {
-        return { block: true, reason: blockReason(note, explResult, event.toolName, tirithNote) };
+        if (note) queueNote(note, event);
+        return { block: true, reason: blockReason(explResult, event.toolName, tirithNote) };
       }
       if (choice?.startsWith('Allow "') && choice.endsWith('" for this session')) {
         state.allowedBashPrefixes.push(prefix);
@@ -509,7 +533,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         state.toolOverrides.bash = "allow";
         ctx.ui.notify("Bash allowed for this session", "warning");
       }
-      if (note) pendingNotes.set(event.toolCallId, note);
+      if (note) queueNote(note, event);
       if (tirithNote) pendingTirith.set(event.toolCallId, tirithNote);
       return undefined;
     }
@@ -527,12 +551,13 @@ export default function permissionGate(pi: ExtensionAPI) {
       const { choice, note, explanation: explResult } = result;
 
       if (choice === "Block" || choice === null) {
-        return { block: true, reason: blockReason(note, explResult, event.toolName) };
+        if (note) queueNote(note, event);
+        return { block: true, reason: blockReason(explResult, event.toolName) };
       }
       if (choice?.startsWith('Allow "')) {
         state.allowedPaths.push(path);
       }
-      if (note) pendingNotes.set(event.toolCallId, note);
+      if (note) queueNote(note, event);
       return undefined;
     }
 
@@ -555,12 +580,13 @@ export default function permissionGate(pi: ExtensionAPI) {
     const { choice, note, explanation: explResult } = result;
 
     if (choice === "Block" || choice === null) {
-      return { block: true, reason: blockReason(note, explResult, event.toolName) };
+      if (note) queueNote(note, event);
+      return { block: true, reason: blockReason(explResult, event.toolName) };
     }
     if (choice?.startsWith('Allow "')) {
       state.allowedPaths.push(path);
     }
-    if (note) pendingNotes.set(event.toolCallId, note);
+    if (note) queueNote(note, event);
     return undefined;
   }
 
@@ -733,27 +759,30 @@ export default function permissionGate(pi: ExtensionAPI) {
     return await showConfirmDialog(ctx, event, decision, explanation, diffBody, detailsBody, tirithWarning, tirithNote);
   });
 
+  // Flush notes captured during the turn as one user message: this runs after
+  // the turn's tool results and before the next LLM call, so every note from a
+  // turn lands together instead of one per assistant turn.
+  pi.on("turn_end", async () => {
+    flushNotes();
+  });
+
   // Clear widget when agent turn ends
   pi.on("agent_end", async (_event, ctx) => {
+    flushNotes();
     lastVerdict = null;
     updateWidget(ctx);
   });
 
-  // Append user notes to tool results so the model sees them.
+  // Append tirith annotations to tool results so the model sees them. User
+  // notes are not handled here — they are delivered as user messages.
   // Also refresh status bar (sidecar cost may have changed).
   pi.on("tool_result", async (event, ctx) => {
     if (explainEnabled) updateStatus(ctx);
-    const note = pendingNotes.get(event.toolCallId);
     const tirith = pendingTirith.get(event.toolCallId);
-    if (!note && !tirith) return undefined;
-    pendingNotes.delete(event.toolCallId);
+    if (!tirith) return undefined;
     pendingTirith.delete(event.toolCallId);
-
-    const parts: string[] = [];
-    if (tirith) parts.push(tirith);
-    if (note) parts.push(userInstruction(note));
     return {
-      content: [...event.content, { type: "text" as const, text: `\n\n${parts.join("\n")}` }],
+      content: [...event.content, { type: "text" as const, text: `\n\n${tirith}` }],
     };
   });
 }

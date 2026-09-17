@@ -70,9 +70,8 @@ Cycle modes with `Ctrl+Shift+A`. Open settings with `/permissions`.
 Every confirmation shows a custom TUI with:
 - Colored unified diff preview (edit/write/patch tools) — compact 6-line view by default
 - Select list of actions (Allow once, Allow for session, Block)
-- Multi-line note editor (Tab to focus, Shift+Enter for newlines) — attached to the tool result so the model sees it
-- Notes on allow: appended as `[Mandatory instruction from the user — act on this now: ...]` to tool output
-- Notes on block: included in the block reason alongside the automated classification
+- Multi-line note editor (Tab to focus, Shift+Enter for newlines) — delivered to the model as a user message
+- Notes (allow and block): sent as a real user message via `sendUserMessage` with `deliverAs: "steer"`, landing after the tool result and before the next LLM call. Instructions inside a tool result are treated as untrusted third-party content (Anthropic: "Claude flags tool results as prompt injection"), so the note goes in a user turn instead; the block reason keeps only machine facts (blocked status, sidecar classification, tirith). The message ends with a `[note on the <tool> call: <command or path>]` attribution, since one turn can queue several calls and several notes. Notes are buffered and flushed as a single message at turn end: pi's default steering mode delivers one steer message per assistant turn, so sent individually the second note would arrive a turn late.
 
 ### Diff preview
 
@@ -164,7 +163,7 @@ Status bar shows `+tirith` when active.
 - `explain.ts` — Verdict parsing, tool call description, block reasons
 - `explain.test.ts` — Tests for explain/verdict logic
 - `confirm-ui.ts` — Custom TUI component (SelectList + Editor note field + explanation display)
-- `index.ts` — Pi extension wrapper (UI, events, auto-classify, tool_result note injection)
+- `index.ts` — Pi extension wrapper (UI, events, auto-classify, user-message notes, tirith tool_result injection)
 
 ## Known limitations
 

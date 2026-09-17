@@ -38,6 +38,40 @@ export function describeToolCall(toolName: string, input: Record<string, unknown
   return `${toolName}: ${JSON.stringify(input).slice(0, 500)}`;
 }
 
+/** First per-edit path for a patch-style input (no top-level path). */
+function firstEditPath(input: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(input.edits)) return undefined;
+  const first = input.edits[0] as { path?: unknown } | undefined;
+  return typeof first?.path === "string" ? first.path : undefined;
+}
+
+/** One-line target for note attribution: the command or path, whitespace-collapsed and clipped. */
+export function noteTarget(toolName: string, input: unknown): string {
+  const i = (input ?? {}) as Record<string, unknown>;
+  const raw =
+    typeof i.command === "string"
+      ? i.command
+      : typeof i.path === "string"
+        ? i.path
+        : (firstEditPath(i) ?? describeToolCall(toolName, i));
+  const oneLine = raw.replace(/\s+/g, " ").trim();
+  return oneLine.length > 100 ? `${oneLine.slice(0, 99)}...` : oneLine;
+}
+
+/**
+ * User message for a confirm-dialog note: the user's words verbatim, plus a
+ * trailing attribution so the model knows which tool call it refers to when
+ * several were queued in one turn.
+ */
+export function noteMessage(note: string, toolName: string, input: unknown): string {
+  return `${note}\n\n[note on the ${toolName} call: ${noteTarget(toolName, input)}]`;
+}
+
+/** Join the notes captured in one turn into a single user message. */
+export function notesMessage(notes: string[]): string {
+  return notes.join("\n\n");
+}
+
 // ── Verdict parsing ──
 
 /** Parse a verdict word from the start of text. */
@@ -127,23 +161,10 @@ export function parseExplanation(text: string, strict?: boolean): ExplanationRes
 
 // ── Block reason ──
 
-/**
- * Wrap a user-typed confirm-dialog note so models treat it as binding. Same
- * rendering on allow (appended to the tool result) and block (block reason).
- * Always emitted last; the note may be multiline and is kept verbatim inside
- * the brackets.
- */
-export function userInstruction(note: string): string {
-  return `[Mandatory instruction from the user — act on this now: ${note}]`;
-}
-
-/** Build a block reason from user note + sidecar explanation. */
-export function blockReason(
-  note: string,
-  explanation: ExplanationResult | null,
-  toolName?: string,
-  tirithNote?: string,
-): string {
+/** Build a block reason from the sidecar explanation. User notes are delivered
+ * separately as user messages — instructions inside a tool result read as
+ * untrusted to the model. */
+export function blockReason(explanation: ExplanationResult | null, toolName?: string, tirithNote?: string): string {
   const verb =
     toolName === "bash"
       ? "The command was NOT executed."
@@ -157,6 +178,5 @@ export function blockReason(
     lines.push(`[Automated command classification: ${explanation.verdict.toUpperCase()} — ${explanation.short}]`);
   }
   if (tirithNote) lines.push(tirithNote);
-  if (note) lines.push(userInstruction(note));
   return lines.join("\n");
 }
