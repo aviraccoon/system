@@ -104,6 +104,7 @@ Subagents run with:
 - `--no-extensions` — no auto-discovered extensions; loads `agents-loader` + `permission-gate` plus agent-declared ones
 - `--session-dir ~/.pi/agent/subagent-sessions/` — isolated session storage
 - Tool allowlist from agent frontmatter `tools` field
+- **Gate dialogs**: the child's `permission-gate` starts fresh (Careful mode, no grants inherited from the parent) and in RPC mode falls back to the relayed `confirm()` above, so any gated call blocks in the parent TUI. An agent whose `tools` list omits `bash`/`write`/`edit`/`patch` never triggers it. The parent gate exempts the `subagent` tool itself and treats `web_fetch` as read-only, so neither prompts.
 - Same working directory as the parent (or `cwd` param)
 
 ### RPC UI behavior
@@ -132,6 +133,5 @@ Subagents run with:
 
 - **RPC shutdown**: pi has no `shutdown` command, so the extension closes stdin after an `abort` for a clean exit 0, with SIGTERM/SIGKILL as a 3s escalation fallback. User abort uses a 5s SIGTERM/SIGKILL timeout.
 - **`custom()` in subagents**: extensions using `ctx.ui.custom()` will crash in subagent mode (returns undefined). The permission gate uses `confirm()`/`select()`/`input()` instead, which are relayed to the parent TUI.
-- **`web_fetch` blocked**: not in the permission gate's READ_ONLY_TOOLS, so it gets blocked in subagent mode. `web_search` is whitelisted.
 - **Parallel/chain modes**: implemented but not heavily tested beyond basic scenarios.
 - **No live streaming in chain/parallel**: `onUpdate` forwarding is swallowed while a step is running, so chain/parallel only show completion status (`Parallel: X/Y done…`), not the interleaved live feed. `Ctrl+O` mid-run works in parallel (completed agents render full turns, running ones show `(running...)`), but the collapsed live-view caps don't apply — there's no live view to cap.

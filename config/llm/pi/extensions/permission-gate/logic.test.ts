@@ -477,6 +477,26 @@ describe("decide", () => {
     expect(decide("grep", { pattern: "foo" }, cwd, state).action).toBe("allow");
     expect(decide("find", { path: "." }, cwd, state).action).toBe("allow");
     expect(decide("ls", { path: "." }, cwd, state).action).toBe("allow");
+    expect(decide("web_search", { query: "foo" }, cwd, state).action).toBe("allow");
+    // Network read: no local side effect, so no confirmation.
+    expect(decide("web_fetch", { url: "https://example.com" }, cwd, state).action).toBe("allow");
+  });
+
+  // Delegation
+  test("subagent allowed in every mode", () => {
+    // The child's own gate decides what the child may do; confirming the
+    // delegation adds one dialog per spawn for no safety.
+    for (const mode of ["careful", "trust-project"] as const) {
+      const state = stateWith({ mode });
+      expect(decide("subagent", { agent: "researcher", task: "x" }, cwd, state).action).toBe("allow");
+    }
+  });
+
+  test("unknown tool still confirms in careful mode", () => {
+    const state = stateWith({ mode: "careful" });
+    const d = decide("some_new_tool", {}, cwd, state);
+    expect(d.action).toBe("confirm");
+    expect(d.reason).toBe("Unknown tool: some_new_tool");
   });
 
   // Careful mode

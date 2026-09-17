@@ -73,7 +73,15 @@ export const MODE_SHORT: Record<Mode, string> = {
 
 export const MODE_CYCLE: Mode[] = ["careful", "trust-project", "allow-all"];
 
-export const READ_ONLY_TOOLS = ["read", "ls", "grep", "find", "web_search"];
+/** Tools that mutate nothing in this session and delegate the work to a child
+ *  whose own gate decides what it may do (subagent). Confirming them buys no
+ *  safety and costs one dialog per delegation. */
+export const DELEGATION_TOOLS = ["subagent"];
+
+/** Tools that only read. `web_fetch` is a network read with no local side
+ *  effect; its one blind spot (data smuggled in a URL) is accepted here the
+ *  same way Claude Code accepts it for WebFetch. */
+export const READ_ONLY_TOOLS = ["read", "ls", "grep", "find", "web_search", "web_fetch"];
 
 export const SENSITIVE_PATTERNS: RegExp[] = [
   /^\.env$/,
@@ -367,6 +375,13 @@ export function cacheKey(toolName: string, input: Record<string, unknown>): stri
 export function decide(toolName: string, input: Record<string, unknown>, cwd: string, state: GateState): GateDecision {
   // Allow-all mode: pass everything
   if (state.mode === "allow-all") {
+    return { action: "allow" };
+  }
+
+  // Delegation: the child's own gate decides what it may do, and this call
+  // touches nothing in the parent. The subagent extension still confirms
+  // project-local agent definitions itself (subagent/index.ts).
+  if (DELEGATION_TOOLS.includes(toolName)) {
     return { action: "allow" };
   }
 
