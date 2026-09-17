@@ -289,6 +289,23 @@ describe("planAll: no-op detection", () => {
   });
 });
 
+describe("escape tolerance", () => {
+  test("oldText with literal escape sequences matches real characters", () => {
+    const content = "alpha\nbeta\ngamma\n";
+    const plan = planAll(content, [{ oldText: "alpha\\nbeta", newText: "ALPHA\nBETA" }]);
+    expect(plan.outcomes[0]?.status).toBe("applied");
+    expect(plan.unescaped).toBe(true);
+    expect(applyPreservingOriginal(content, plan)).toBe("ALPHA\nBETA\ngamma\n");
+  });
+
+  test("a verbatim match wins and leaves unescaped false", () => {
+    const content = "a\\nb\n"; // file contains backslash-n literally
+    const plan = planAll(content, [{ oldText: "a\\nb", newText: "X" }]);
+    expect(plan.unescaped).toBe(false);
+    expect(applyPreservingOriginal(content, plan)).toBe("X\n");
+  });
+});
+
 // ── applyPreservingOriginal: byte preservation ────────────────────────────
 
 describe("applyPreservingOriginal", () => {

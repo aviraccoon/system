@@ -167,6 +167,15 @@ describe("formatClosestMatches", () => {
     expect(formatClosestMatches([mkMatch(0.95)])).toContain("line 1:");
     expect(formatClosestMatches([mkMatch(0.5)])).not.toContain("line 1:");
   });
+
+  test("shows the full window for a very close match (copy-pasteable oldText)", () => {
+    const content = ["l1", "l2", "l3", "l4", "l5", "l6", "l7", "l8"].join("\n");
+    const oldText = content.replace("l8", "l9");
+    const text = formatClosestMatches(closestMatches(content, oldText));
+    expect(text).toContain("use it as oldText");
+    expect(text).toContain("l8");
+    expect(text).not.toContain("more line(s)");
+  });
 });
 
 // ── diagnoseLineDiff (LCS line-level diagnosis) ───────────────────────────

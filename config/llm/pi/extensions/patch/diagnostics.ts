@@ -387,7 +387,13 @@ export function formatHitsWithContext(content: string, hits: MatchHit[]): string
  * high-similarity winner. */
 const CHAR_DETAIL_MIN_SIMILARITY = 0.7;
 
-/** Render closest-match suggestions. */
+/** Similarity at or above which the top candidate's full text is shown. At this
+ * closeness the window is almost certainly the intended region, and it is
+ * line-count-equal to oldText, so it is a copy-pasteable corrected oldText —
+ * better than a 4-line preview the agent has to reconstruct around. */
+const FULL_WINDOW_MIN_SIMILARITY = 0.9;
+const FULL_WINDOW_MAX_LINES = 60;
+
 export function formatClosestMatches(matches: ClosestMatch[]): string {
   if (matches.length === 0) {
     return "No similar text found. Re-read the file and check the exact content.";
@@ -395,14 +401,19 @@ export function formatClosestMatches(matches: ClosestMatch[]): string {
   const allWhitespace = matches.every((m) => isWhitespaceOnlyDiagnosis(m.diagnosis));
   const lines = matches.map((m, idx) => {
     const pct = Math.round(m.similarity * 100);
-    const preview = m.text.split("\n").slice(0, 4).join("\n");
-    const more = m.text.split("\n").length > 4 ? "\n  ..." : "";
+    const all = m.text.split("\n");
+    const full = idx === 0 && m.similarity >= FULL_WINDOW_MIN_SIMILARITY;
+    const shown = full ? all.slice(0, FULL_WINDOW_MAX_LINES) : all.slice(0, 4);
+    const preview = shown.join("\n");
+    const hidden = all.length - shown.length;
+    const more = hidden > 0 ? `\n  ... (${hidden} more line(s) — read the file for the rest)` : "";
     const details = m.similarity >= CHAR_DETAIL_MIN_SIMILARITY ? formatLineDetails(m.diagnosis, m.line, m.text) : "";
-    return `  ${idx + 1}. Lines ${m.line}-${m.line + m.text.split("\n").length - 1} (${pct}% similar — ${describeDiagnosis(m.diagnosis)})${details}\n  ${preview}${more}`;
+    const label = full ? " — exact text at those lines; use it as oldText" : "";
+    return `  ${idx + 1}. Lines ${m.line}-${m.line + all.length - 1} (${pct}% similar — ${describeDiagnosis(m.diagnosis)})${label}${details}\n  ${preview}${more}`;
   });
   const tip = allWhitespace
     ? "Tip: your content looks right — only whitespace differs. Re-copy the exact text from the file (watch tabs vs spaces, indentation)."
-    : "Tip: copy the exact text from the file (watch tabs vs spaces, Unicode symbols); fix differing content.";
+    : "Tip: copy the exact text shown (watch tabs vs spaces, Unicode symbols); fix differing content.";
   return `No exact match. Closest matches:\n${lines.join("\n")}\n\n${tip}`;
 }
 

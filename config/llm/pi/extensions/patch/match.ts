@@ -127,6 +127,17 @@ export function normalizeToLF(text: string): string {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
+/**
+ * Interpret literal escape sequences that models sometimes emit instead of the
+ * real characters (a typed backslash-n rather than a newline). Only tried when
+ * the raw oldText finds nothing, and only reported when it is what matched —
+ * source code containing genuine backslash sequences keeps matching verbatim.
+ */
+export function unescapeSequences(text: string): string {
+  const map: Record<string, string> = { n: "\n", t: "\t", r: "\r", '"': '"', "'": "'", "\\": "\\" };
+  return text.replace(/\\([ntr"'\\])/g, (match, c: string) => map[c] ?? match);
+}
+
 export function detectLineEnding(content: string): "\n" | "\r\n" {
   const crlfIdx = content.indexOf("\r\n");
   const lfIdx = content.indexOf("\n");
@@ -350,6 +361,9 @@ export interface PlanResult {
   replacements: PlannedReplacement[];
   insertions: PlannedInsertion[];
   outcomes: EditOutcome[];
+  /** At least one edit matched only after literal escape sequences were
+   * interpreted as characters (a model emitting `\n` instead of a newline). */
+  unescaped: boolean;
 }
 
 function finalizeNewText(rawNewText: string, hit: MatchHit): string {
@@ -386,14 +400,19 @@ function beforeLineFor(mode: "insertAfter" | "insertBefore", hit: MatchHit, tota
  * and detects cross-edit overlaps.
  */
 export function planAll(content: string, edits: Edit[]): PlanResult {
-  // First pass: determine the batch's match space.
+  // First pass: determine the batch's match space. An edit whose oldText is
+  // verbatim in the file — or is after interpreting literal escapes — keeps the
+  // batch in exact space; only a genuine near-miss forces normalized space.
   const normalized = normalizeForFuzzyMatch(content);
+  const foundExact = (oldText: string): boolean =>
+    countIn(content, oldText) > 0 || countIn(content, unescapeSequences(oldText)) > 0;
   const useNormalized = edits.some((edit) => {
     const oldText = normalizeToLF(edit.oldText);
-    return oldText.length > 0 && countIn(content, oldText) === 0;
+    return oldText.length > 0 && !foundExact(oldText);
   });
   const space: "exact" | "normalized" = useNormalized ? "normalized" : "exact";
   const matchSpace = space === "normalized" ? normalized : content;
+  let unescaped = false;
 
   const replacements: PlannedReplacement[] = [];
   const insertions: PlannedInsertion[] = [];
@@ -408,8 +427,14 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
       outcomes.push({ editIndex: i, status: "empty" });
       continue;
     }
-    const needle = space === "normalized" ? normalizeForFuzzyMatch(oldText) : oldText;
-    const occurrences = findAllIn(matchSpace, needle);
+    const raw = space === "normalized" ? normalizeForFuzzyMatch(oldText) : oldText;
+    const unescapedNeedle =
+      space === "normalized" ? normalizeForFuzzyMatch(unescapeSequences(oldText)) : unescapeSequences(oldText);
+    let occurrences = findAllIn(matchSpace, raw);
+    if (occurrences.length === 0 && unescapedNeedle !== raw) {
+      occurrences = findAllIn(matchSpace, unescapedNeedle);
+      if (occurrences.length > 0) unescaped = true;
+    }
 
     if (occurrences.length === 0) {
       outcomes.push({ editIndex: i, status: "no-match" });
@@ -568,7 +593,7 @@ export function planAll(content: string, edits: Edit[]): PlanResult {
     }
   }
 
-  return { space, replacements, insertions, outcomes };
+  return { space, replacements, insertions, outcomes, unescaped };
 }
 
 function nearestOccurrence(

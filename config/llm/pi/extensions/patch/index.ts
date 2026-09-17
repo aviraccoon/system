@@ -20,6 +20,7 @@ import {
   type Edit,
   type EditOutcome,
   normalizeToLF,
+  type PlanResult,
   planAll,
   restoreLineEndings,
   stripBom,
@@ -170,6 +171,9 @@ interface FileResult {
     anchored: boolean;
     insert?: "insertAfter" | "insertBefore";
   }>;
+  /** How the batch matched, for the success receipt: "exact" or a tolerant
+   * description. Agents should be told when a write was not byte-exact. */
+  strategy: string;
 }
 
 interface FileFailure {
@@ -289,6 +293,7 @@ async function planFiles(groups: Map<string, { displayPath: string; edits: Edit[
       editCount: appliedOutcomes.length,
       occurrenceCount: plan.replacements.length + plan.insertions.length,
       appliedLocations,
+      strategy: matchStrategyLabel(plan),
     });
   }
 
@@ -322,12 +327,24 @@ function formatLocations(r: FileResult): string {
 function buildSuccessText(results: FileResult[]): string {
   const edits = results.reduce((sum, r) => sum + r.editCount, 0);
   const occurrences = results.reduce((sum, r) => sum + r.occurrenceCount, 0);
-  const header = `Applied ${edits} edit(s) (${occurrences} occurrence(s)) across ${results.length} file(s). Files written.`;
+  const tolerant = results.filter((r) => r.strategy !== "exact").length;
+  const header =
+    `Applied ${edits} edit(s) (${occurrences} occurrence(s)) across ${results.length} file(s). Files written.` +
+    (tolerant > 0
+      ? ` ${tolerant} file(s) matched tolerantly, not byte-exact — check that the change landed where you meant it.`
+      : "");
   const parts = results.map((r) => {
     const locs = formatLocations(r);
-    return locs ? `--- ${r.displayPath} ---\n${locs}\n${r.diff}` : `--- ${r.displayPath} ---\n${r.diff}`;
+    const head = `--- ${r.displayPath} --- (match: ${r.strategy})`;
+    return locs ? `${head}\n${locs}\n${r.diff}` : `${head}\n${r.diff}`;
   });
   return [header, ...parts].join("\n\n");
+}
+
+/** Human label for how a batch matched; "exact" when it was byte-exact. */
+function matchStrategyLabel(plan: PlanResult): string {
+  const base = plan.space === "exact" ? "exact" : "tolerant (whitespace/Unicode/tab differences normalized)";
+  return plan.unescaped ? `${base}; literal \\n/\\t escapes interpreted as characters` : base;
 }
 
 // ── Live diff preview (renderCall) ──────────────────────────────────────────

@@ -1,7 +1,8 @@
 # patch
 
-A more forgiving file edit tool. Three-stage matching tolerates
-Unicode/whitespace drift and gives rich diagnostics on failure.
+A more forgiving file edit tool. Tolerant matching (whitespace/Unicode drift,
+literal escape sequences) reports how it matched, and gives rich diagnostics on
+failure.
 
 ## Why
 
@@ -12,22 +13,35 @@ recovery probability by a third (SWE-agent NeurIPS 2024 data).
 
 ## What's different
 
-**Matching** — three-stage cascade (consensus across Codex, OpenCode, Octofs):
+**Matching** — a cascade, strictest first (consensus across Codex, OpenCode,
+Octofs):
 1. Exact whole-string match (tried first — zero cost when the model is precise)
 2. Normalized fuzzy match (arrows → ASCII, tab↔space, smart quotes/dashes,
-   special spaces, trailing whitespace) with indentation auto-adjust
-3. Closest-match diagnostics (never applies — just reports)
+   special spaces, trailing whitespace, internal whitespace runs) with
+   indentation auto-adjust
+3. Literal escape sequences (`\n`, `\t`) interpreted as characters — tried when
+   the raw oldText finds nothing, in that same match space (exact or normalized),
+   and reported when it is what matched
+4. Closest-match diagnostics (never applies — just reports)
+
+**Match receipt** — a successful edit reports how it matched, per file:
+`(match: exact)` or `(match: tolerant (whitespace/Unicode/tab differences
+normalized))`, with the tolerance named when escapes were interpreted. A write
+that was not byte-exact is never silent, so the agent can verify placement
+instead of assuming.
 
 **Diagnostics** — on failure, returns the closest match with similarity % and
 line number, plus a **per-line codepoint breakdown** naming the exact differing
 characters (especially invisible Unicode: NBSP, zero-width space, em-dash vs
 `--`). Three rendering tiers: printable ASCII → bare literal; non-ASCII visible
 → glyph + U+XXXX; invisible whitespace/zero-width → named (e.g.
-`NON-BREAKING SPACE (U+00A0)`). When multiple exact matches exist, also reports
-**normalized-equal occurrences** with different whitespace (near-misses the
-exact match missed). All edits in a call are validated before any file is
-written (atomic), and every failure is reported so the model fixes all in one
-retry.
+`NON-BREAKING SPACE (U+00A0)`). For the top candidate at ≥90% similarity the
+**full window text is printed** (not a 4-line preview) — it has the same line
+count as oldText, so it is a copy-pasteable corrected `oldText`. When multiple
+exact matches exist, also reports **normalized-equal occurrences** with
+different whitespace (near-misses the exact match missed). All edits in a call
+are validated before any file is written (atomic), and every failure is reported
+so the model fixes all in one retry.
 
 **Disambiguation** — `anchor` (a unique nearby string, self-validating) picks
 the right occurrence; `replaceAll` for all of them. No line numbers required
@@ -53,7 +67,8 @@ with `allowAnchorRepeat: true` for the legitimate "repeat and extend" idiom.
 **Diff-as-result** — successful edits return the full diff in the result
 text (for LLM self-verification), plus the line each edit landed on
 (`edits[N] → line X`, with an `(anchored)` tag when an anchor disambiguated
-among near-identical sites). Not just the TUI.
+among near-identical sites), under a per-file header that names the match
+strategy. Not just the TUI.
 
 **No-op detection** — an edit whose `oldText` and `newText` are identical (a
 common paste-the-same-thing-on-both-sides typo) is flagged as a no-op and
@@ -103,8 +118,9 @@ match.
 
 ## Files
 
-- `match.ts` — pure matching engine (cascade, anchor, replaceAll, overlap
-  detection, byte preservation, **insert modes**). No pi imports.
+- `match.ts` — pure matching engine (cascade, escape tolerance, anchor,
+  replaceAll, overlap detection, byte preservation, **insert modes**). No pi
+  imports.
 - `diagnostics.ts` — pure diagnostics (closest match, **char-level codepoint
   diff** via bounded LCS, three-tier rune rendering, occurrence context with `>>`
   markers, near-miss detection, duplicate-line guard, message formatting). No pi
@@ -114,8 +130,8 @@ match.
 - `match.test.ts` / `diagnostics.test.ts` — tests covering the HarnessKit
   matrix (whitespace, Unicode, indentation, stale context) plus anchor,
   replaceAll, overlap, byte-preservation, duplicate-line guard, near-miss
-  detection, no-op detection, and **codepoint-level char-diff / three-tier
-  rendering**.
+  detection, no-op detection, escape tolerance, and **codepoint-level char-diff /
+  three-tier rendering**.
 - `index.ts` — pi integration shell (tool registration, multi-file via nested
   withFileMutationQueue, atomic validate-all-first, path auto-lift, dryRun,
   post-exec diff, live preview in renderCall, self-contained error messages).
