@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { extractAtMentions } from "../shared/at-mentions";
 import { resolveAtMention } from "./resolve.js";
 
-const TEST_DIR = join(import.meta.dir, ".test-tmp");
+const TEST_DIR = join(tmpdir(), `at-mentions-test-${process.pid}`);
 
 describe("extractAtMentions", () => {
   test("extracts simple @path", () => {
