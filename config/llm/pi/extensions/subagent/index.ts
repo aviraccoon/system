@@ -26,7 +26,7 @@ import {
   findNearestProjectAgentsDir,
   loadAgentsFromDir,
 } from "./agents";
-import { renderCall as renderCallFn, renderResult as renderResultFn } from "./render";
+import { renderCall as renderCallFn, renderResult as renderResultFn, withSessionPaths } from "./render";
 import {
   getAvailableRoles,
   getFinalOutput,
@@ -236,7 +236,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
             if (isError) {
               const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
               return {
-                content: [{ type: "text", text: `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}` }],
+                content: [
+                  {
+                    type: "text",
+                    text: withSessionPaths(`Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}`, [
+                      result.sessionFile,
+                    ]),
+                  },
+                ],
                 details: makeDetails("chain")(results),
                 isError: true,
               };
@@ -244,7 +251,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
             previousOutput = getFinalOutput(result.messages);
           }
           return {
-            content: [{ type: "text", text: getFinalOutput(results[results.length - 1].messages) || "(no output)" }],
+            content: [
+              {
+                type: "text",
+                text: withSessionPaths(getFinalOutput(results[results.length - 1].messages) || "(no output)", [
+                  results[results.length - 1].sessionFile,
+                ]),
+              },
+            ],
             details: makeDetails("chain")(results),
           };
         }
@@ -330,7 +344,10 @@ export default function subagentExtension(pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+                text: withSessionPaths(
+                  `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+                  results.map((r) => r.sessionFile),
+                ),
               },
             ],
             details: makeDetails("parallel")(results),
@@ -367,13 +384,23 @@ export default function subagentExtension(pi: ExtensionAPI) {
           if (isError) {
             const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
             return {
-              content: [{ type: "text", text: `Agent ${result.stopReason || "failed"}: ${errorMsg}` }],
+              content: [
+                {
+                  type: "text",
+                  text: withSessionPaths(`Agent ${result.stopReason || "failed"}: ${errorMsg}`, [result.sessionFile]),
+                },
+              ],
               details: makeDetails("single")([result]),
               isError: true,
             };
           }
           return {
-            content: [{ type: "text", text: getFinalOutput(result.messages) || "(no output)" }],
+            content: [
+              {
+                type: "text",
+                text: withSessionPaths(getFinalOutput(result.messages) || "(no output)", [result.sessionFile]),
+              },
+            ],
             details: makeDetails("single")([result]),
           };
         }

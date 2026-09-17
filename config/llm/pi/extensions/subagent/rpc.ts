@@ -15,6 +15,7 @@ import { createDebugLogger } from "../shared/debug";
 import { loadConfig, resolveRole } from "../shared/model-roles";
 import { BASH_SANDBOX_ENV } from "../shared/sandbox";
 import type { AgentConfig } from "./agents";
+import { nudgeAt, nudgeMessage } from "./turn-budget";
 
 const SUBAGENT_SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-sessions");
 const debugLog = createDebugLogger("subagent", "renderResult.log");
@@ -66,6 +67,8 @@ export interface SingleResult {
   stderr: string;
   usage: UsageStats;
   userInputs?: UserInput[];
+  /** Path to the child's transcript, so the caller can read what a run actually did. */
+  sessionFile?: string;
   role?: string; // role name used for model resolution
   model?: string; // resolved model ref
   stopReason?: string;
@@ -419,6 +422,7 @@ export async function runSingleAgent(
   let updateCount = 0; // how many times emitUpdate was called
   let turnCount = 0; // completed turns (turn_end events) — drives the maxTurns cap
   let maxTurnsReached = false; // child was aborted at the turn cap
+  let sentSessionQuery = false; // asked the child for its transcript path
 
   // ── Extension UI relay ──
   // Subagent's ctx.ui.confirm()/select()/input() emit extension_ui_request events on stdout.
@@ -535,6 +539,12 @@ export async function runSingleAgent(
 
         // ── Agent lifecycle ──
         if (eventType === "agent_start") {
+          // Ask once, as soon as the child is up: the path goes into the result so
+          // a capped or failed run can still be read afterwards.
+          if (!sentSessionQuery) {
+            sentSessionQuery = true;
+            writeRpcCommand(proc, { type: "get_session_state" });
+          }
           // Reset streaming state for live display
           isStreaming = false;
           streamEvents.length = 0;
@@ -598,6 +608,7 @@ export async function runSingleAgent(
         // turn count reaches maxTurns, send the RPC abort command. The child
         // aborts its active run and emits agent_end with the messages so far
         // (stopReason "aborted"), which the agent_end handler below collects.
+        // Shortly before that, steer it once to write up what it has.
         if (eventType === "turn_end") {
           turnCount++;
           if (turnCount >= maxTurns) {
@@ -612,6 +623,23 @@ export async function runSingleAgent(
                 if (!proc.killed) proc.kill("SIGKILL");
               }
             }, 3000);
+          } else if (nudgeAt(maxTurns) === turnCount) {
+            const message = nudgeMessage(turnCount, maxTurns);
+            writeRpcCommand(proc, { type: "steer", message });
+            // Recorded like a user steer so it appears in the live feed and the
+            // result display — otherwise the agent suddenly wrapping up looks
+            // unexplained.
+            streamEvents.push({ kind: "user", text: message });
+            currentResult.userInputs?.push({ text: message, turn: turnCount });
+            emitUpdate();
+          }
+        }
+
+        // ── Command responses ──
+        if (eventType === "response") {
+          if (event.command === "get_session_state") {
+            const data = event.data as { sessionFile?: unknown } | undefined;
+            if (typeof data?.sessionFile === "string") currentResult.sessionFile = data.sessionFile;
           }
         }
 

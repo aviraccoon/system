@@ -372,6 +372,14 @@ function renderParallel(details: SubagentDetails, expanded: boolean, theme: Them
 
 // ── entry ──
 
+/** Append the child transcript paths, so a caller can read what a run actually did. */
+export function withSessionPaths(text: string, files: Array<string | undefined>): string {
+  const paths = files.filter((file): file is string => Boolean(file));
+  if (paths.length === 0) return text;
+  const label = paths.length === 1 ? "subagent session" : "subagent sessions";
+  return `${text}\n\n[${label}: ${paths.join(", ")}]`;
+}
+
 export function renderResult(
   result: {
     content: Array<{ type: string; text?: string; name?: string; args?: Record<string, unknown> }>;
