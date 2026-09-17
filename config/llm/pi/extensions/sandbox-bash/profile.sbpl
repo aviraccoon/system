@@ -3,6 +3,10 @@
 ; Read-only shell for a delegated agent. Nothing here inspects the command —
 ; bash is a program launcher, so a command-name filter would check the string
 ; while the program it launches stays free. The kernel decides instead.
+;
+; Rule order matters: a later rule overrides an earlier one. The reopenings sit
+; above the credential denies so the denies win everywhere, including inside a
+; reopened directory.
 
 (allow default)
 
@@ -11,19 +15,43 @@
 ; they are covered by construction.
 (deny file-write*)
 (allow file-write*
-  (subpath (param "TMPDIR"))
-  (subpath (param "TMP"))
+  (subpath (param "SCRATCH_VAR_FOLDERS"))
+  (subpath (param "SCRATCH_TMP"))
   (literal "/dev/null")
   (literal "/dev/stdout")
   (literal "/dev/stderr")
   (literal "/dev/tty"))
 
-; No outbound network. This is what makes "reads everywhere" safe — without it a
-; command could ship whatever it read to anywhere.
+; No outbound network. This is what makes broad reads safe — without it a command
+; could ship whatever it read to anywhere. The Mach denies cover the services that
+; hold credentials: a keychain is reached by service name, not by path, so denying
+; ~/Library/Keychains alone leaves `security` and the pasteboard reachable.
 (deny network-outbound)
+(deny mach-lookup
+  (global-name "com.apple.securityd")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.pasteboard.1"))
 
-; Credential directories are unreadable. Reads are otherwise unrestricted,
-; because delegated work legitimately spans other repositories and note dirs.
+; Credential material is dotfiles, and a list of credential paths cannot stay
+; complete: new tools add new stores, and every store the list misses stays
+; readable. So the class is closed instead — every dot-entry directly under $HOME
+; — and the few paths tools need are reopened below. An unknown token file is
+; unreadable by default, which is the direction a boundary should fail in.
+(deny file-read* (regex (param "HOME_DOTFILES")))
+
+; Reopened because git treats a denied config path as fatal, mise needs its own
+; state, and the shell prefix is sourced by the user's profile. Everything else
+; under these directories stays denied by the rule above.
+(allow file-read*
+  (subpath (param "HOME_CONFIG_GIT"))
+  (subpath (param "HOME_CONFIG_MISE"))
+  (subpath (param "HOME_LOCAL_SHARE_MISE"))
+  (subpath (param "HOME_LOCAL_STATE_MISE"))
+  (subpath (param "HOME_CACHE_MISE"))
+  (literal (param "HOME_ZSHRC"))
+  (literal (param "HOME_SHELL_PROFILE")))
+
+; Credential stores, denied after the reopenings so they win inside them too.
 (deny file-read*
   (subpath (param "HOME_SSH"))
   (subpath (param "HOME_GPG"))
@@ -31,15 +59,60 @@
   (subpath (param "HOME_GH"))
   (subpath (param "HOME_DOCKER"))
   (subpath (param "HOME_OP"))
-  (subpath (param "HOME_KEYCHAINS"))
-  (literal (param "HOME_NETRC")))
+  (subpath (param "HOME_SOPS"))
+  (subpath (param "HOME_GCLOUD"))
+  (subpath (param "HOME_KUBE"))
+  (subpath (param "HOME_KEYCHAINS")))
 
-; Secret files by name — the same set the permission gate treats as sensitive,
-; because a key or token quoted into the agent's report travels to the model
-; provider, so blocking network alone is not enough.
+; Secret-bearing filenames, anywhere on the filesystem — the machine-level stores
+; above are not the whole problem. A checkout carries its own: terraform writes
+; generated credentials into state in plaintext, browser session state for e2e
+; tests is a live cookie jar, MCP config holds keys in `env` blocks, and registry
+; tokens live in per-repo rc files. The $HOME dotfile rule reaches only $HOME's own
+; entries, so none of these are covered by it.
+;
+; Matching on the path also blocks path resolution, so a scratch tree containing
+; one of these names cannot be removed either.
 (deny file-read*
   (regex #"/\.env(\.[^/]*)?$")
-  (regex #"/secrets?$")
   (regex #"/secrets/")
   (regex #"/[^/]*\.(pem|key|p12|pfx|cert|keystore)$")
-  (regex #"/id_(rsa|ed25519|ecdsa|dsa)"))
+  (regex #"/id_(rsa|ed25519|ecdsa|dsa)")
+  ; terraform state and vars, and the module cache beside them
+  (regex #"/[^/]*\.tfstate(\.backup)?$")
+  (regex #"/(^|/)\.terraform(/|$)")
+  (regex #"/[^/]*\.tfvars$")
+  (regex #"/terraform\.tfvars\.json$")
+  ; browser session state (Playwright storageState and friends)
+  (regex #"/(^|/)\.auth(/|$)")
+  ; MCP and agent config — env blocks hold provider keys inline
+  (regex #"/(^|/)\.mcp\.json$")
+  (regex #"/(^|/)\.cursor/mcp\.json$")
+  (regex #"/claude_desktop_config\.json$")
+  (regex #"/(^|/)settings\.local\.json$")
+  ; registry, forge and database auth files, in a repo or in $HOME
+  (regex #"/(^|/)\.npmrc$")
+  (regex #"/[^/]*\.yarnrc(\.yml)?$")
+  (regex #"/(^|/)\.netrc$")
+  (regex #"/(^|/)\.pypirc$")
+  (regex #"/(^|/)\.git-credentials$")
+  (regex #"/(^|/)\.?pgpass$")
+  (regex #"/(^|/)\.?my\.cnf$")
+  ; cloud SDK and service-account blobs
+  (regex #"/[^/]*service[-_]?account[^/]*\.json$")
+  (regex #"/google-services\.json$")
+  (regex #"/GoogleService-Info\.plist$")
+  (regex #"/application_default_credentials\.json$")
+  ; android signing
+  (regex #"/(^|/)(local|gradle|keystore)\.properties$")
+  ; key material the extension list above does not name
+  (regex #"/[^/]*\.(p8|jks|jceks|bks|ppk|asc|gpg|der|kdbx|ovpn|mobileprovision|provisionprofile)$")
+  ; conventional names, kept to config extensions so source files are not caught
+  (regex #"/(^|/)(auth|oauth)\.json$")
+  ; qualified only: a bare tokens.json is as often a design-token file as a secret
+  (regex #"/(^|/)(access|refresh|api|auth|client)[-_.]?tokens?\.(json|ya?ml|txt)$")
+  (regex #"/(^|/)apikeys?\.(json|ya?ml|txt)$")
+  (regex #"/[^/]*(secrets?|credentials?|passwords?|passwd)([-_.][^/]*)?\.(json|ya?ml|txt|ini|cfg|conf|toml|xml|properties|env|b64|enc)$")
+  ; leftover copies of a config, which keep the secret and lose the ignore rule
+  (regex #"/[^/]*\.(bak|orig|save|old|backup|swp|swo)$")
+  (regex #"/[^/]*~$"))

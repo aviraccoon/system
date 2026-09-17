@@ -13,27 +13,54 @@ export const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
 
 export interface SandboxPaths {
   home: string;
-  /** Real path of the temp dir — seatbelt matches resolved vnode paths, so
-   *  /var/folders must be given as /private/var/folders or it matches nothing. */
-  tmpdir: string;
-  /** Real path of the shared temp dir (/tmp → /private/tmp). */
-  tmp: string;
+}
+
+/**
+ * macOS scratch roots. Fixed rather than taken from `$TMPDIR`: a `TMPDIR`
+ * pointing under `$HOME` would otherwise make `$HOME` a write zone. Both are
+ * given in their resolved form — seatbelt matches vnode paths, so `/var/folders`
+ * and `/tmp` must be spelled `/private/...` or they match nothing.
+ */
+export const SCRATCH_VAR_FOLDERS = "/private/var/folders";
+export const SCRATCH_TMP = "/private/tmp";
+
+/** Escape a literal path so it can be embedded in a seatbelt regex. */
+export function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 /** `-D NAME=value` arguments for profile.sbpl. */
 export function profileParams(paths: SandboxPaths): string[] {
   const home = paths.home;
   return [
+    // Every dot-entry directly under $HOME is closed, then reopened only where a
+    // tool provably needs it. Credential material is dotfiles, and a list of
+    // credential paths cannot stay complete, so the class is what gets closed.
+    `HOME_DOTFILES=^${escapeRegex(home)}/\\.[^/]*`,
+    `HOME_CONFIG_GIT=${home}/.config/git`,
+    `HOME_CONFIG_MISE=${home}/.config/mise`,
+    `HOME_LOCAL_SHARE_MISE=${home}/.local/share/mise`,
+    `HOME_LOCAL_STATE_MISE=${home}/.local/state/mise`,
+    `HOME_CACHE_MISE=${home}/.cache/mise`,
+    `HOME_ZSHRC=${home}/.zshrc`,
+    `HOME_SHELL_PROFILE=${home}/.shared-shell-profile.sh`,
+    // Denied after the reopenings, so these win inside them too.
     `HOME_SSH=${home}/.ssh`,
     `HOME_GPG=${home}/.gnupg`,
     `HOME_AWS=${home}/.aws`,
     `HOME_GH=${home}/.config/gh`,
     `HOME_DOCKER=${home}/.docker`,
     `HOME_OP=${home}/.config/op`,
+    `HOME_SOPS=${home}/.config/sops`,
+    `HOME_GCLOUD=${home}/.config/gcloud`,
+    `HOME_KUBE=${home}/.kube`,
     `HOME_KEYCHAINS=${home}/Library/Keychains`,
     `HOME_NETRC=${home}/.netrc`,
-    `TMPDIR=${paths.tmpdir}`,
-    `TMP=${paths.tmp}`,
+    `HOME_GIT_CREDENTIALS=${home}/.git-credentials`,
+    `HOME_NPMRC=${home}/.npmrc`,
+    `HOME_PYPIRC=${home}/.pypirc`,
+    `SCRATCH_VAR_FOLDERS=${SCRATCH_VAR_FOLDERS}`,
+    `SCRATCH_TMP=${SCRATCH_TMP}`,
   ];
 }
 

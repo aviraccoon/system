@@ -3,26 +3,53 @@ import { BASH_SANDBOX_ENV, isConfinedBash, SANDBOX_COMMAND_ENV } from "../shared
 import { CONFINED_TOOL, READONLY_TOOL } from "../shared/shell-tools";
 import { formatReadonlyCall, profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode, shellQuote } from "./wrap";
 
-const PATHS = { home: "/Users/foo", tmpdir: "/private/var/folders/ab/T", tmp: "/private/tmp" };
+const PATHS = { home: "/Users/foo" };
 
 describe("profileParams", () => {
   const params = profileParams(PATHS);
 
-  it("names the credential directories the profile denies", () => {
-    expect(params).toContain("HOME_SSH=/Users/foo/.ssh");
-    expect(params).toContain("HOME_GPG=/Users/foo/.gnupg");
-    expect(params).toContain("HOME_AWS=/Users/foo/.aws");
-    expect(params).toContain("HOME_GH=/Users/foo/.config/gh");
-    expect(params).toContain("HOME_DOCKER=/Users/foo/.docker");
-    expect(params).toContain("HOME_OP=/Users/foo/.config/op");
-    expect(params).toContain("HOME_KEYCHAINS=/Users/foo/Library/Keychains");
-    expect(params).toContain("HOME_NETRC=/Users/foo/.netrc");
+  it("names the credential stores the profile denies", () => {
+    for (const expected of [
+      "HOME_SSH=/Users/foo/.ssh",
+      "HOME_GPG=/Users/foo/.gnupg",
+      "HOME_AWS=/Users/foo/.aws",
+      "HOME_GH=/Users/foo/.config/gh",
+      "HOME_DOCKER=/Users/foo/.docker",
+      "HOME_OP=/Users/foo/.config/op",
+      "HOME_SOPS=/Users/foo/.config/sops",
+      "HOME_GCLOUD=/Users/foo/.config/gcloud",
+      "HOME_KUBE=/Users/foo/.kube",
+      "HOME_KEYCHAINS=/Users/foo/Library/Keychains",
+      "HOME_NETRC=/Users/foo/.netrc",
+    ]) {
+      expect(params).toContain(expected);
+    }
   });
 
-  it("passes temp dirs as the paths seatbelt will see", () => {
-    // seatbelt matches resolved vnodes, so /var/folders would match nothing.
-    expect(params).toContain("TMPDIR=/private/var/folders/ab/T");
-    expect(params).toContain("TMP=/private/tmp");
+  it("closes every dot-entry under home, reopening only what tools need", () => {
+    // The deny list can never be complete, so the class is closed instead.
+    expect(params).toContain("HOME_DOTFILES=^/Users/foo/\\.[^/]*");
+    for (const reopened of [
+      "HOME_CONFIG_GIT=/Users/foo/.config/git",
+      "HOME_CONFIG_MISE=/Users/foo/.config/mise",
+      "HOME_LOCAL_SHARE_MISE=/Users/foo/.local/share/mise",
+      "HOME_LOCAL_STATE_MISE=/Users/foo/.local/state/mise",
+      "HOME_CACHE_MISE=/Users/foo/.cache/mise",
+      "HOME_ZSHRC=/Users/foo/.zshrc",
+    ]) {
+      expect(params).toContain(reopened);
+    }
+  });
+
+  it("escapes regex metacharacters in the home path", () => {
+    expect(profileParams({ home: "/Users/a.b+c" })).toContain("HOME_DOTFILES=^/Users/a\\.b\\+c/\\.[^/]*");
+  });
+
+  it("keeps the scratch roots fixed and in resolved form", () => {
+    // Fixed rather than taken from $TMPDIR: a TMPDIR under $HOME would otherwise
+    // make $HOME a write zone. seatbelt matches vnodes, so /private/... is required.
+    expect(params).toContain("SCRATCH_VAR_FOLDERS=/private/var/folders");
+    expect(params).toContain("SCRATCH_TMP=/private/tmp");
   });
 });
 

@@ -62,26 +62,33 @@ export default function sandboxBash(pi: ExtensionAPI) {
   delete process.env[BASH_SANDBOX_ENV];
   if (mode === null) return;
 
-  const params = profileParams({
-    home: real(os.homedir()),
-    tmpdir: real(os.tmpdir()),
-    tmp: real("/tmp"),
-  });
+  const params = profileParams({ home: real(os.homedir()) });
 
-  // Smoke-test the profile before trusting it. A profile that fails to load
-  // would turn every bash call into a confusing sandbox error; refusing to
-  // register leaves bash unsandboxed and gate-confirmed, which is the safe
-  // degradation.
+  // Smoke-test the boundary, not the profile's syntax. `sandbox-exec ... -c :`
+  // exits 0 as long as the profile parses, so a deny that stops working would
+  // still set the marker and let the gate auto-allow a shell that only looks
+  // confined. The probe asserts what the boundary is for: a write outside scratch
+  // fails, a credential read fails, and a scratch write succeeds. Exit 0 means
+  // "boundary verified"; anything else refuses to register, which leaves bash
+  // unsandboxed and gate-confirmed.
   const probe: string[] = [];
   for (const param of params) probe.push("-D", param);
+  const boundaryProbe = [
+    `if touch "$HOME/.pi-sandbox-probe" 2>/dev/null; then rm -f "$HOME/.pi-sandbox-probe"; exit 1; fi`,
+    `for p in "$HOME/.ssh" "$HOME/.aws" "$HOME/.gnupg" "$HOME/.config/sops"; do`,
+    `  if [ -e "$p" ] && ls "$p" >/dev/null 2>&1; then exit 1; fi`,
+    `done`,
+    `f=$(mktemp 2>/dev/null) || exit 1`,
+    `rm -f "$f" || exit 1`,
+    `exit 0`,
+  ].join("\n");
   try {
-    execFileSync(SANDBOX_EXEC, [...probe, "-f", PROFILE, "/bin/sh", "-c", ":"], { stdio: "ignore" });
+    execFileSync(SANDBOX_EXEC, [...probe, "-f", PROFILE, "/bin/sh", "-c", boundaryProbe], { stdio: "ignore" });
   } catch {
     return;
   }
 
   const confinedTool = mode === "override" ? CONFINED_TOOL : READONLY_TOOL;
-  process.env[BASH_SANDBOX_ENV] = confinedTool;
 
   // The *definition*, not `createBashTool`: that one wraps the definition into an
   // AgentTool, and `wrapToolDefinition` copies only name/label/description/
@@ -128,6 +135,7 @@ export default function sandboxBash(pi: ExtensionAPI) {
 
   if (mode === "override") {
     pi.registerTool({ ...tool, execute });
+    process.env[BASH_SANDBOX_ENV] = confinedTool;
     return;
   }
 
@@ -139,12 +147,18 @@ export default function sandboxBash(pi: ExtensionAPI) {
     name: READONLY_TOOL,
     label: "bash (read-only)",
     description:
-      "Execute a shell command in a read-only sandbox: no writes outside the temp dir, no network. Use it to inspect state — git log/diff/show/status, rg, find, cat, jq, wc. It cannot write, install or fetch; those need `bash`. Returns stdout and stderr, truncated to the last lines or 50KB.",
+      "Execute a shell command in a read-only sandbox: no writes outside the temp dir, no network, no Docker. Use it to inspect state — git log/diff/show/status, rg, find, cat, jq, wc. It cannot write, install, fetch or reach the Docker daemon (that socket is equivalent to root on the host); those need `bash`. Returns stdout and stderr, truncated to the last lines or 50KB.",
     promptSnippet: "bash_readonly: read-only shell — never prompts",
     promptGuidelines: [
-      "ALWAYS reach for `bash_readonly` before `bash` when inspecting state: it is confined by the OS and never prompts, while `bash` prompts on every call.",
+      "ALWAYS reach for `bash_readonly` before `bash` when inspecting state: it is confined by the OS and never prompts, while `bash` prompts on every call. Docker is the exception — `docker ps` and friends need `bash`.",
     ],
     renderCall,
     execute,
   });
+
+  // Set only after the last registration succeeded. Registering can throw, and a
+  // marker set first would then auto-allow the unrestricted built-in `bash` with
+  // no confirmation — the same fail-open shape as a marker left behind by a
+  // reload.
+  process.env[BASH_SANDBOX_ENV] = confinedTool;
 }
