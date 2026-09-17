@@ -65,7 +65,7 @@ its quoting cannot break out of the wrapper.
 
 | File | Purpose |
 |------|---------|
-| `index.ts` | Activation, smoke test, `bash` override via `createBashTool`'s spawn hook |
+| `index.ts` | Activation, smoke test, `bash` override via `createBashToolDefinition`'s spawn hook |
 | `wrap.ts` | Pure: `-D` params, shell quoting, the wrapper command |
 | `profile.sbpl` | The Seatbelt profile |
 | `wrap.test.ts` | Tests for the wrapper |
