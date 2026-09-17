@@ -24,6 +24,15 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **web-search-core** | Bridge symlink to `config/llm/mcp/web-search/providers` (search provider code shared with other hosts) -- not an extension, no `index.ts` |
 | **shared/** | Shared modules (not an extension -- no `index.ts`) |
 
+## Agents
+
+Definitions for the `subagent` extension, in `agents/` (deployed to `~/.pi/agent/agents/`).
+
+| Agent | Use for |
+|-------|---------|
+| **researcher** | Investigating code, searching, web research -- returns findings |
+| **reviewer** | Reviewing a change for regressions, bugs, test gaps -- reports, never edits |
+
 ## Development
 
 Extensions are symlinked live to `~/.pi/agent/extensions/`. Edit source, run `/reload` in pi -- no nix-switch needed.
