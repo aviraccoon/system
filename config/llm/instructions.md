@@ -54,6 +54,8 @@ Prefer structural tools over regex for code structure: `ast-grep` over `rg` for 
 
 `rg` (ripgrep) recurses by default but does NOT show line numbers — add `-n` when you want them (e.g. to report `file:42`). No escaping in rg patterns: bare `|` and `+` mean alternation/quantifier; backslash-escaped ones are literals.
 
+Never silence diagnostics: no `2>/dev/null` on a command whose failure matters, no piping diagnostic output through `head`. A silenced error looks like an empty result, and the next command builds on that. If output must be bounded, capture it to a file and read that.
+
 Read referenced docs, skill files, and journal entries in full before acting on them — don't skim or read the first N lines. Partial reads lead to stale assumptions and wrong edits.
 
 For web search, prefer the `web_search` tool from the `web-search` MCP server over any host built-in (e.g. Claude Code's `WebSearch`) — much faster with better results.
@@ -117,7 +119,7 @@ Never edit AGENTS.md or AGENTS.local.md directly — suggest the change. If the 
 
 ## Version Control
 
-Use git for version-control operations. Check recent history (`git log --oneline -10`) for conventions (scopes, format, bodies) before committing; use an existing scope, don't invent one. Split changes spanning concerns into separate commits (`git add -p`, or the non-interactive `git diff -U0` → keep wanted hunks → `git apply --cached --unidiff-zero` → `git commit`). Project AGENTS.md guidelines override these. Update docs alongside code changes.
+Use git for version-control operations. Check recent history (`git log --oneline -10`) for conventions (scopes, format, bodies) before committing; use an existing scope, don't invent one. Split changes spanning concerns into separate commits (`git add -p`, or the non-interactive `git diff -U0` → keep wanted hunks → `git apply --cached --unidiff-zero` → `git commit`). Before committing, a review subagent (in pi, `reviewer`) judges the message against the staged diff — batch adjacent small commits into one sweep. Project AGENTS.md guidelines override these. Update docs alongside code changes.
 
 **Machine-local changes** (keep working locally, never push): permanent overrides of *tracked* files → `git update-index --skip-worktree <path>` — invisible to status/staging (even `git add -A`); a checkout that would overwrite the file refuses rather than clobbers; revert with `--no-skip-worktree`, list with `git ls-files -v | grep '^S'`, and document it in the repo's `AGENTS.local.md` (it's invisible). In-progress work → a branch; maybe-dead local tooling → `git stash`; brand-new local files → `.git/info/exclude`.
 
