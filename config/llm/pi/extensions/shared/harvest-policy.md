@@ -1,5 +1,6 @@
 Time tracking: the `harvest` CLI.
-- Log only when the user asks. If a work session gets underway with no timer running (`harvest status`), ask once whether to start one; never start unprompted.
+- Start the timer before the first task action, without asking: `harvest start <alias>`. Pick the alias the work belongs to; if that only becomes clear later, start the project's generic alias and switch once the right alias is clear.
+- Log entries only when the user asks.
 - `harvest status` — running timer + today's total
 - `harvest start <alias> [-n note] [--offset 25m]` — stops any running timer first
 - `harvest stop`
