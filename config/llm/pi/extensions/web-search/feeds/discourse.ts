@@ -1,6 +1,10 @@
 /**
  * Discourse feed provider — fetches topic JSON and renders the post tree.
  *
+ * ALWAYS fetch forum URLs with web_fetch (topics, boards, search, listings).
+ * Never curl/wget a forum or scrape it through a shell pipeline, and never ask
+ * whether to use web_fetch for one — this provider is the supported path.
+ *
  * Why: Discourse virtualizes its post list — beyond ~20 posts, older posts are
  * not in the DOM at all, so the HTML scrape silently loses them. The topic
  * `.json` endpoint carries every post (first 20 inline, rest via ?page=N).
@@ -592,6 +596,7 @@ type HttpFetch = NonNullable<FeedContext["httpFetch"]>;
 export const discourseProvider: FeedProvider = {
   matches,
   hint:
+    "ALWAYS use web_fetch for forum/Discourse URLs, never curl or scrape. " +
     "Discourse forums (any host): /t/<slug>/<id> topics, /c/<slugs>[/<id>][/l/<filter>] boards, " +
     "/categories index, /latest|/new|/unread|/top listings, /search?q=... (filters: #category, @user, " +
     "in:title, order:latest, status:...) — all render as structured markdown.",
