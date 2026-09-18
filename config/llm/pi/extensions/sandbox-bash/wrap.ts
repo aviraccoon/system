@@ -39,6 +39,8 @@ export function profileParams(paths: SandboxPaths): string[] {
     `HOME_DOTFILES=^${escapeRegex(home)}/\\.[^/]*`,
     `HOME_CONFIG_GIT=${home}/.config/git`,
     `HOME_CONFIG_MISE=${home}/.config/mise`,
+    // On PATH: without it, PATH lookup fails for every binary in the directory.
+    `HOME_LOCAL_BIN=${home}/.local/bin`,
     `HOME_LOCAL_SHARE_MISE=${home}/.local/share/mise`,
     `HOME_LOCAL_STATE_MISE=${home}/.local/state/mise`,
     `HOME_CACHE_MISE=${home}/.cache/mise`,
@@ -55,10 +57,6 @@ export function profileParams(paths: SandboxPaths): string[] {
     `HOME_GCLOUD=${home}/.config/gcloud`,
     `HOME_KUBE=${home}/.kube`,
     `HOME_KEYCHAINS=${home}/Library/Keychains`,
-    `HOME_NETRC=${home}/.netrc`,
-    `HOME_GIT_CREDENTIALS=${home}/.git-credentials`,
-    `HOME_NPMRC=${home}/.npmrc`,
-    `HOME_PYPIRC=${home}/.pypirc`,
     `SCRATCH_VAR_FOLDERS=${SCRATCH_VAR_FOLDERS}`,
     `SCRATCH_TMP=${SCRATCH_TMP}`,
   ];

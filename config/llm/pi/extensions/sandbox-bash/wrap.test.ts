@@ -1,9 +1,12 @@
 import { describe, expect, it } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { BASH_SANDBOX_ENV, isConfinedBash, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
 import { CONFINED_TOOL, READONLY_TOOL } from "../shared/shell-tools";
 import { formatReadonlyCall, profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode, shellQuote } from "./wrap";
 
 const PATHS = { home: "/Users/foo" };
+const PROFILE = join(import.meta.dir, "profile.sbpl");
 
 describe("profileParams", () => {
   const params = profileParams(PATHS);
@@ -20,7 +23,6 @@ describe("profileParams", () => {
       "HOME_GCLOUD=/Users/foo/.config/gcloud",
       "HOME_KUBE=/Users/foo/.kube",
       "HOME_KEYCHAINS=/Users/foo/Library/Keychains",
-      "HOME_NETRC=/Users/foo/.netrc",
     ]) {
       expect(params).toContain(expected);
     }
@@ -32,6 +34,7 @@ describe("profileParams", () => {
     for (const reopened of [
       "HOME_CONFIG_GIT=/Users/foo/.config/git",
       "HOME_CONFIG_MISE=/Users/foo/.config/mise",
+      "HOME_LOCAL_BIN=/Users/foo/.local/bin",
       "HOME_LOCAL_SHARE_MISE=/Users/foo/.local/share/mise",
       "HOME_LOCAL_STATE_MISE=/Users/foo/.local/state/mise",
       "HOME_CACHE_MISE=/Users/foo/.cache/mise",
@@ -50,6 +53,27 @@ describe("profileParams", () => {
     // make $HOME a write zone. seatbelt matches vnodes, so /private/... is required.
     expect(params).toContain("SCRATCH_VAR_FOLDERS=/private/var/folders");
     expect(params).toContain("SCRATCH_TMP=/private/tmp");
+  });
+});
+
+describe("params and profile agree", () => {
+  // A `-D NAME=value` the profile never reads is dead weight; a `(param "NAME")`
+  // the wrapper never passes makes every confined call fail at runtime with
+  // "unsupported syntax: kleene star", naming neither the param nor the profile.
+  const profile = readFileSync(PROFILE, "utf8");
+
+  it("declares no param the profile ignores", () => {
+    for (const param of profileParams(PATHS)) {
+      const name = param.slice(0, param.indexOf("="));
+      expect(profile).toContain(`(param "${name}")`);
+    }
+  });
+
+  it("passes every param the profile asks for", () => {
+    const declared = new Set(profileParams(PATHS).map((p) => p.slice(0, p.indexOf("="))));
+    for (const [, name] of profile.matchAll(/\(param "([A-Z_]+)"\)/g)) {
+      expect(declared).toContain(name);
+    }
   });
 });
 

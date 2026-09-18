@@ -10,9 +10,9 @@
 
 (allow default)
 
-; No writes anywhere. Dotfiles, .git/hooks and .mcp.json need no explicit
-; protection: with writes denied by default and only scratch space re-allowed,
-; they are covered by construction.
+; No writes anywhere. With writes denied by default and only scratch space
+; re-allowed, dotfiles, .git/hooks and .mcp.json are covered without a rule of their
+; own.
 (deny file-write*)
 (allow file-write*
   (subpath (param "SCRATCH_VAR_FOLDERS"))
@@ -23,9 +23,13 @@
   (literal "/dev/tty"))
 
 ; No outbound network. This is what makes broad reads safe — without it a command
-; could ship whatever it read to anywhere. The Mach denies cover the services that
+; could ship whatever it read anywhere. The Mach denies cover the services that
 ; hold credentials: a keychain is reached by service name, not by path, so denying
 ; ~/Library/Keychains alone leaves `security` and the pasteboard reachable.
+;
+; This covers unix sockets too, which is deliberate: the Docker socket is root on
+; the host, and a client that can ask the nix daemon to build has asked for code to
+; run outside this profile. Both need the write+network posture.
 (deny network-outbound)
 (deny mach-lookup
   (global-name "com.apple.securityd")
@@ -36,15 +40,20 @@
 ; complete: new tools add new stores, and every store the list misses stays
 ; readable. So the class is closed instead — every dot-entry directly under $HOME
 ; — and the few paths tools need are reopened below. An unknown token file is
-; unreadable by default, which is the direction a boundary should fail in.
+; unreadable by default, which is the safe direction for a boundary to fail.
 (deny file-read* (regex (param "HOME_DOTFILES")))
 
 ; Reopened because git treats a denied config path as fatal, mise needs its own
-; state, and the shell prefix is sourced by the user's profile. Everything else
+; state, and a login shell sources its startup files (`.zshrc`,
+; `.shared-shell-profile.sh`). `$HOME/.local/bin` is
+; the same shape at directory level: it is on PATH, and denying the directory
+; makes every binary in it disappear from PATH resolution ("command not found"
+; for a program that runs fine when named by absolute path). Everything else
 ; under these directories stays denied by the rule above.
 (allow file-read*
   (subpath (param "HOME_CONFIG_GIT"))
   (subpath (param "HOME_CONFIG_MISE"))
+  (subpath (param "HOME_LOCAL_BIN"))
   (subpath (param "HOME_LOCAL_SHARE_MISE"))
   (subpath (param "HOME_LOCAL_STATE_MISE"))
   (subpath (param "HOME_CACHE_MISE"))
@@ -73,9 +82,14 @@
 ;
 ; Matching on the path also blocks path resolution, so a scratch tree containing
 ; one of these names cannot be removed either.
+;
+; `.env` is deliberately absent. Those files hold 1Password `op://` references, and
+; nothing in this shell can resolve one (`~/.config/op` and the keychain are denied,
+; and there is no network). Where one is tracked, the deny broke `git status` in that
+; repo.
 (deny file-read*
-  (regex #"/\.env(\.[^/]*)?$")
-  (regex #"/secrets/")
+  ; `secrets/` can hold source or docs, so only file-shaped names match.
+  (regex #"/secrets/[^/]*\.(ya?ml|json|env|txt|ini|cfg|conf|toml|xml|properties|b64|enc|pem|key|p12|pfx|tfvars|tfstate|csv|log|sql)$")
   (regex #"/[^/]*\.(pem|key|p12|pfx|cert|keystore)$")
   (regex #"/id_(rsa|ed25519|ecdsa|dsa)")
   ; terraform state and vars, and the module cache beside them
@@ -90,9 +104,9 @@
   (regex #"/(^|/)\.cursor/mcp\.json$")
   (regex #"/claude_desktop_config\.json$")
   (regex #"/(^|/)settings\.local\.json$")
-  ; registry, forge and database auth files, in a repo or in $HOME
-  (regex #"/(^|/)\.npmrc$")
-  (regex #"/[^/]*\.yarnrc(\.yml)?$")
+  ; registry, forge and database auth files, in a repo or in $HOME. `.npmrc` and
+  ; `.yarnrc*` are absent: their contents are settings, and a repo-level one is
+  ; readable through the read tool anyway, so the deny was one channel of two.
   (regex #"/(^|/)\.netrc$")
   (regex #"/(^|/)\.pypirc$")
   (regex #"/(^|/)\.git-credentials$")
@@ -105,14 +119,17 @@
   (regex #"/application_default_credentials\.json$")
   ; android signing
   (regex #"/(^|/)(local|gradle|keystore)\.properties$")
-  ; key material the extension list above does not name
+  ; key material the file-extension pattern above does not name
   (regex #"/[^/]*\.(p8|jks|jceks|bks|ppk|asc|gpg|der|kdbx|ovpn|mobileprovision|provisionprofile)$")
   ; conventional names, kept to config extensions so source files are not caught
   (regex #"/(^|/)(auth|oauth)\.json$")
   ; qualified only: a bare tokens.json is as often a design-token file as a secret
   (regex #"/(^|/)(access|refresh|api|auth|client)[-_.]?tokens?\.(json|ya?ml|txt)$")
   (regex #"/(^|/)apikeys?\.(json|ya?ml|txt)$")
-  (regex #"/[^/]*(secrets?|credentials?|passwords?|passwd)([-_.][^/]*)?\.(json|ya?ml|txt|ini|cfg|conf|toml|xml|properties|env|b64|enc)$")
+  ; The keyword has to end the stem, so `password-reset-de-CH.txt` (an email
+  ; template in a repo) is not a credential while `db_secrets.yaml` and
+  ; `passwords.txt` still are.
+  (regex #"/([^/]*[-_.])?(secrets?|credentials?|passwords?|passwd)\.(json|ya?ml|txt|ini|cfg|conf|toml|xml|properties|env|b64|enc)$")
   ; leftover copies of a config, which keep the secret and lose the ignore rule
   (regex #"/[^/]*\.(bak|orig|save|old|backup|swp|swo)$")
   (regex #"/[^/]*~$"))
