@@ -9,9 +9,11 @@ import {
   isBashAllowed,
   isInsideDir,
   isPathAllowed,
+  isReadSensitivePath,
   isSensitivePath,
   matchGlob,
   resolveFilePath,
+  sensitiveReadDecision,
   shouldAutoAllow,
   stripShellPreamble,
   suggestPrefix,
@@ -208,6 +210,32 @@ describe("isSensitivePath", () => {
 
   test("nested .env is sensitive", () => {
     expect(isSensitivePath("apps/backend/.env")).toBe(true);
+  });
+
+  // `read`/`grep` get the same check as the shell profile, minus `.env`: those hold
+  // op:// references and the shell hands them over, so a prompt would buy nothing.
+  describe("isReadSensitivePath", () => {
+    test(".env is not sensitive on the read path", () => {
+      expect(isReadSensitivePath(".env")).toBe(false);
+      expect(isReadSensitivePath("apps/backend/.env")).toBe(false);
+    });
+
+    test(".env.example is not sensitive on the read path", () => {
+      expect(isReadSensitivePath(".env.example")).toBe(false);
+      expect(isReadSensitivePath("apps/backend/.env.local")).toBe(false);
+    });
+
+    test("keys, ssh material and secret directories still are", () => {
+      expect(isReadSensitivePath("certs/server.pem")).toBe(true);
+      expect(isReadSensitivePath("deploy/key.p12")).toBe(true);
+      expect(isReadSensitivePath("config/secrets/db.yaml")).toBe(true);
+      expect(isReadSensitivePath("/Users/u/.ssh/id_ed25519")).toBe(true);
+    });
+
+    test("ordinary files are not", () => {
+      expect(isReadSensitivePath("src/environment.ts")).toBe(false);
+      expect(isReadSensitivePath("README.md")).toBe(false);
+    });
   });
 
   test(".pem file is sensitive", () => {
@@ -484,6 +512,35 @@ describe("decide", () => {
     // unknown-tool branch and confirm on every call in Careful mode.
     expect(decide("todo_check", {}, cwd, state).action).toBe("allow");
     expect(decide("describe_image", { path: "shot.png" }, cwd, state).action).toBe("allow");
+  });
+
+  // `read` and `grep` execute in the agent process, so the seatbelt profile does not
+  // cover them. Subagents get the check the shell gives their `bash`.
+  test("a sensitive read is confirmed instead of allowed", () => {
+    const state = stateWith({ mode: "careful" });
+    expect(sensitiveReadDecision("read", { path: "./certs/server.pem" }, cwd, state)).toEqual({
+      action: "confirm",
+      confirmType: "sensitive",
+      displayPath: "certs/server.pem",
+    });
+    expect(sensitiveReadDecision("grep", { pattern: "x", path: "config/secrets/db.yaml" }, cwd, state)).not.toBeNull();
+  });
+
+  test("reads the shell already hands over need no prompt", () => {
+    const state = stateWith({ mode: "careful" });
+    expect(sensitiveReadDecision("read", { path: ".env" }, cwd, state)).toBeNull();
+    expect(sensitiveReadDecision("read", { path: "src/main.ts" }, cwd, state)).toBeNull();
+  });
+
+  test("a session grant stops the prompt", () => {
+    const state = stateWith({ mode: "careful", allowedPaths: ["certs/server.pem"] });
+    expect(sensitiveReadDecision("read", { path: "certs/server.pem" }, cwd, state)).toBeNull();
+  });
+
+  test("a grep with no path names no target", () => {
+    const state = stateWith({ mode: "careful" });
+    expect(sensitiveReadDecision("grep", { pattern: "x" }, cwd, state)).toBeNull();
+    expect(sensitiveReadDecision("ls", { path: "." }, cwd, state)).toBeNull();
   });
 
   // Delegation

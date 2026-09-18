@@ -43,6 +43,7 @@ import {
   MODE_DESCRIPTIONS,
   MODE_LABELS,
   MODE_SHORT,
+  sensitiveReadDecision,
   shouldAutoAllow,
   suggestPrefix,
 } from "./logic";
@@ -601,6 +602,22 @@ export default function permissionGate(pi: ExtensionAPI) {
     if (isConfinedBash(event.toolName)) return undefined;
 
     let decision = decide(event.toolName, event.input as Record<string, unknown>, ctx.cwd, state);
+
+    // `read` and `grep` run in the agent process, where the seatbelt profile cannot
+    // reach: a delegated agent could pull a credential into its context — and from
+    // there to the model provider — with no prompt at all. Subagents only; in the
+    // main session the user is present and reading those files is deliberate. The
+    // child's confirm is relayed to the parent TUI, so this is a prompt, not a
+    // silent allow.
+    if (process.env.PI_SUBAGENT === "1") {
+      const sensitiveRead = sensitiveReadDecision(
+        event.toolName,
+        event.input as Record<string, unknown>,
+        ctx.cwd,
+        state,
+      );
+      if (sensitiveRead) decision = sensitiveRead;
+    }
     let tirithWarning: string | undefined;
     let tirithNote: string | undefined;
 

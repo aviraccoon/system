@@ -114,6 +114,10 @@ Always confirmed (except in Allow All mode), even with tool overrides:
 `.env*`, `*.pem`, `*.key`, `*.p12`, `secrets/`, `.ssh/`, `.gnupg/`,
 `id_rsa*`, `id_ed25519*`
 
+For a subagent, `read` and `grep` on those paths confirm too — they run in the agent
+process, where the confined shell's profile does not reach. `.env` is exempt: the shell
+allows it, so a prompt would buy nothing. The main session's reads are not gated.
+
 ## tirith integration (optional, bash only)
 
 When [`tirith`](https://github.com/sheeki03/tirith) is on PATH, the gate runs a

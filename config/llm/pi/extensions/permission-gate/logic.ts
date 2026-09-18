@@ -127,6 +127,48 @@ export function isSensitivePath(filePath: string): boolean {
   return SENSITIVE_PATTERNS.some((p) => p.test(basename) || p.test(filePath));
 }
 
+/** Tools that return file *contents* into the agent's context. `ls` and `find`
+ *  return names only, and the confined shell covers those anyway. */
+export const CONTENT_READ_TOOLS = ["read", "grep"];
+
+/** Path a content-reading call targets, or null when it names none. `grep` with no
+ *  `path` searches the whole cwd, which no single path stands for. */
+export function contentReadTarget(toolName: string, input: Record<string, unknown>): string | null {
+  if (!CONTENT_READ_TOOLS.includes(toolName)) return null;
+  const raw = input.path;
+  return typeof raw === "string" && raw.length > 0 ? raw : null;
+}
+
+/** Sensitive, for a *read*. `.env` is exempt: those files hold 1Password `op://`
+ *  references, the shell profile allows them, and blocking the read tool would add
+ *  a prompt for a file the shell hands over anyway. Writes still confirm. */
+export function isReadSensitivePath(filePath: string): boolean {
+  const parts = filePath.split("/");
+  const basename = parts[parts.length - 1] ?? "";
+  if (/^\.env(\..+)?$/.test(basename)) return false;
+  return isSensitivePath(filePath);
+}
+
+/** Confirmation a content read needs, or null when it needs none. `read` and `grep`
+ *  run in the agent process, where the seatbelt profile cannot reach, so this is the
+ *  same disclosure the confined shell blocks through the other channel. */
+export function sensitiveReadDecision(
+  toolName: string,
+  input: Record<string, unknown>,
+  cwd: string,
+  state: GateState,
+): GateDecision | null {
+  const raw = contentReadTarget(toolName, input);
+  if (raw === null) return null;
+  const target = resolveFilePath(raw, cwd);
+  if (!isReadSensitivePath(target) || isPathAllowed(target, cwd, state)) return null;
+  return {
+    action: "confirm",
+    confirmType: "sensitive",
+    displayPath: relative(cwd, target) || target,
+  };
+}
+
 /** Strip leading cd/pushd and shell operators to find the real command.
  *  Handles quoted arguments (paths with spaces). */
 export function stripShellPreamble(command: string): string {
