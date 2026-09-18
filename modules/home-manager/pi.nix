@@ -440,6 +440,12 @@ in
         config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/system/config/llm/pi/agents";
     }
 
+    # Prompt templates (slash commands): symlinked to live source.
+    {
+      ".pi/agent/prompts".source =
+        config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/system/config/llm/pi/prompts";
+    }
+
     # Skills: whole-directory symlinks to live sources (shared list defined in llm-shared.nix).
     (lib.listToAttrs (
       map (s: {
