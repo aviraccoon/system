@@ -1,25 +1,24 @@
 # edit-guard
 
-Deterministic content-policy checks on files the agent edits. When a written
-rule ("TODO.md has no done items", "no journal references in public code")
-keeps losing to the agent's training gravity, mirror it here as line patterns
-instead of hoping the prompt sticks.
+Content-policy checks on files the agent edits. A rule written in prose
+("TODO.md has no done items", "no journal references in public code") that keeps
+losing to the model's habits is mirrored here as line patterns.
 
 ## How it works
 
 - On every `write`/`edit`/`patch` tool result, each touched file is scanned
   with the rules whose matcher accepts it. Violations are appended to the
   tool result as a self-contained block: matched lines with `>>` context plus
-  the verbatim policy statement. The agent can correct immediately, without
-  the user reading diffs.
+  the verbatim policy statement, so the agent can correct without the user
+  reading diffs.
 - Every `bash` command is scanned with `bash`-kind rules before it reaches
-  the agent; the same self-contained block is appended to the tool result.
+  the agent, with the same block appended.
 - `write` to an existing non-empty file is blocked once with a pointer to
   `patch` (write is for new files). Re-issuing the same write proceeds, so
   genuine full rewrites stay possible.
 - Silent when clean — no "0 violations" noise.
-- Files the edit did not change are never scanned; files written through
-  `bash` are out of scope (only the command line itself is checked).
+- Files the edit did not change are never scanned. A file written through
+  `bash` is never read — only the command line is checked.
 - `/todo-check [path]` sweeps the project journal `TODO.md` on demand and
   sends the report to the agent; the `todo_check` tool exposes the same scan
   to the agent itself (wrap-up use: finds stale violations no live edit

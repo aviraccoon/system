@@ -12,7 +12,7 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **edit-guard** | Content-policy checks on edited files and bash commands (TODO done-items, journal refs, output pipes); blocks write-to-existing-file once, stashing the blocked content in /tmp |
 | **harvest** | Timer status pill (running/idle) in sessions whose journal meta.json sets a `harvest` flag; refreshed after each turn |
 | **journal** | Journal/notes injection at session start, env var overrides |
-| **lsp** | Language server integration -- auto-diagnostics on edit/write, go-to-definition, hover, references, symbols, rename, code actions. CLI linters |
+| **lsp** | Language server integration -- auto-diagnostics on edit/write, go-to-definition, hover, references, symbols, rename, code actions. Also runs CLI linters |
 | **model-policy** | Per-project model policies based on provider tags. Blocks non-compliant models for sensitive projects (e.g., local/ZDR only) |
 | **patch** | Tolerant file editing with Unicode/whitespace normalization, anchor disambiguation, multi-file, closest-match diagnostics, atomic all-or-nothing |
 | **permission-gate** | Confirmation dialog for tool calls with LLM-generated safety verdicts and auto-classify |
@@ -47,10 +47,10 @@ mise pi-fmt      # biome auto-fix
 
 ## Adding an extension
 
-Create a directory under `extensions/` with an `index.ts` entry point. It's auto-discovered by `pi.nix` -- no Nix changes needed.
+Create a directory under `extensions/` with an `index.ts` entry point. `pi.nix` auto-discovers it.
 
 Convention: extract testable logic into a pure module (no pi imports), test with `bun test`.
 
 ## Sidecar LLM calls
 
-Extensions can make cheap LLM calls (via Haiku or similar) for auxiliary tasks using `shared/model-roles.ts`. Roles are configured in `~/.pi/agent/roles.json` (Nix-managed in `pi.nix`). See `permission-gate` (explain feature) and `draft-suggestion` for usage.
+Extensions can make sidecar LLM calls for auxiliary tasks through `shared/model-roles.ts`. Each role is a fallback chain of models, configured in `~/.pi/agent/roles.json` (Nix-managed in `pi.nix`). See `permission-gate` (explain feature) and `draft-suggestion` for usage.

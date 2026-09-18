@@ -9,7 +9,7 @@ Delegate tasks to specialized agents with isolated context windows. Spawns a sep
 3. **Streaming output** — in single mode, text, thinking, and tool calls appear live in the TUI during execution in exact arrival order. Chain/parallel show completion status only (see Known limitations)
 4. **Agent discovery** — `.md` files with YAML frontmatter define agent name, description, tools, role, extensions, and system prompt
 5. **Model roles** — agent frontmatter `role` field resolves to a model from `roles.json` via the shared `model-roles` module
-6. **Per-agent extensions** — subagents load with `--no-extensions` (no auto-discovery) and get `agents-loader` + `permission-gate` always, plus any extensions in the agent's `extensions` frontmatter field
+6. **Per-agent extensions** — each subagent loads a fixed pair plus whatever its `extensions` frontmatter declares (see Subagent environment)
 7. **Session storage** — each run writes a JSONL session to `~/.pi/agent/subagent-sessions/`, cleaned up after 7 days
 8. **Project-local agent gating** — prompts for confirmation before running agents from `.pi/agents/` in the project repo
 
@@ -131,7 +131,7 @@ Subagents run with:
 
 ## Known limitations
 
-- **RPC shutdown**: pi has no `shutdown` command, so the extension closes stdin after an `abort` for a clean exit 0, with SIGTERM/SIGKILL as a 3s escalation fallback. User abort uses a 5s SIGTERM/SIGKILL timeout.
-- **`custom()` in subagents**: extensions using `ctx.ui.custom()` will crash in subagent mode (returns undefined). The permission gate uses `confirm()`/`select()`/`input()` instead, which are relayed to the parent TUI.
+- **RPC shutdown**: stdin is closed after an `abort` (see step 7 above). User abort escalates on a 5s timeout instead of 3s.
+- **`custom()` in subagents**: the RPC UI table above has the behavior; the consequence is that `permission-gate` must use the relayed `confirm()`/`select()`/`input()` instead.
 - **Parallel/chain modes**: implemented but not heavily tested beyond basic scenarios.
 - **No live streaming in chain/parallel**: `onUpdate` forwarding is swallowed while a step is running, so chain/parallel only show completion status (`Parallel: X/Y done…`), not the interleaved live feed. `Ctrl+O` mid-run works in parallel (completed agents render full turns, running ones show `(running...)`), but the collapsed live-view caps don't apply — there's no live view to cap.

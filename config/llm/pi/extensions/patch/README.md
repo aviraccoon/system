@@ -1,15 +1,14 @@
 # patch
 
-A more forgiving file edit tool. Tolerant matching (whitespace/Unicode drift,
-literal escape sequences) reports how it matched, and gives rich diagnostics on
-failure.
+A forgiving file edit tool: tolerant matching (whitespace/Unicode drift, literal
+escape sequences), a note of how each edit matched, and diagnostics when it fails.
 
 ## Why
 
 The built-in `edit` fails on invisible-byte differences (Unicode arrows,
-tab↔space, indentation drift) and gives opaque diagnostics on failure ("Could
-not find the exact text"). This burns agent turns — a single failed edit cuts
-recovery probability by a third (SWE-agent NeurIPS 2024 data).
+tab↔space, indentation drift) and gives opaque diagnostics ("Could not find the
+exact text"). That costs agent turns: a single failed edit cuts recovery
+probability by a third (SWE-agent, NeurIPS 2024).
 
 ## What's different
 
@@ -27,21 +26,19 @@ Octofs):
 **Match receipt** — a successful edit reports how it matched, per file:
 `(match: exact)` or `(match: tolerant (whitespace/Unicode/tab differences
 normalized))`, with the tolerance named when escapes were interpreted. A write
-that was not byte-exact is never silent, so the agent can verify placement
-instead of assuming.
+that was not byte-exact is never silent.
 
-**Diagnostics** — on failure, returns the closest match with similarity % and
-line number, plus a **per-line codepoint breakdown** naming the exact differing
-characters (especially invisible Unicode: NBSP, zero-width space, em-dash vs
-`--`). Three rendering tiers: printable ASCII → bare literal; non-ASCII visible
-→ glyph + U+XXXX; invisible whitespace/zero-width → named (e.g.
-`NON-BREAKING SPACE (U+00A0)`). For the top candidate at ≥90% similarity the
-**full window text is printed** (not a 4-line preview) — it has the same line
-count as oldText, so it is a copy-pasteable corrected `oldText`. When multiple
-exact matches exist, also reports **normalized-equal occurrences** with
-different whitespace (near-misses the exact match missed). All edits in a call
-are validated before any file is written (atomic), and every failure is reported
-so the model fixes all in one retry.
+**Diagnostics** — on failure, returns the closest match with similarity % and line
+number, plus a per-line codepoint breakdown naming the differing characters
+(invisible Unicode: NBSP, zero-width space, em-dash vs `--`). Three rendering
+tiers: printable ASCII → bare literal; non-ASCII visible → glyph + U+XXXX;
+invisible whitespace/zero-width → named (e.g. `NON-BREAKING SPACE (U+00A0)`). For
+the top candidate at ≥90% similarity the full window is printed instead of a
+4-line preview — same line count as oldText, so it can be pasted back as a
+corrected `oldText`. When several exact matches exist, normalized-equal
+occurrences with different whitespace are reported as well. The whole call is
+validated before anything is written; every failure is reported so one retry can
+fix all of them.
 
 **Disambiguation** — `anchor` (a unique nearby string, self-validating) picks
 the right occurrence; `replaceAll` for all of them. No line numbers required
@@ -54,26 +51,21 @@ all via nested `withFileMutationQueue`.
 
 **Insert modes** — `mode: "insertAfter"` / `"insertBefore"` treat `oldText` as a
 unique anchor and splice `newText` (new content only) at a line boundary
-after/before the matched block. The anchor is never re-emitted from newText, so
-its bytes and indentation are preserved byte-for-byte and there is no
-indentation-drift surface — this is the structural fix for the "paste the anchor
-into both oldText and newText" footgun that `replace` invites. newText is
-inserted verbatim (no auto-indent). Insert and replace edits mix in one call
-(an insertion whose boundary falls inside a replaced block is rejected rather
-than guessed at). Supports `anchor`/`replaceAll` like replace. A
-duplicate-line guard flags newText that re-includes the anchor; opt out per-edit
-with `allowAnchorRepeat: true` for the legitimate "repeat and extend" idiom.
+after/before it. The anchor is never re-emitted, so its bytes and indentation stay
+untouched, and newText is inserted verbatim. Insert and replace edits mix in one
+call (an insertion whose boundary falls inside a replaced block is rejected rather
+than guessed at). Supports `anchor`/`replaceAll` like replace. A duplicate-line
+guard flags newText that re-includes the anchor; opt out per-edit with
+`allowAnchorRepeat: true` for the "repeat and extend" idiom.
 
-**Diff-as-result** — successful edits return the full diff in the result
-text (for LLM self-verification), plus the line each edit landed on
-(`edits[N] → line X`, with an `(anchored)` tag when an anchor disambiguated
-among near-identical sites), under a per-file header that names the match
-strategy. Not just the TUI.
+**Diff-as-result** — a successful edit returns the full diff in the result text,
+plus the line each edit landed on (`edits[N] → line X`, with an `(anchored)` tag
+when an anchor disambiguated among near-identical sites), under a per-file header
+naming the match strategy.
 
 **No-op detection** — an edit whose `oldText` and `newText` are identical (a
-common paste-the-same-thing-on-both-sides typo) is flagged as a no-op and
-fails the batch atomically, instead of silently counting as applied. Catches
-the failure that inflates the applied-count and hides what actually changed.
+common paste-the-same-thing-on-both-sides typo) fails the batch atomically instead
+of counting as applied.
 
 **Duplicate-line guard** — detects when the model includes surrounding unchanged
 lines in its replacement (would silently double on disk).
@@ -89,20 +81,19 @@ lines in its replacement (would silently double on disk).
 ## Correctness invariants
 
 - **Original bytes preserved.** Normalized matches widen to whole lines and
-  rewrite only touched line groups; all other lines keep their original bytes.
-  Unicode in untouched regions is never mangled.
+  rewrite only touched line groups; all other lines keep their original bytes,
+  so Unicode in untouched regions is never mangled.
 - **Atomic application.** Validate-all-first; if any edit fails, nothing is
   written across any file.
-- **No staleness gate.** `old_string` is the consistency check; the per-file
-  mutation queue handles concurrent edits. A gate would cause false positives
-  (formatter touches an unrelated region → forced re-read).
+- **No staleness gate.** `oldText` is the consistency check; the per-file
+  mutation queue handles concurrent edits. A gate would false-positive on a
+  formatter touching an unrelated region.
 
 ## Permission gate integration
 
-The permission gate skips confirmation for doomed edits (preview fails, edits
-don't match) and `dryRun` — the tool will throw diagnostics naturally, no
-point asking the user to approve. Only shows the confirm dialog when the
-preview succeeds (all edits matched, a real write is pending).
+The permission gate confirms only when the preview succeeds — all edits matched
+and a real write is pending. Failed previews and `dryRun` skip the prompt; their
+diagnostics surface on their own.
 
 ## Name table contract
 
@@ -119,19 +110,15 @@ match.
 ## Files
 
 - `match.ts` — pure matching engine (cascade, escape tolerance, anchor,
-  replaceAll, overlap detection, byte preservation, **insert modes**). No pi
-  imports.
-- `diagnostics.ts` — pure diagnostics (closest match, **char-level codepoint
-  diff** via bounded LCS, three-tier rune rendering, occurrence context with `>>`
-  markers, near-miss detection, duplicate-line guard, message formatting). No pi
-  imports.
+  replaceAll, overlap detection, byte preservation, insert modes). No pi imports.
+- `diagnostics.ts` — pure diagnostics (closest match, char-level codepoint diff via
+  bounded LCS, three-tier rune rendering, occurrence context with `>>` markers,
+  near-miss detection, duplicate-line guard, message formatting).
 - `preview.ts` — diff preview for the permission gate (uses patch's own
   matcher, not pi's computeEditsDiff).
-- `match.test.ts` / `diagnostics.test.ts` — tests covering the HarnessKit
-  matrix (whitespace, Unicode, indentation, stale context) plus anchor,
-  replaceAll, overlap, byte-preservation, duplicate-line guard, near-miss
-  detection, no-op detection, escape tolerance, and **codepoint-level char-diff /
-  three-tier rendering**.
+- `match.test.ts` / `diagnostics.test.ts` — tests covering a matrix of whitespace,
+  Unicode, indentation and stale-context inputs, plus each feature above,
+  including codepoint-level char-diff and three-tier rendering.
 - `index.ts` — pi integration shell (tool registration, multi-file via nested
   withFileMutationQueue, atomic validate-all-first, path auto-lift, dryRun,
   post-exec diff, live preview in renderCall, self-contained error messages).
