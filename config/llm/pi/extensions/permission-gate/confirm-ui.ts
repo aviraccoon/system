@@ -15,6 +15,7 @@ import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, KeybindingsManager } from "@earendil-works/pi-tui";
 import { Container, Editor, matchesKey, type SelectItem, SelectList, Text, type TUI } from "@earendil-works/pi-tui";
 import { ScrollableText } from "../shared/scrollable-text";
+import type { RiskVerdict } from "./logic";
 
 export interface ConfirmResult {
   choice: string | null;
@@ -25,7 +26,7 @@ export interface ConfirmResult {
   toggledAutoClassify?: boolean;
 }
 
-export type ExplanationVerdict = "safe" | "risky" | "dangerous";
+export type ExplanationVerdict = RiskVerdict;
 
 export interface ExplanationResult {
   verdict: ExplanationVerdict;

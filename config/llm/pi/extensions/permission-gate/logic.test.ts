@@ -1,17 +1,25 @@
 import { describe, expect, test } from "bun:test";
 import {
+  autoResolve,
+  BREAKER_CONSECUTIVE_DENIALS,
+  BREAKER_TOTAL_DENIALS,
   cacheKey,
   collectTargetPaths,
+  createDenialTracker,
   createInitialState,
   decide,
+  type GateDecision,
   type GateState,
   hasShellEscalation,
   isBashAllowed,
+  isClassifierFloor,
   isInsideDir,
   isPathAllowed,
   isReadSensitivePath,
   isSensitivePath,
   matchGlob,
+  recordAllow,
+  recordDenial,
   resolveFilePath,
   sensitiveReadDecision,
   shouldAutoAllow,
@@ -849,5 +857,126 @@ describe("createInitialState auto-classify", () => {
   test("autoAllowLog is empty array", () => {
     const s = createInitialState();
     expect(s.autoAllowLog).toEqual([]);
+  });
+});
+
+// ── autoResolve ──
+
+const confirm = (confirmType: GateDecision["confirmType"]): GateDecision => ({ action: "confirm", confirmType });
+
+describe("autoResolve", () => {
+  test("a deterministic allow needs no verdict", () => {
+    expect(autoResolve({ action: "allow" }, null, "careful", "unattended").action).toBe("allow");
+  });
+
+  test("a deterministic block is final", () => {
+    const r = autoResolve(
+      { action: "block", reason: "tirith" },
+      { verdict: "safe", short: "x" },
+      "careful",
+      "supervised",
+    );
+    expect(r.action).toBe("block");
+    expect(r.reason).toBe("tirith");
+  });
+
+  test("the sensitive floor is never resolved by the classifier", () => {
+    for (const verdict of ["safe", "risky", "dangerous"] as const) {
+      const r = autoResolve(confirm("sensitive"), { verdict, short: "nothing fired" }, "trust-project", "supervised");
+      expect(r.action).toBe("confirm");
+    }
+  });
+
+  test("the sensitive floor denies in an unattended run", () => {
+    const r = autoResolve(confirm("sensitive"), { verdict: "safe", short: "x" }, "trust-project", "unattended");
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("credential");
+  });
+
+  test("a missing verdict confirms while supervised", () => {
+    expect(autoResolve(confirm("bash"), null, "careful", "supervised").action).toBe("confirm");
+  });
+
+  test("a missing verdict denies in an unattended run", () => {
+    const r = autoResolve(confirm("bash"), null, "careful", "unattended");
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("no risk classification");
+  });
+
+  test("safe allows in every mode", () => {
+    for (const mode of ["careful", "trust-project", "allow-all"] as const) {
+      expect(autoResolve(confirm("bash"), { verdict: "safe", short: "x" }, mode, "supervised").action).toBe("allow");
+      expect(autoResolve(confirm("bash"), { verdict: "safe", short: "x" }, mode, "unattended").action).toBe("allow");
+    }
+  });
+
+  test("risky follows the supervised band and allows unattended", () => {
+    const risky = { verdict: "risky" as const, short: "mutates_state 0.9" };
+    expect(autoResolve(confirm("bash"), risky, "careful", "supervised").action).toBe("confirm");
+    expect(autoResolve(confirm("bash"), risky, "trust-project", "supervised").action).toBe("allow");
+    expect(autoResolve(confirm("bash"), risky, "careful", "unattended").action).toBe("allow");
+  });
+
+  test("dangerous confirms while supervised and denies unattended", () => {
+    const dangerous = { verdict: "dangerous" as const, short: "history_rewrite 0.9" };
+    expect(autoResolve(confirm("bash"), dangerous, "trust-project", "supervised").action).toBe("confirm");
+    const r = autoResolve(confirm("bash"), dangerous, "trust-project", "unattended");
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("history_rewrite 0.9");
+    expect(r.reason).toContain("Do not retry");
+  });
+  test("an unknown-tool confirmation stays classifier-resolved", () => {
+    const r = autoResolve(
+      { action: "confirm" },
+      { verdict: "risky", short: "runs_local_code 0.8" },
+      "trust-project",
+      "supervised",
+    );
+    expect(r.action).toBe("allow");
+  });
+});
+
+describe("isClassifierFloor", () => {
+  test("sensitive is the only classifier-proof confirmation", () => {
+    expect(isClassifierFloor(confirm("sensitive"))).toBe(true);
+    expect(isClassifierFloor(confirm("write"))).toBe(false);
+    expect(isClassifierFloor(confirm("bash"))).toBe(false);
+    expect(isClassifierFloor(confirm("outside-project"))).toBe(false);
+    expect(isClassifierFloor({ action: "confirm" })).toBe(false); // unknown tool
+  });
+});
+
+// ── denial breaker ──
+
+describe("denial breaker", () => {
+  test("trips after the consecutive limit", () => {
+    const t = createDenialTracker();
+    for (let i = 1; i < BREAKER_CONSECUTIVE_DENIALS; i++) {
+      expect(recordDenial(t).tripped).toBe(false);
+    }
+    const last = recordDenial(t);
+    expect(last.tripped).toBe(true);
+    expect(last.reason).toContain("consecutive");
+  });
+
+  test("an executed call resets the consecutive counter", () => {
+    const t = createDenialTracker();
+    recordDenial(t);
+    recordDenial(t);
+    recordAllow(t);
+    expect(recordDenial(t).tripped).toBe(false);
+    expect(recordDenial(t).tripped).toBe(false);
+    expect(recordDenial(t).tripped).toBe(true);
+  });
+
+  test("trips on the total limit even when allows reset consecutive", () => {
+    const t = createDenialTracker();
+    let tripped = false;
+    for (let i = 0; i < BREAKER_TOTAL_DENIALS; i++) {
+      tripped = recordDenial(t).tripped;
+      recordAllow(t);
+    }
+    expect(tripped).toBe(true);
+    expect(t.total).toBe(BREAKER_TOTAL_DENIALS);
   });
 });

@@ -13,6 +13,9 @@ export type Mode = "careful" | "trust-project" | "allow-all";
 
 export type AutoClassifyMode = "off" | "on";
 
+/** Classifier verdicts, in ascending severity. */
+export type RiskVerdict = "safe" | "risky" | "dangerous";
+
 export type ToolAction = "allow" | "confirm" | "block";
 
 export interface AutoClassifyLog {
@@ -32,7 +35,7 @@ export interface GateState {
   allowedPathGlobs: string[];
   toolOverrides: Partial<Record<string, "allow" | "confirm">>;
   /** Exact-match cache: hash of (toolName + full input) -> full explanation result */
-  classifyCache: Map<string, { verdict: "safe" | "risky" | "dangerous"; short: string; detail: string }>;
+  classifyCache: Map<string, { verdict: RiskVerdict; short: string; detail: string }>;
   /** Audit log of auto-allowed calls */
   autoAllowLog: AutoClassifyLog[];
 }
@@ -412,11 +415,162 @@ export function createInitialState(): GateState {
  * - Careful + auto: only SAFE auto-allows
  * - Trust-project + auto: SAFE and RISKY auto-allow
  */
-export function shouldAutoAllow(verdict: "safe" | "risky" | "dangerous", mode: Mode): boolean {
+export function shouldAutoAllow(verdict: RiskVerdict, mode: Mode): boolean {
   if (verdict === "dangerous") return false;
   if (verdict === "safe") return true;
   // RISKY: auto-allow in trust-project, confirm in careful
   return mode === "trust-project";
+}
+
+// ── Auto-resolution policy ──
+
+/**
+ * How the gate resolves confirmations for the current run.
+ *
+ * `supervised` is the normal session: the user is present, so anything the
+ * policy does not auto-allow becomes a dialog. `unattended` is an autonomous
+ * run: nobody is there to answer, so anything the policy does not auto-allow is
+ * denied with a reason the model can act on.
+ */
+export type RunMode = "supervised" | "unattended";
+
+/** A classifier verdict plus the factor line that produced it, for audit text. */
+export interface ClassifiedCall {
+  verdict: RiskVerdict;
+  short: string;
+}
+
+export type AutoResolution =
+  | { action: "allow"; reason: string }
+  | { action: "confirm"; reason: string }
+  | { action: "block"; reason: string };
+
+/**
+ * Confirmation kinds the classifier may never resolve, in any mode.
+ *
+ * Deliberately one entry. Credential and secret paths are the class where
+ * "nobody could be asked" has to mean no — the same class `sensitiveReadDecision`
+ * guards for subagents. Outside-project paths are NOT here on purpose: writing a
+ * journal entry outside the repo is ordinary work (and denying it would break an
+ * unattended run outright), while the dangerous outside-project targets
+ * (/etc, launch agents, credential stores) are covered semantically by the
+ * `writes_to_sensitive_location` / `persists_after_exit` factors. A path list
+ * would be the blocklist this design rejects; the factor battery is the rule.
+ *
+ * A confirmation with no `confirmType` (an unknown tool) is also classifier-resolved
+ * — that is the fallback that catches a new mutating tool.
+ */
+export function isClassifierFloor(decision: GateDecision): boolean {
+  return decision.confirmType === "sensitive";
+}
+
+const UNATTENDED_STOP =
+  "Do not retry this call or work around it. Continue with a materially safer approach, or stop and report what is blocked.";
+
+/**
+ * Resolve a gated call without asking the user.
+ *
+ * Composition, in order:
+ *   1. The deterministic decision's own answer wins. `allow` (read-only tool,
+ *      session rule, allow-all mode) needs no verdict; a `block` is final.
+ *   2. A floor confirmation is never resolved by the classifier.
+ *   3. Otherwise the classifier resolves the confirmation, within the band the
+ *      run mode leaves open. It never widens a floor, and it never turns a
+ *      confirmation into a block while a human is present.
+ *
+ * `supervised` keeps the historical bands (careful: SAFE only; trust-project:
+ * SAFE + RISKY). `unattended` allows SAFE and RISKY, denies DANGEROUS, and
+ * denies when no verdict is available at all — fail closed, because a run with
+ * nobody watching cannot convert "unknown" into "ask".
+ */
+export function autoResolve(
+  decision: GateDecision,
+  classified: ClassifiedCall | null,
+  mode: Mode,
+  runMode: RunMode,
+): AutoResolution {
+  if (decision.action === "allow") return { action: "allow", reason: "allowed by mode or session rule" };
+  if (decision.action === "block") {
+    return { action: "block", reason: decision.reason ?? "blocked by the permission gate" };
+  }
+
+  if (isClassifierFloor(decision)) {
+    if (runMode === "unattended") {
+      return {
+        action: "block",
+        reason: `permission-gate denied this call: it targets a credential or secret path (${decision.displayPath ?? "unknown"}), which is never resolved by the classifier. ${UNATTENDED_STOP}`,
+      };
+    }
+    return { action: "confirm", reason: `sensitive path: ${decision.displayPath ?? "unknown"}` };
+  }
+
+  if (!classified) {
+    if (runMode === "unattended") {
+      return {
+        action: "block",
+        reason: `permission-gate denied this call: no risk classification was available (classifier disabled, timed out, or returned an incomplete answer). ${UNATTENDED_STOP}`,
+      };
+    }
+    return { action: "confirm", reason: "no classification available" };
+  }
+
+  if (classified.verdict === "dangerous") {
+    if (runMode === "unattended") {
+      return {
+        action: "block",
+        reason: `permission-gate denied this call: the risk classifier judged it dangerous (${classified.short}). This is a policy decision, not a tool failure. ${UNATTENDED_STOP}`,
+      };
+    }
+    return { action: "confirm", reason: classified.verdict };
+  }
+
+  if (runMode === "unattended") return { action: "allow", reason: classified.verdict };
+  return shouldAutoAllow(classified.verdict, mode)
+    ? { action: "allow", reason: classified.verdict }
+    : { action: "confirm", reason: classified.verdict };
+}
+
+// ── Denial circuit breaker ──
+
+/**
+ * Stops an unattended run that keeps hitting the policy boundary, instead of
+ * letting it retry variations forever. Limits follow Claude Code's auto mode
+ * (3 consecutive denials, 20 total).
+ */
+export interface DenialTracker {
+  consecutive: number;
+  total: number;
+}
+
+export const BREAKER_CONSECUTIVE_DENIALS = 3;
+export const BREAKER_TOTAL_DENIALS = 20;
+
+export function createDenialTracker(): DenialTracker {
+  return { consecutive: 0, total: 0 };
+}
+
+/** Record a policy denial. Returns the stop reason once a limit is reached. */
+export function recordDenial(tracker: DenialTracker): { tripped: boolean; reason?: string } {
+  tracker.consecutive += 1;
+  tracker.total += 1;
+  if (tracker.consecutive >= BREAKER_CONSECUTIVE_DENIALS) {
+    return {
+      tripped: true,
+      reason: `permission-gate stopped this run: ${tracker.consecutive} consecutive denials (limit ${BREAKER_CONSECUTIVE_DENIALS}). The run is repeatedly hitting the permission policy; a human has to decide how to proceed.`,
+    };
+  }
+  if (tracker.total >= BREAKER_TOTAL_DENIALS) {
+    return {
+      tripped: true,
+      reason: `permission-gate stopped this run: ${tracker.total} denials (limit ${BREAKER_TOTAL_DENIALS}). The run is repeatedly hitting the permission policy; a human has to decide how to proceed.`,
+    };
+  }
+  return { tripped: false };
+}
+
+/** Any executed call resets the consecutive counter. */
+export function recordAllow(tracker: DenialTracker): void {
+  tracker.consecutive = 0;
 }
 
 /** Simple hash for cache keys. */

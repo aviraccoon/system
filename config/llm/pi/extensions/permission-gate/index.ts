@@ -47,6 +47,7 @@ import {
   parseExplanation,
 } from "./explain";
 import {
+  autoResolve,
   cacheKey,
   createInitialState,
   decide,
@@ -57,7 +58,6 @@ import {
   MODE_LABELS,
   MODE_SHORT,
   sensitiveReadDecision,
-  shouldAutoAllow,
   suggestPrefix,
 } from "./logic";
 import { EXPLAIN_SYSTEM_PROMPT } from "./prompts";
@@ -797,70 +797,36 @@ export default function permissionGate(pi: ExtensionAPI) {
       return { block: true, reason: `${event.toolName} blocked in non-interactive mode (permission gate)` };
     }
 
-    // Auto-classify: call sidecar before showing dialog
+    // Auto-classify: call sidecar before showing dialog. Resolution composes the
+    // deterministic decision with the verdict (autoResolve), so a floor the gate
+    // set is not the classifier's to resolve. Runs supervised only — the /auto
+    // trigger that selects the unattended bands is not wired yet.
     if (state.autoClassify === "on" && classifierAvailable && !tirithWarning) {
       const key = cacheKey(event.toolName, input);
       const cached = state.classifyCache.get(key);
-
-      if (cached && shouldAutoAllow(cached.verdict, state.mode)) {
-        recordClassification(event.toolName, event.toolCallId, cached);
+      const resolve = (result: ExplanationResult) =>
+        autoResolve(decision, { verdict: result.verdict, short: result.short }, state.mode, "supervised");
+      const autoAllow = (result: ExplanationResult, tag: string) => {
+        recordClassification(event.toolName, event.toolCallId, result);
         state.autoAllowLog.push({
           toolName: event.toolName,
           description: describeToolCall(event.toolName, input, rawDiff),
-          verdict: cached.verdict,
-          short: cached.short,
+          verdict: result.verdict,
+          short: result.short,
           timestamp: Date.now(),
         });
-        lastVerdict = `${cached.verdict.toUpperCase()} (cached) ${event.toolName}: ${cached.short}`;
+        lastVerdict = `${result.verdict.toUpperCase()}${tag} ${event.toolName}: ${result.short}`;
         updateWidget(ctx);
         updateStatus(ctx);
-        return undefined;
-      }
+      };
 
-      if (!cached) {
-        ctx.ui.setWorkingMessage("Classifying...");
-        const explResult = await classify(event.toolName, input, ctx, rawDiff);
-        ctx.ui.setWorkingMessage();
-
-        if (explResult) {
-          state.classifyCache.set(key, {
-            verdict: explResult.verdict,
-            short: explResult.short,
-            detail: explResult.detail,
-          });
-
-          if (shouldAutoAllow(explResult.verdict, state.mode)) {
-            // Dialog paths record through showConfirmDialog; this one returns first.
-            recordClassification(event.toolName, event.toolCallId, explResult);
-            state.autoAllowLog.push({
-              toolName: event.toolName,
-              description: describeToolCall(event.toolName, input, rawDiff),
-              verdict: explResult.verdict,
-              short: explResult.short,
-              timestamp: Date.now(),
-            });
-            lastVerdict = `${explResult.verdict.toUpperCase()} ${event.toolName}: ${explResult.short}`;
-            updateWidget(ctx);
-            updateStatus(ctx);
-            return undefined;
-          }
-
-          // Not auto-allowed -- fall through to dialog with pre-loaded explanation
-          return await showConfirmDialog(
-            ctx,
-            event,
-            decision,
-            makePreloadedExplanation(explResult),
-            diffBody,
-            detailsBody,
-            tirithWarning,
-          );
-        }
-        // Sidecar failed or parse failure -- fall through to normal dialog
-      }
-      // Cached but not auto-allowable (e.g. DANGEROUS cached) -- fall through with pre-loaded if available
       if (cached) {
-        // Cached but not auto-allowable -- show dialog with cached explanation
+        const resolution = resolve(cached);
+        if (resolution.action === "allow") {
+          autoAllow(cached, " (cached)");
+          return undefined;
+        }
+        if (resolution.action === "block") return { block: true, reason: resolution.reason };
         return await showConfirmDialog(
           ctx,
           event,
@@ -871,6 +837,35 @@ export default function permissionGate(pi: ExtensionAPI) {
           tirithWarning,
         );
       }
+
+      ctx.ui.setWorkingMessage("Classifying...");
+      const explResult = await classify(event.toolName, input, ctx, rawDiff);
+      ctx.ui.setWorkingMessage();
+
+      if (explResult) {
+        state.classifyCache.set(key, {
+          verdict: explResult.verdict,
+          short: explResult.short,
+          detail: explResult.detail,
+        });
+        const resolution = resolve(explResult);
+        if (resolution.action === "allow") {
+          autoAllow(explResult, "");
+          return undefined;
+        }
+        if (resolution.action === "block") return { block: true, reason: resolution.reason };
+        // Not auto-allowed -- fall through to dialog with pre-loaded explanation
+        return await showConfirmDialog(
+          ctx,
+          event,
+          decision,
+          makePreloadedExplanation(explResult),
+          diffBody,
+          detailsBody,
+          tirithWarning,
+        );
+      }
+      // Sidecar failed or parse failure -- fall through to normal dialog
     }
 
     // Normal path: build explanation provider (fires concurrently with dialog).

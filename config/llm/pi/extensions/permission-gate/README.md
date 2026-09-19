@@ -31,6 +31,10 @@ current mode, the call proceeds without confirmation.
 | Careful + auto | SAFE | RISKY, DANGEROUS |
 | Trust project + auto | SAFE, RISKY | DANGEROUS |
 
+A confirmation the gate marks as a sensitive path — a write/edit target or a subagent
+content read — never auto-allows in any mode; the classifier does not resolve it. Bash
+commands are judged by the factors, credential paths included.
+
 Exact-match caching: identical tool calls (same command, same file, same content)
 reuse the previous verdict. Useful for repeated test/lint/build commands.
 
