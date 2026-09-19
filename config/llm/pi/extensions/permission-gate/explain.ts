@@ -3,9 +3,9 @@
  * No pi imports — testable independently.
  */
 
+import { pluralLines, splitLines } from "../shared/diff";
 import type { FactorDecision } from "../shared/risk-factors";
 import type { ExplanationResult, ExplanationVerdict } from "./confirm-ui";
-
 import { cacheKey } from "./logic";
 
 // ── Tool call description ──
@@ -47,6 +47,23 @@ export interface DescribeOptions {
   summary?: string;
   /** Character budget for the excerpt; tests use a small one. */
   excerptChars?: number;
+  /**
+   * Describe only what the call writes, never quoted target text. The preview
+   * path already drops removed lines; this covers the no-preview fallback, which
+   * otherwise echoes `oldText`. `classifierInput` sets it, so the dialog and the
+   * note attribution still show the call's full input.
+   */
+  writesOnly?: boolean;
+}
+
+/** Line count of a text block; a trailing newline adds no line, absent/empty is 0. */
+function blockLines(text: unknown): number {
+  return typeof text === "string" ? splitLines(text).length : 0;
+}
+
+/** "1 edit", "2 edits". */
+function editCount(n: number): string {
+  return `${n} ${n === 1 ? "edit" : "edits"}`;
 }
 
 /**
@@ -76,6 +93,27 @@ export function describeToolCall(
     if (options.rawDiff) {
       return `${toolName} ${input.path}${head}:\n${clipExcerpt(addedLines(options.rawDiff), budget)}`;
     }
+    if (options.writesOnly) {
+      // No preview, and the classifier must not receive quoted target text: say
+      // what the call writes and how many lines it replaces, by count.
+      if (input.edits && Array.isArray(input.edits)) {
+        const edits = input.edits as Array<{ oldText?: string; newText?: string; path?: string }>;
+        const replaced = edits.reduce((n, e) => n + blockLines(e.oldText), 0);
+        const count = replaced > 0 ? `, replaces ${pluralLines(replaced)}` : "";
+        const listing = edits
+          .map((e, i) => {
+            const nw = typeof e.newText === "string" ? e.newText : "";
+            const at = typeof e.path === "string" ? ` @ ${e.path}` : "";
+            return `${toolName} ${i + 1}: writes "${nw}"${at}`;
+          })
+          .join("\n");
+        return `${toolName} ${input.path}${head} (${editCount(edits.length)}${count}):\n${clipExcerpt(listing, budget)}`;
+      }
+      const replaced = blockLines(input.oldText);
+      const count = replaced > 0 ? ` (replaces ${pluralLines(replaced)})` : "";
+      const nw = typeof input.newText === "string" ? input.newText : "";
+      return `${toolName} ${input.path}${head}${count}: writes "${clipExcerpt(nw, budget)}"`;
+    }
     if (input.edits && Array.isArray(input.edits)) {
       const edits = input.edits as Array<{ oldText?: string; newText?: string; path?: string }>;
       const listing = edits
@@ -86,7 +124,7 @@ export function describeToolCall(
           return `${toolName} ${i + 1}: "${old}" -> "${nw}"${at}`;
         })
         .join("\n");
-      return `${toolName} ${input.path}${head} (${edits.length} edits):\n${clipExcerpt(listing, budget)}`;
+      return `${toolName} ${input.path}${head} (${editCount(edits.length)}):\n${clipExcerpt(listing, budget)}`;
     }
     const old = typeof input.oldText === "string" ? input.oldText : "";
     const nw = typeof input.newText === "string" ? input.newText : "";
@@ -107,7 +145,7 @@ export function classifierInput(
   input: Record<string, unknown>,
   preview?: DescribeOptions,
 ): { description: string; key: string } {
-  const description = describeToolCall(toolName, input, preview);
+  const description = describeToolCall(toolName, input, { ...preview, writesOnly: true });
   return { description, key: cacheKey(toolName, input, description) };
 }
 

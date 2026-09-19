@@ -53,13 +53,15 @@ the human sentence; both run in parallel, so the dialog shows the sentence and
 the fired factors with their probabilities on one line, and `Ctrl+E` adds the
 factor list against the thresholds plus the longer explanation.
 
-The state a classifier reads is a header plus an excerpt of added lines. The header
-names the tool and path and, for edit-like calls, the shape of the change (`creates a
-new file: 4 lines`, `overwrites the existing file: removes 40 lines, adds 2 lines`);
-it is never truncated. The excerpt is clipped at 100K characters, and the target's
-existing contents reach the classifier only through the call's own input; the summary
-states the removals as counts. Each classified call appends a `classified` session
-entry (verdict, factor scores, detail) for threshold tuning.
+The state a classifier reads is a header plus an excerpt of what the call writes. The
+header names the tool and path and, for edit-like calls, the shape of the change
+(`creates a new file: 4 lines`, `overwrites the existing file: removes 40 lines, adds
+2 lines`); it is never truncated. For `bash`, `write`, `edit` and `patch` the excerpt
+is clipped at 100K characters and never quotes removed target text: removals reach
+the classifier as a count, taken from the preview summary or counted from the edit
+itself when there is no preview. Any other tool is described by its input JSON,
+clipped to 500 characters. Each classified call appends a `classified` session entry
+(verdict, factor scores, detail) for threshold tuning.
 
 When the decisions call fails, the provider has no credential, or any factor is
 missing, the verdict comes from the `explain` role alone — the display degrades,

@@ -141,6 +141,53 @@ describe("describeToolCall", () => {
     expect(result).toContain('patch 2: "c" -> "d" @ other.ts');
   });
 
+  test("writesOnly drops quoted target text and states the replaced count", () => {
+    const result = describeToolCall(
+      "edit",
+      { path: "file.ts", oldText: "secret", newText: "new" },
+      { writesOnly: true },
+    );
+    expect(result).toBe('edit file.ts (replaces 1 line): writes "new"');
+  });
+
+  test("writesOnly counts lines like the preview does (trailing newline adds none)", () => {
+    const result = describeToolCall("edit", { path: "f.ts", oldText: "a\nb\n", newText: "x" }, { writesOnly: true });
+    expect(result).toBe('edit f.ts (replaces 2 lines): writes "x"');
+  });
+
+  test("writesOnly clips a single newText at the budget", () => {
+    const result = describeToolCall(
+      "edit",
+      { path: "f.ts", oldText: "old", newText: "x".repeat(1000) },
+      { writesOnly: true, excerptChars: 50 },
+    );
+    expect(result).toContain("truncated: 50 of 1000");
+    expect(result.length).toBeLessThan(200);
+  });
+
+  test("writesOnly keeps per-edit paths and counts replaced lines across edits", () => {
+    const result = describeToolCall(
+      "patch",
+      {
+        path: "file.ts",
+        edits: [
+          { oldText: "a\nb", newText: "x" },
+          { oldText: "c", newText: "y", path: "other.ts" },
+        ],
+      },
+      { writesOnly: true },
+    );
+    expect(result).toContain("patch file.ts (2 edits, replaces 3 lines)");
+    expect(result).toContain('patch 1: writes "x"');
+    expect(result).toContain('patch 2: writes "y" @ other.ts');
+    expect(result).not.toContain("a\nb");
+  });
+
+  test("a single entry in the edits array reads as one edit", () => {
+    const result = describeToolCall("patch", { path: "f.ts", edits: [{ oldText: "a", newText: "b" }] });
+    expect(result).toContain("patch f.ts (1 edit)");
+  });
+
   test("unknown tool uses JSON", () => {
     const result = describeToolCall("custom", { foo: "bar" });
     expect(result).toContain("custom:");
@@ -237,6 +284,19 @@ describe("classifierInput", () => {
     const secondLine = classifierInput("write", input, { rawDiff: "-2 x\n+2 a", summary });
     const thirdLine = classifierInput("write", input, { rawDiff: "-3 x\n+3 c", summary });
     expect(secondLine.key).not.toBe(thirdLine.key);
+  });
+
+  test("the classifier state never quotes target text", () => {
+    const { description } = classifierInput("edit", { path: "f.ts", oldText: "top secret", newText: "ok" });
+    expect(description).not.toContain("top secret");
+    expect(description).toContain('writes "ok"');
+  });
+
+  test("writesOnly omits the count for a missing or empty oldText", () => {
+    expect(classifierInput("edit", { path: "f.ts", newText: "x" }).description).toBe('edit f.ts: writes "x"');
+    expect(classifierInput("edit", { path: "f.ts", oldText: "", newText: "x" }).description).toBe(
+      'edit f.ts: writes "x"',
+    );
   });
 });
 

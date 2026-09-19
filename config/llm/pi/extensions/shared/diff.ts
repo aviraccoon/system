@@ -115,7 +115,7 @@ function lcsHunks(aa: string[], bb: string[]): CharDiff[] {
 const MAX_LINE_LCS_CELLS = 4_000_000;
 
 /** Split content into lines (a trailing newline does not add an empty line). */
-function splitLines(content: string): string[] {
+export function splitLines(content: string): string[] {
   const lines = content.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   return lines;
