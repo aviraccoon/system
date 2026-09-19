@@ -51,7 +51,7 @@ If you cannot tell, say which audience you assumed and flag against that.
 One entry per finding, grouped by file, in reading order:
 
 - **severity** — `MAJOR` (misleads or buries the point), `MINOR` (reads as slop or pads), `NIT` (polish)
-- **file:line**
+- **where** — section or symbol within the file named by the group heading. No line numbers: they drift, and the reader finds the spot by matching the `before` quote.
 - **before** — the quoted original, exact
 - **rule** — the guide pattern it breaks
 - **after** — the rewrite
