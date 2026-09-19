@@ -128,20 +128,25 @@ export function parseRef(ref: string): { provider: string; modelId: string } | n
   return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) };
 }
 
+export type ResolvedRoleModel = ResolvedModel & { entry: ModelEntry };
+
 /**
- * Resolve a role to a usable model with auth.
- * Tries each model in the fallback chain until one has valid auth.
- * Returns null if no model is available.
+ * Resolve up to `limit` models from a role's fallback chain, in order, skipping
+ * entries that do not resolve or have no auth. `resolveRole` is this with
+ * limit 1; callers that retry on provider failure ask for more.
  */
-export async function resolveRole(
+export async function resolveRoleChain(
   roleName: string,
   modelRegistry: ModelRegistry,
-): Promise<(ResolvedModel & { entry: ModelEntry }) | null> {
+  limit = Number.POSITIVE_INFINITY,
+): Promise<ResolvedRoleModel[]> {
   const config = loadConfig();
   const role = config[roleName];
-  if (!role?.models?.length) return null;
+  if (!role?.models?.length) return [];
 
+  const resolved: ResolvedRoleModel[] = [];
   for (const entry of role.models) {
+    if (resolved.length >= limit) break;
     const parsed = parseRef(entry.ref);
     if (!parsed) continue;
 
@@ -151,16 +156,26 @@ export async function resolveRole(
     const auth = await modelRegistry.getApiKeyAndHeaders(model);
     if (!auth.ok) continue;
 
-    return {
+    resolved.push({
       model,
       apiKey: auth.apiKey,
       headers: auth.headers,
       thinking: entry.thinking ?? "off",
       entry,
-    };
+    });
   }
 
-  return null;
+  return resolved;
+}
+
+/**
+ * Resolve a role to a usable model with auth.
+ * Tries each model in the fallback chain until one has valid auth.
+ * Returns null if no model is available.
+ */
+export async function resolveRole(roleName: string, modelRegistry: ModelRegistry): Promise<ResolvedRoleModel | null> {
+  const [first] = await resolveRoleChain(roleName, modelRegistry, 1);
+  return first ?? null;
 }
 
 // ── Sidecar call ──

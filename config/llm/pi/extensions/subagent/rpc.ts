@@ -12,9 +12,10 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { type ExtensionContext, type ThemeColor, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { createDebugLogger } from "../shared/debug";
-import { loadConfig, resolveRole } from "../shared/model-roles";
+import { loadConfig, resolveRole, resolveRoleChain } from "../shared/model-roles";
 import { BASH_SANDBOX_ENV } from "../shared/sandbox";
 import type { AgentConfig } from "./agents";
+import { attemptPlan, isRetryable, MAX_ATTEMPTS } from "./retry";
 import { nudgeAt, nudgeMessage, taskWithBudget } from "./turn-budget";
 
 const SUBAGENT_SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-sessions");
@@ -73,6 +74,8 @@ export interface SingleResult {
   model?: string; // resolved model ref
   stopReason?: string;
   errorMessage?: string;
+  /** Models tried before this result returned (1 = no retry). */
+  attempts?: number;
   step?: number;
 }
 
@@ -275,6 +278,11 @@ export function writeRpcCommand(proc: ReturnType<typeof spawn>, cmd: RpcCommand)
   stdin.write(`${JSON.stringify(cmd)}\n`);
 }
 
+/**
+ * Run a subagent, retrying provider failures across the agent's role chain.
+ * Up to MAX_ATTEMPTS models are tried — the chain's next entries, padded with
+ * the last one — and the first result that is not a provider failure wins.
+ */
 export async function runSingleAgent(
   defaultCwd: string,
   agents: AgentConfig[],
@@ -287,11 +295,92 @@ export async function runSingleAgent(
   makeDetails: (results: SingleResult[]) => SubagentDetails,
   ctx: ExtensionContext,
   maxTurns: number,
-  onHandle?: ((handle: SubagentHandle) => void) | undefined,
+  onHandle?: (handle: SubagentHandle) => (() => void) | undefined,
 ): Promise<SingleResult> {
-  // Clear debug log for this run
+  // Cleared once per dispatch, not per attempt, so retries stay in the log.
   debugLog.clear();
 
+  const agent = agents.find((a) => a.name === agentName);
+  const candidates = agent?.role
+    ? (await resolveRoleChain(agent.role, ctx.modelRegistry, MAX_ATTEMPTS)).map(
+        (r) => `${r.model.provider}/${r.model.id}`,
+      )
+    : [];
+  const plan = attemptPlan(candidates);
+
+  // Handles are per attempt: drop the previous registration before the next
+  // one, or the active-handle list keeps a dead child per retry.
+  let cleanupHandle: (() => void) | undefined;
+  const handleSink = onHandle
+    ? (handle: SubagentHandle): (() => void) | undefined => {
+        cleanupHandle?.();
+        cleanupHandle = onHandle(handle) || undefined;
+        return cleanupHandle;
+      }
+    : undefined;
+
+  const runAttempt = (modelOverride?: string) =>
+    runSingleAgentAttempt(
+      defaultCwd,
+      agents,
+      agentName,
+      task,
+      cwd,
+      step,
+      signal,
+      onUpdate,
+      makeDetails,
+      ctx,
+      maxTurns,
+      handleSink,
+      modelOverride,
+    );
+
+  // No role or no resolvable candidates: one attempt, same as before, so the
+  // unknown-agent and empty-role errors still come from the attempt.
+  if (plan.length === 0) {
+    const only = await runAttempt();
+    only.attempts = 1;
+    cleanupHandle?.();
+    return only;
+  }
+
+  let result: SingleResult | undefined;
+  for (const [i, model] of plan.entries()) {
+    result = await runAttempt(model);
+    result.attempts = i + 1;
+    if (
+      !isRetryable({ stopReason: result.stopReason, exitCode: result.exitCode, messageCount: result.messages.length })
+    ) {
+      break;
+    }
+    debugLog("retry", 0, {
+      agent: agentName,
+      failed: model,
+      next: plan[i + 1] ?? null,
+      stopReason: result.stopReason,
+    });
+  }
+  cleanupHandle?.();
+  return result as SingleResult;
+}
+
+/** One attempt: spawn the child, stream its events, collect the result. */
+async function runSingleAgentAttempt(
+  defaultCwd: string,
+  agents: AgentConfig[],
+  agentName: string,
+  task: string,
+  cwd: string | undefined,
+  step: number | undefined,
+  signal: AbortSignal | undefined,
+  onUpdate: ((partial: { content: unknown[]; details?: SubagentDetails }) => void) | undefined,
+  makeDetails: (results: SingleResult[]) => SubagentDetails,
+  ctx: ExtensionContext,
+  maxTurns: number,
+  onHandle?: ((handle: SubagentHandle) => void) | undefined,
+  modelOverride?: string,
+): Promise<SingleResult> {
   const agent = agents.find((a) => a.name === agentName);
 
   if (!agent) {
@@ -308,11 +397,12 @@ export async function runSingleAgent(
     };
   }
 
-  // Resolve model from role (if specified)
+  // Resolve model from role (if specified). The retry wrapper supplies an
+  // override: after a provider failure it moves down the role chain.
   let role: string | undefined;
   let model: string | undefined;
   if (agent.role) {
-    const resolved = await resolveModel(agent.role, ctx);
+    const resolved = modelOverride ?? (await resolveModel(agent.role, ctx));
     if (!resolved) {
       // Role has no available models — error
       return {
@@ -675,7 +765,11 @@ export async function runSingleAgent(
             // Real outcome from pi's last assistant message (stop/aborted/error),
             // not a fabricated count. The maxTurns override happens after the run.
             const lastAssistant = [...currentResult.messages].reverse().find((m) => m.role === "assistant");
-            if (lastAssistant?.role === "assistant") currentResult.stopReason = lastAssistant.stopReason;
+            if (lastAssistant?.role === "assistant") {
+              currentResult.stopReason = lastAssistant.stopReason;
+              // The provider's own words beat "no output" when the caller reports the failure.
+              if (lastAssistant.errorMessage) currentResult.errorMessage = lastAssistant.errorMessage;
+            }
 
             // Update usage from agent_end stats
             const stats = event.stats as Record<string, unknown> | undefined;

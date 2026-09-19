@@ -223,7 +223,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
               ctx,
               params.maxTurns ?? DEFAULT_MAX_TURNS,
               (h) => {
+                if (handleId) unregisterHandle(handleId);
                 handleId = registerHandle(h, step.agent, taskWithContext);
+                return () => unregisterHandle(handleId);
               },
             );
             unregisterHandle(handleId);
@@ -236,13 +238,15 @@ export default function subagentExtension(pi: ExtensionAPI) {
               result.stopReason === "max_turns_exceeded";
             if (isError) {
               const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+              const attemptsNote = (result.attempts ?? 1) > 1 ? ` (after ${result.attempts} attempts)` : "";
               return {
                 content: [
                   {
                     type: "text",
-                    text: withSessionPaths(`Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}`, [
-                      result.sessionFile,
-                    ]),
+                    text: withSessionPaths(
+                      `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}${attemptsNote}`,
+                      [result.sessionFile],
+                    ),
                   },
                 ],
                 details: makeDetails("chain")(results),
@@ -326,7 +330,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
                 ctx,
                 params.maxTurns ?? DEFAULT_MAX_TURNS,
                 (h) => {
+                  if (handleId) unregisterHandle(handleId);
                   handleId = registerHandle(h, t.agent, t.task);
+                  return () => unregisterHandle(handleId);
                 },
               );
               unregisterHandle(handleId);
@@ -373,7 +379,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
             ctx,
             params.maxTurns ?? DEFAULT_MAX_TURNS,
             (h) => {
+              if (handleId) unregisterHandle(handleId);
               handleId = registerHandle(h, singleAgent, singleTask);
+              return () => unregisterHandle(handleId);
             },
           );
           unregisterHandle(handleId);
@@ -384,11 +392,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
             result.stopReason === "max_turns_exceeded";
           if (isError) {
             const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
+            const attemptsNote = (result.attempts ?? 1) > 1 ? ` (after ${result.attempts} attempts)` : "";
             return {
               content: [
                 {
                   type: "text",
-                  text: withSessionPaths(`Agent ${result.stopReason || "failed"}: ${errorMsg}`, [result.sessionFile]),
+                  text: withSessionPaths(`Agent ${result.stopReason || "failed"}: ${errorMsg}${attemptsNote}`, [
+                    result.sessionFile,
+                  ]),
                 },
               ],
               details: makeDetails("single")([result]),
