@@ -16,7 +16,7 @@ import { loadConfig, resolveRole, resolveRoleChain } from "../shared/model-roles
 import { BASH_SANDBOX_ENV } from "../shared/sandbox";
 import type { AgentConfig } from "./agents";
 import { attemptPlan, isRetryable, MAX_ATTEMPTS } from "./retry";
-import { nudgeAt, nudgeMessage, taskWithBudget } from "./turn-budget";
+import { type NudgeState, steerNudge, taskWithBudget } from "./turn-budget";
 
 const SUBAGENT_SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-sessions");
 const debugLog = createDebugLogger("subagent", "renderResult.log");
@@ -511,6 +511,7 @@ async function runSingleAgentAttempt(
   let eventCount = 0;
   let updateCount = 0; // how many times emitUpdate was called
   let turnCount = 0; // completed turns (turn_end events) — drives the maxTurns cap
+  const nudgeState: NudgeState = { sent: false }; // the budget nudge is one-shot per attempt
   let maxTurnsReached = false; // child was aborted at the turn cap
   let sentSessionQuery = false; // asked the child for its transcript path
 
@@ -713,15 +714,16 @@ async function runSingleAgentAttempt(
                 if (!proc.killed) proc.kill("SIGKILL");
               }
             }, 3000);
-          } else if (nudgeAt(maxTurns) === turnCount) {
-            const message = nudgeMessage(turnCount, maxTurns);
-            writeRpcCommand(proc, { type: "steer", message });
-            // Recorded like a user steer so it appears in the live feed and the
-            // result display — otherwise the agent suddenly wrapping up looks
-            // unexplained.
-            streamEvents.push({ kind: "user", text: message });
-            currentResult.userInputs?.push({ text: message, turn: turnCount });
-            emitUpdate();
+          } else {
+            steerNudge(nudgeState, maxTurns, turnCount, event.message, (message) => {
+              writeRpcCommand(proc, { type: "steer", message });
+              // Recorded like a user steer so it appears in the live feed and the
+              // result display — otherwise the agent suddenly wrapping up looks
+              // unexplained.
+              streamEvents.push({ kind: "user", text: message });
+              currentResult.userInputs?.push({ text: message, turn: turnCount });
+              emitUpdate();
+            });
           }
         }
 
