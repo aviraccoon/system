@@ -44,7 +44,7 @@ Cases are independent requests, so they run concurrently — `BENCH_CONCURRENCY`
 
 ## Factor benchmarks
 
-`jev.ts` and `factors.ts` ask the same battery of yes/no questions — what a call touches, changes, exposes or spends — all defined once in `risk-factors.ts`, and turn the answers into a verdict with the same threshold policy. A wrong verdict names the factor that caused it.
+`jev.ts` and `factors.ts` ask the same battery of yes/no questions — what a call touches, changes, exposes or spends — all defined once in `../extensions/shared/risk-factors.ts`, the same module the permission gate uses. Both turn the answers into a verdict with the same threshold policy. A wrong verdict names the factor that caused it.
 
 | Runner | Backend | Notes |
 |--------|---------|-------|
@@ -82,7 +82,7 @@ All benchmarks use the same `TestCase` type and runner from `shared.ts`.
 | `shared.ts` | Model resolution, `runBenchmark`, output formatting |
 | `shared.test.ts` | Tests for shared utilities |
 | `explain-cases.ts` | Explain cases and fixture generation, shared by runners |
-| `risk-factors.ts` | Factor battery, threshold policy, prompt and parser |
+| `../extensions/shared/risk-factors.ts` | Factor battery, threshold policy, prompt and parser |
 | `factor-report.ts` | Shared table and summary for factor runs |
 | `jev.ts` | Jev (TypeSafe decisions-model) factor runner |
 | `factors.ts` | Chat-model factor runner |

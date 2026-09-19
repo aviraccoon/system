@@ -36,7 +36,9 @@ content read — never auto-allows in any mode; the classifier does not resolve 
 commands are judged by the factors, credential paths included.
 
 Exact-match caching: identical tool calls (same command, same file, same content)
-reuse the previous verdict. Useful for repeated test/lint/build commands.
+reuse the previous verdict — useful for repeated test/lint/build commands. For
+edit-like calls the key includes the previewed state (create vs overwrite, the
+added lines), so a create verdict is never reused for an overwrite.
 
 Parse failures and sidecar failures both fall through to the dialog — a failed
 parse never auto-allows, and a dead sidecar just means the user confirms.
@@ -50,6 +52,14 @@ shared with the benchmarks that measure them. The `explain` role still writes
 the human sentence; both run in parallel, so the dialog shows the sentence and
 the fired factors with their probabilities on one line, and `Ctrl+E` adds the
 factor list against the thresholds plus the longer explanation.
+
+The state a classifier reads is a header plus an excerpt of added lines. The header
+names the tool and path and, for edit-like calls, the shape of the change (`creates a
+new file: 4 lines`, `overwrites the existing file: removes 40 lines, adds 2 lines`);
+it is never truncated. The excerpt is clipped at 100K characters, and the target's
+existing contents reach the classifier only through the call's own input; the summary
+states the removals as counts. Each classified call appends a `classified` session
+entry (verdict, factor scores, detail) for threshold tuning.
 
 When the decisions call fails, the provider has no credential, or any factor is
 missing, the verdict comes from the `explain` role alone — the display degrades,
@@ -103,8 +113,10 @@ Every confirmation shows a custom TUI with:
 ### Diff preview
 
 For `edit` and `write` tool calls, the dialog shows a unified diff computed from
-the pending changes. For `edit`, matching comes from the vendored matcher in
-`edit-match.ts` (pi's own isn't exported) with rendering from `generateDiffString`.
+the pending changes; `write` reads the target first, so an overwrite shows its
+removals instead of only the new content. For `edit`, matching comes from the
+vendored matcher in `edit-match.ts` (pi's own isn't exported) with rendering from
+`generateDiffString`.
 For `patch`, the preview uses patch's own matcher, so tolerant matches (Unicode
 arrows, tab↔space) preview correctly.
 
@@ -190,6 +202,10 @@ Status bar shows `+tirith` when active.
 - `logic.test.ts` — Tests for decision logic and auto-classify helpers
 - `explain.ts` — Verdict parsing, tool call description, block reasons
 - `explain.test.ts` — Tests for explain/verdict logic
+- `prompts.ts` — Explain role system prompt, shared with the benchmarks
+- `edit-preview.ts` — Real diff and change summary for write/edit calls, used by the dialog and the classifier
+- `edit-match.ts` — Edit matcher vendored from pi, so previews match what the edit will do
+- `tirith.ts` — Tirith verdict mapping (block/warn, coverage gaps, LLM note)
 - `confirm-ui.ts` — Custom TUI component (SelectList + Editor note field + explanation display)
 - `index.ts` — Pi extension wrapper (UI, events, auto-classify, user-message notes, tirith tool_result injection)
 

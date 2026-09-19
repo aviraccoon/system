@@ -114,8 +114,8 @@ match.
 - `diagnostics.ts` — pure diagnostics (closest match, char-level codepoint diff via
   bounded LCS, three-tier rune rendering, occurrence context with `>>` markers,
   near-miss detection, duplicate-line guard, message formatting).
-- `preview.ts` — diff preview for the permission gate (uses patch's own
-  matcher, not pi's computeEditsDiff).
+- `preview.ts` — diff preview and change summary for the permission gate (uses
+  patch's own matcher, not pi's computeEditsDiff).
 - `match.test.ts` / `diagnostics.test.ts` — tests covering a matrix of whitespace,
   Unicode, indentation and stale-context inputs, plus each feature above,
   including codepoint-level char-diff and three-tier rendering.

@@ -31,7 +31,7 @@ Definitions for the `subagent` extension, in `agents/` (deployed to `~/.pi/agent
 
 | Agent | Use for |
 |-------|---------|
-| **editor** | Editing a draft for slop, padding and machine-written prose -- quoted line + rewrite, never edits |
+| **editor** | Reviewing prose for slop, padding and machine-written voice -- docs, commit messages, comments; quoted line + concrete rewrite, never edits |
 | **researcher** | Investigating code, searching, web research -- returns findings |
 | **reviewer** | Reviewing a diff -- or a commit message against one -- for regressions, bugs, test gaps, private content; reports, never edits |
 

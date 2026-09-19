@@ -11,7 +11,9 @@ Delegate tasks to specialized agents with isolated context windows. Spawns a sep
 5. **Model roles** — agent frontmatter `role` field resolves to a model from `roles.json` via the shared `model-roles` module
 6. **Per-agent extensions** — each subagent loads a fixed pair plus whatever its `extensions` frontmatter declares (see Subagent environment)
 7. **Session storage** — each run writes a JSONL session to `~/.pi/agent/subagent-sessions/`, cleaned up after 7 days
-8. **Project-local agent gating** — prompts for confirmation before running agents from `.pi/agents/` in the project repo
+8. **Turn budget** — `maxTurns` (default 30) is stated in the task; three turns before the cap the child is steered once to write its report; the run is aborted at the cap
+9. **Retries** — a provider failure gets up to 3 attempts across the agent's model chain
+10. **Project-local agent gating** — prompts for confirmation before running agents from `.pi/agents/` in the project repo
 
 ## Commands
 
@@ -60,9 +62,27 @@ Each subagent invocation:
 2. Writes the agent's system prompt to a temp file
 3. Spawns `pi --mode rpc --no-extensions --session-dir <dir> --append-system-prompt <file>`
 4. Sets `PI_SUBAGENT=1` to suppress journal injection and other interactive features
-5. Sends a `prompt` RPC command with the task
+5. Sends a `prompt` RPC command with the task and its turn budget
 6. Processes streaming events (`message_update`, `tool_execution_start/end`, `agent_end`)
 7. Shuts down by closing stdin after an `abort` (pi has no `shutdown` RPC command), which makes the child exit 0 cleanly; SIGTERM/SIGKILL only as a 3s escalation fallback
+
+### Turn budget
+
+Each attempt runs with a turn cap (`maxTurns` on the tool schema, default 30). The
+task message states the cap and what happens at it, so the child can budget its turns
+instead of discovering the limit when the nudge arrives. Three turns before the cap
+the child is steered once: stop investigating, write the report from what it has. At
+the cap it is aborted. The nudge is recorded like a user steer, so the live feed and
+the result both show why the child wrapped up early.
+
+### Retries
+
+A provider-side failure — `stopReason: "error"`, or a child that exited non-zero
+without producing a message — is retried: the first model twice, then the next entry
+in the agent's role chain, up to 3 attempts. When the chain is short, the plan repeats
+the last candidate (a retry can land on a different upstream even for the same model).
+A dispatch without a role has no chain and gets one attempt. User aborts and turn-budget
+stops are not retried. A retried failure line names the attempt count.
 
 ### Streaming
 
@@ -81,6 +101,9 @@ Assistant messages are grouped into turns (one per assistant message). Commands 
 Steering messages sent via `/subagent-steer` appear immediately in the live feed and in the result display as bold `steering: …` lines at the turn boundary they arrived at.
 
 `Ctrl+O` is pi's global `app.tools.expand` toggle; it applies to the last tool output.
+
+Results end with the child's transcript path (`[subagent session: …]`) when one
+exists, so a capped or failed run can be read afterwards.
 
 ### Steering
 
@@ -126,6 +149,9 @@ Subagents run with:
 | `agents.ts` | Agent discovery, frontmatter parsing, directory scanning. Pure fs/path, no pi deps |
 | `rpc.ts` | RPC process management, streaming state machine, event loop, `SubagentHandle`, model resolution |
 | `render.ts` | TUI rendering: `renderCall`/`renderResult` for tool call display and streaming output |
+| `retry.ts` | Retry policy: which failures retry, attempt plan across the role chain |
+| `turn-budget.ts` | Task budget message, nudge threshold and one-shot latch |
+| `retry.test.ts` / `turn-budget.test.ts` | Tests for the retry policy and turn-budget decisions |
 | `agents.test.ts` | Tests for frontmatter parsing, discovery, project directory resolution (19 tests) |
 | `render.test.ts` | Tests for formatting and render output (38 tests) |
 

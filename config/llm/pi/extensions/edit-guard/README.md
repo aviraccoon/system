@@ -11,8 +11,8 @@ losing to the model's habits is mirrored here as line patterns.
   tool result as a self-contained block: matched lines with `>>` context plus
   the verbatim policy statement, so the agent can correct without the user
   reading diffs.
-- Every `bash` command is scanned with `bash`-kind rules before it reaches
-  the agent, with the same block appended.
+- Every shell command — `bash` or the confined `bash_readonly` — is scanned with
+  `bash`-kind rules before it reaches the agent, with the same block appended.
 - `write` to an existing non-empty file is blocked once with a pointer to
   `patch` (write is for new files). Re-issuing the same write proceeds, so
   genuine full rewrites stay possible.
