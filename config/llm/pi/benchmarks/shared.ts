@@ -77,7 +77,7 @@ function loadRoles(path?: string): RolesFile {
 // ── Resolution ──
 
 /** Resolve "!command" apiKeys by running the command. */
-function resolveApiKey(raw: string | undefined): string | undefined {
+export function resolveApiKey(raw: string | undefined): string | undefined {
   if (!raw) return undefined;
   if (raw.startsWith("!")) {
     try {
