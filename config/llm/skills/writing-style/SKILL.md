@@ -136,6 +136,14 @@ These patterns are bad regardless of context.
 
 Brevity is not rudeness. Concise writing respects the reader's time.
 
+### Commit-Message Status Prose
+
+**Patterns to avoid**: test pass counts, "verified by ...", "all checks pass", check transcripts, restating the diff.
+
+**The problem**: The message reports the process instead of the change. The reader has the diff; what they lack is the decision behind it.
+
+**Instead**: State what the change does and the failure it prevents. A measurement belongs only when it justifies the decision — what was probed and what it showed. A check result that would not change what the reader does is noise.
+
 ### Collaborative Language Leakage
 
 **Words to avoid**: *I hope this helps*, *Of course!*, *Certainly!*, *You're absolutely right!*, *Would you like...*, *is there anything else*, *let me know*, *here is a...*
@@ -305,4 +313,4 @@ The fundamental problem with typical AI writing is regression toward the generic
 ---
 
 *Adapted from [Wikipedia: Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing)*
-*Last updated: 2025-12-31*
+*Last updated: 2026-09-19*
