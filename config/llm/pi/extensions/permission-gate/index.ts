@@ -38,6 +38,7 @@ import {
 import {
   applyEditFloor,
   blockReason,
+  classificationEntry,
   describeToolCall,
   factorsToExplanation,
   mergeExplanations,
@@ -145,6 +146,16 @@ export default function permissionGate(pi: ExtensionAPI) {
     if (factors) return applyEditFloor(factors, EDIT_LIKE_TOOLS.includes(toolName));
     const proseText = await askProse(ctx, description, timeoutMs);
     return proseText ? parseExplanation(proseText, true) : null;
+  }
+
+  /**
+   * Append what the classifier said to the session, so thresholds can be tuned
+   * against real dialogs later. The user's own choice is not stored here: it is
+   * already in the session as the tool result that follows (a block says so).
+   */
+  function recordClassification(toolName: string, toolCallId: string, result: ExplanationResult | null): void {
+    if (!result) return;
+    pi.appendEntry("permission_gate", classificationEntry(toolName, toolCallId, result));
   }
 
   /** Ask the explain role for the human sentence. Null on failure or timeout. */
@@ -589,6 +600,9 @@ export default function permissionGate(pi: ExtensionAPI) {
     tirithNote?: string,
   ): Promise<{ block: true; reason: string } | undefined> {
     pi.appendEntry("permission_gate", { event: "pending_confirmation", toolCallId: event.toolCallId });
+    explanation?.promise
+      .then((result) => recordClassification(event.toolName, event.toolCallId, result))
+      .catch(() => {});
     if (decision.confirmType === "bash") {
       const prefix = decision.suggestedPrefix ?? "";
       const command = decision.displayPath ?? "";
@@ -789,6 +803,7 @@ export default function permissionGate(pi: ExtensionAPI) {
       const cached = state.classifyCache.get(key);
 
       if (cached && shouldAutoAllow(cached.verdict, state.mode)) {
+        recordClassification(event.toolName, event.toolCallId, cached);
         state.autoAllowLog.push({
           toolName: event.toolName,
           description: describeToolCall(event.toolName, input, rawDiff),
@@ -815,6 +830,8 @@ export default function permissionGate(pi: ExtensionAPI) {
           });
 
           if (shouldAutoAllow(explResult.verdict, state.mode)) {
+            // Dialog paths record through showConfirmDialog; this one returns first.
+            recordClassification(event.toolName, event.toolCallId, explResult);
             state.autoAllowLog.push({
               toolName: event.toolName,
               description: describeToolCall(event.toolName, input, rawDiff),

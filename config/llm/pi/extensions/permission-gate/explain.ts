@@ -109,6 +109,22 @@ export function mergeExplanations(factors: ExplanationResult, prose: Explanation
 }
 
 /**
+ * Session entry recording what a classifier decided, for later threshold tuning.
+ * One entry per classified call; the user's own choice is not duplicated here
+ * because the tool result that follows already records it.
+ */
+export function classificationEntry(toolName: string, toolCallId: string, result: ExplanationResult) {
+  return {
+    event: "classified" as const,
+    toolCallId,
+    toolName,
+    verdict: result.verdict,
+    short: result.short,
+    detail: result.detail,
+  };
+}
+
+/**
  * Edit-like tools mutate by definition, so a factor answer that says otherwise
  * must not produce a SAFE verdict that auto-allows a write. The other factors
  * still decide how bad the mutation is.

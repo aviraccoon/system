@@ -3,6 +3,7 @@ import { verdictFromFactors } from "../shared/risk-factors";
 import {
   applyEditFloor,
   blockReason,
+  classificationEntry,
   describeToolCall,
   factorsToExplanation,
   findVerdictLine,
@@ -47,6 +48,24 @@ describe("mergeExplanations", () => {
     expect(merged.short).toBe("Deletes a build directory \u00b7 jev: mutates_state 0.95");
     expect(merged.detail).toContain("thresholds: risky >= 0.50");
     expect(merged.detail).toContain("The command removes the output folder.");
+  });
+});
+
+describe("classificationEntry", () => {
+  test("carries the verdict, the scores line and the detail", () => {
+    const entry = classificationEntry("bash", "call_1", {
+      verdict: "risky",
+      short: "jev: mutates_state 0.95",
+      detail: "thresholds: risky >= 0.50",
+    });
+    expect(entry).toEqual({
+      event: "classified",
+      toolCallId: "call_1",
+      toolName: "bash",
+      verdict: "risky",
+      short: "jev: mutates_state 0.95",
+      detail: "thresholds: risky >= 0.50",
+    });
   });
 });
 
