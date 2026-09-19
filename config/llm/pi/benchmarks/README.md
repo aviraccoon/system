@@ -23,6 +23,14 @@ Models come from three sources (same as pi's `ModelRegistry`):
 
 No model definitions are duplicated in benchmark code. The benchmark reads the same config pi uses.
 
+## Reproducible fixtures
+
+Cases and per-run fixtures come from `explain-cases.ts`. Set `BENCH_SEED` to make the fixtures deterministic, so two runners score identical inputs:
+
+```bash
+BENCH_SEED=run-a bun run benchmarks/explain.ts
+```
+
 ## Roles
 
 | Benchmark | Role | What it tests |
