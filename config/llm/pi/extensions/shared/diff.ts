@@ -8,8 +8,10 @@
  * - `changedLineNumbers` — line-level LCS diff between two file contents,
  *   returning the NEW-side line numbers that differ. Used by the LSP caller
  *   warning to decide which top-level symbols an edit touched.
+ * - `diffLineCounts` — added/removed counts read off pi's display-format diff
+ *   (`+12 text`), for stating an edit's size in a classifier's state.
  *
- * Both are pure (no pi imports) and bun-testable. Matching concerns (tolerant
+ * All are pure (no pi imports) and bun-testable. Matching concerns (tolerant
  * normalization, indentation) deliberately live in patch/match.ts, not here —
  * these are exact-content diffs used for diagnosis / change-detection, not for
  * deciding whether to apply an edit.
@@ -197,4 +199,29 @@ function changedNewIndices(a: string[], b: string[], at: (i: number, j: number) 
     j++;
   }
   return changed;
+}
+
+// ── Display-diff line counts ────────────────────────────────────────────────
+
+/**
+ * Added and removed lines in one pi-format diff (`+12 text` / `-12 text`). Each
+ * line is classified by its own leading marker, so a content line that starts
+ * with `+`/`-` after its line number is still counted by the marker.
+ *
+ * Callers must pass a single file's diff: `patch` joins multi-file previews with
+ * a `--- <path> ---` separator, which would count as one removed line.
+ */
+export function diffLineCounts(diff: string): { added: number; removed: number } {
+  let added = 0;
+  let removed = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+")) added++;
+    else if (line.startsWith("-")) removed++;
+  }
+  return { added, removed };
+}
+
+/** "1 line", "40 lines". */
+export function pluralLines(n: number): string {
+  return `${n} ${n === 1 ? "line" : "lines"}`;
 }

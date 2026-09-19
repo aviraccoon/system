@@ -838,6 +838,23 @@ describe("cacheKey", () => {
     const k2 = cacheKey("write", { path: "foo.ts" });
     expect(k1).not.toBe(k2);
   });
+
+  test("a state tag distinguishes the same call in different target states", () => {
+    const created = cacheKey("write", { path: "foo.ts", content: "x" }, "creates a new file: 1 line");
+    const overwritten = cacheKey(
+      "write",
+      { path: "foo.ts", content: "x" },
+      "overwrites the existing file: removes 1 line, adds 1 line",
+    );
+    expect(created).not.toBe(overwritten);
+  });
+
+  test("no state tag keeps the plain input key", () => {
+    expect(cacheKey("bash", { command: "ls" })).toBe(cacheKey("bash", { command: "ls" }, undefined));
+    expect(cacheKey("bash", { command: "ls" })).not.toBe(
+      cacheKey("bash", { command: "ls" }, "creates a new file: 1 line"),
+    );
+  });
 });
 
 // ── createInitialState includes auto-classify fields ──

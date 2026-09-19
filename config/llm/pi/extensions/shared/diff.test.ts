@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { changedLineNumbers, diffRunes } from "./diff";
+import { changedLineNumbers, diffLineCounts, diffRunes, pluralLines } from "./diff";
 
 describe("changedLineNumbers", () => {
   test("identical content → []", () => {
@@ -68,5 +68,27 @@ describe("diffRunes", () => {
     const hunks = diffRunes(a, b);
     expect(hunks).toHaveLength(1);
     expect(hunks[0].expected).not.toBe(hunks[0].actual);
+  });
+});
+
+describe("diffLineCounts", () => {
+  test("counts by each line's own marker", () => {
+    expect(diffLineCounts("-1 old\n+1 new\n 2 kept\n+3 added")).toEqual({ added: 2, removed: 1 });
+  });
+
+  test("a content line that starts with a marker after its line number is counted by the marker", () => {
+    expect(diffLineCounts("+1 ++i\n-1 --i")).toEqual({ added: 1, removed: 1 });
+  });
+
+  test("empty diff → zeros", () => {
+    expect(diffLineCounts("")).toEqual({ added: 0, removed: 0 });
+  });
+});
+
+describe("pluralLines", () => {
+  test("singular and plural", () => {
+    expect(pluralLines(1)).toBe("1 line");
+    expect(pluralLines(0)).toBe("0 lines");
+    expect(pluralLines(40)).toBe("40 lines");
   });
 });

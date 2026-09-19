@@ -12,6 +12,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { generateDiffString } from "@earendil-works/pi-coding-agent";
+import { diffLineCounts, pluralLines } from "../shared/diff";
 import { findDuplicationIssues } from "./diagnostics";
 import {
   applyPreservingOriginal,
@@ -28,6 +29,8 @@ export interface PatchPreview {
   diff: string;
   /** First changed line (1-based, in the new file) for scroll position. */
   firstChangedLine?: number;
+  /** One-line account of the change for the classifier's state. */
+  summary: string;
 }
 
 /** Group edits by resolved absolute path (multi-file). */
@@ -59,6 +62,8 @@ export async function computePatchPreview(
   const groups = groupByPath(topPath, edits, cwd);
   const parts: string[] = [];
   let firstChangedLine: number | undefined;
+  let addedTotal = 0;
+  let removedTotal = 0;
 
   for (const [absPath, { displayPath, edits: groupEdits }] of groups) {
     let buffer: Buffer;
@@ -92,9 +97,15 @@ export async function computePatchPreview(
 
     const { diff, firstChangedLine: fcl } = generateDiffString(content, lfNew);
     if (firstChangedLine === undefined) firstChangedLine = fcl;
+    // Count per file, before the multi-file separator joins the diffs.
+    const counts = diffLineCounts(diff);
+    addedTotal += counts.added;
+    removedTotal += counts.removed;
     parts.push(groups.size > 1 ? `--- ${displayPath} ---\n${diff}` : diff);
   }
 
   if (parts.length === 0) return undefined;
-  return { diff: parts.join("\n\n"), firstChangedLine };
+  const stats = `removes ${pluralLines(removedTotal)}, adds ${pluralLines(addedTotal)}`;
+  const summary = groups.size === 1 ? `edits the existing file: ${stats}` : `edits ${groups.size} files: ${stats}`;
+  return { diff: parts.join("\n\n"), firstChangedLine, summary };
 }

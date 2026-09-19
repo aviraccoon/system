@@ -4,6 +4,7 @@ import {
   applyEditFloor,
   blockReason,
   classificationEntry,
+  classifierInput,
   describeToolCall,
   factorsToExplanation,
   findVerdictLine,
@@ -149,6 +150,93 @@ describe("describeToolCall", () => {
   test("unknown tool truncates long JSON", () => {
     const result = describeToolCall("custom", { data: "x".repeat(1000) });
     expect(result.length).toBeLessThanOrEqual(510); // "custom: " + 500
+  });
+
+  test("write states the preview summary above the diff", () => {
+    const result = describeToolCall(
+      "write",
+      { path: "/tmp/test.txt", content: "beta" },
+      { rawDiff: "-1 alpha\n+1 beta", summary: "overwrites the existing file: removes 1 line, adds 1 line" },
+    );
+    expect(result).toBe("write to /tmp/test.txt (overwrites the existing file: removes 1 line, adds 1 line):\n+1 beta");
+  });
+
+  test("removed and context lines never enter the state", () => {
+    const result = describeToolCall(
+      "edit",
+      { path: "file.ts" },
+      {
+        rawDiff: " 1 kept\n-2 secret-old-line\n+2 new",
+        summary: "edits the existing file: removes 1 line, adds 1 line",
+      },
+    );
+    expect(result).toContain("+2 new");
+    expect(result).not.toContain("secret-old-line");
+    expect(result).not.toContain("kept");
+  });
+
+  test("edit states the preview summary", () => {
+    const result = describeToolCall(
+      "edit",
+      { path: "file.ts" },
+      { rawDiff: "-1 old\n+1 new", summary: "edits the existing file: removes 1 line, adds 1 line" },
+    );
+    expect(result).toContain("edit file.ts (edits the existing file: removes 1 line, adds 1 line):");
+  });
+
+  test("a truncated excerpt keeps the header and names what was dropped", () => {
+    const result = describeToolCall("write", { path: "f.ts", content: "x".repeat(500) }, { excerptChars: 100 });
+    expect(result.startsWith("write to f.ts:\n")).toBe(true);
+    expect(result).toContain("x".repeat(100));
+    expect(result).toContain("[truncated: 100 of 500 characters]");
+  });
+
+  test("the summary survives a truncation of the diff below it", () => {
+    const result = describeToolCall(
+      "patch",
+      { path: "p.ts" },
+      {
+        rawDiff: `+1 ${"y".repeat(300)}`,
+        summary: "edits 2 files: removes 3 lines, adds 4 lines",
+        excerptChars: 50,
+      },
+    );
+    expect(result.startsWith("patch p.ts (edits 2 files: removes 3 lines, adds 4 lines):\n")).toBe(true);
+    expect(result).toContain("[truncated: 50 of 303 characters]");
+  });
+
+  test("a short body is untouched by the budget", () => {
+    expect(describeToolCall("bash", { command: "ls -la" }, { excerptChars: 100 })).toBe("bash command: ls -la");
+  });
+});
+
+// ── classifierInput ──
+
+describe("classifierInput", () => {
+  test("the state is the description the classifier receives, and the key carries it", () => {
+    const { description, key } = classifierInput("bash", { command: "ls -la" });
+    expect(description).toBe("bash command: ls -la");
+    expect(key).toContain(description);
+  });
+
+  test("two states of the same call get different keys", () => {
+    const input = { path: "foo.ts", content: "a\n" };
+    const created = classifierInput("write", input, { rawDiff: "+1 a", summary: "creates a new file: 1 line" });
+    const overwritten = classifierInput("write", input, {
+      rawDiff: "-1 x\n+1 a",
+      summary: "overwrites the existing file: removes 1 line, adds 1 line",
+    });
+    expect(created.key).not.toBe(overwritten.key);
+  });
+
+  test("the same counts over different targets still get different keys", () => {
+    // Same tool input and the same summary; only the target's line numbers differ,
+    // which is how the excerpt distinguishes the two states.
+    const input = { path: "foo.ts", content: "a\nb\nc\n" };
+    const summary = "overwrites the existing file: removes 1 line, adds 1 line";
+    const secondLine = classifierInput("write", input, { rawDiff: "-2 x\n+2 a", summary });
+    const thirdLine = classifierInput("write", input, { rawDiff: "-3 x\n+3 c", summary });
+    expect(secondLine.key).not.toBe(thirdLine.key);
   });
 });
 

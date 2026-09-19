@@ -6,23 +6,79 @@
 import type { FactorDecision } from "../shared/risk-factors";
 import type { ExplanationResult, ExplanationVerdict } from "./confirm-ui";
 
+import { cacheKey } from "./logic";
+
 // ── Tool call description ──
 
-/** Build a concise description of a tool call for the sidecar explainer. */
-export function describeToolCall(toolName: string, input: Record<string, unknown>, rawDiff?: string): string {
+/**
+ * Character budget for the excerpt of a classifier state (see
+ * `describeToolCall`). Derived from the decisions model's context: 32K tokens,
+ * minus the factor battery (~3.9K chars, ~1K tokens), leaves ~30K tokens for
+ * the state — at ~4 chars per token, ~120K characters. Rounded down. The budget
+ * exists because an unbounded diff can fail the call outright: a truncated tail
+ * fails open, a failed call fails closed.
+ */
+export const MAX_EXCERPT_CHARS = 100_000;
+
+/** Clip to a character budget, saying so instead of silently dropping the tail. */
+export function clipExcerpt(text: string, budget: number): string {
+  if (text.length <= budget) return text;
+  return `${text.slice(0, budget)}\n… [truncated: ${budget} of ${text.length} characters]`;
+}
+
+/**
+ * The part of a diff a classification provider may see: only the lines the call
+ * adds. Removed and context lines are the target's current contents, which the
+ * tool input never carried — a write used to describe itself from the content it
+ * supplies, and that property is kept. The summary states what is removed, so
+ * the fact still reaches the battery without the bytes.
+ */
+export function addedLines(diff: string): string {
+  return diff
+    .split("\n")
+    .filter((line) => line.startsWith("+"))
+    .join("\n");
+}
+
+export interface DescribeOptions {
+  /** Real diff of the change, from the preview helpers. */
+  rawDiff?: string;
+  /** One-line account of what the change does: create/overwrite plus line counts. */
+  summary?: string;
+  /** Character budget for the excerpt; tests use a small one. */
+  excerptChars?: number;
+}
+
+/**
+ * Build the state a classifier reads for a tool call: a one-line header plus an
+ * excerpt. The header carries what the factor battery keys on — the path,
+ * whether the target is created or overwritten, and the line counts — so it is
+ * never truncated, and it is the only place the target's own bytes appear at all
+ * (as counts). The excerpt is the lines the call adds, clipped; a call with no
+ * preview gets no summary and a plain header, which is all that path has to
+ * offer.
+ */
+export function describeToolCall(
+  toolName: string,
+  input: Record<string, unknown>,
+  options: DescribeOptions = {},
+): string {
+  const budget = options.excerptChars ?? MAX_EXCERPT_CHARS;
+  const head = options.summary ? ` (${options.summary})` : "";
   if (toolName === "bash") {
-    return `bash command: ${input.command}`;
+    return `bash command: ${clipExcerpt(String(input.command), budget)}`;
   }
   if (toolName === "write") {
-    if (rawDiff) return `write to ${input.path}:\n${rawDiff}`;
-    const content = typeof input.content === "string" ? input.content : "";
-    return `write to ${input.path}:\n${content}`;
+    const body = options.rawDiff ? addedLines(options.rawDiff) : typeof input.content === "string" ? input.content : "";
+    return `write to ${input.path}${head}:\n${clipExcerpt(body, budget)}`;
   }
   if (toolName === "edit" || toolName === "patch") {
-    if (rawDiff) return `${toolName} ${input.path}:\n${rawDiff}`;
+    if (options.rawDiff) {
+      return `${toolName} ${input.path}${head}:\n${clipExcerpt(addedLines(options.rawDiff), budget)}`;
+    }
     if (input.edits && Array.isArray(input.edits)) {
       const edits = input.edits as Array<{ oldText?: string; newText?: string; path?: string }>;
-      const summary = edits
+      const listing = edits
         .map((e, i) => {
           const old = typeof e.oldText === "string" ? e.oldText : "";
           const nw = typeof e.newText === "string" ? e.newText : "";
@@ -30,13 +86,29 @@ export function describeToolCall(toolName: string, input: Record<string, unknown
           return `${toolName} ${i + 1}: "${old}" -> "${nw}"${at}`;
         })
         .join("\n");
-      return `${toolName} ${input.path} (${edits.length} edits):\n${summary}`;
+      return `${toolName} ${input.path}${head} (${edits.length} edits):\n${clipExcerpt(listing, budget)}`;
     }
     const old = typeof input.oldText === "string" ? input.oldText : "";
     const nw = typeof input.newText === "string" ? input.newText : "";
-    return `${toolName} ${input.path}: "${old}" -> "${nw}"`;
+    return `${toolName} ${input.path}${head}: "${old}" -> "${nw}"`;
   }
   return `${toolName}: ${JSON.stringify(input).slice(0, 500)}`;
+}
+
+/**
+ * The state a classifier reads for a call, plus the cache key that identifies it.
+ * The key carries the state itself: for an edit-like call the state depends on the
+ * target (create vs overwrite, line counts, which lines are added), not only on the
+ * tool input, so a verdict computed against one state of the filesystem must not be
+ * served for the same call against another.
+ */
+export function classifierInput(
+  toolName: string,
+  input: Record<string, unknown>,
+  preview?: DescribeOptions,
+): { description: string; key: string } {
+  const description = describeToolCall(toolName, input, preview);
+  return { description, key: cacheKey(toolName, input, description) };
 }
 
 /** First per-edit path for a patch-style input (no top-level path). */

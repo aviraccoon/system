@@ -56,6 +56,8 @@ export interface DiffBody {
   lines: string[];
   /** Raw diff text (no ANSI, for sidecar classification). */
   rawDiff: string;
+  /** One-line account of the change (create/overwrite, line counts) for classification. */
+  summary?: string;
   /** Index of the first changed line (for initial scroll position in compact view). */
   firstChangedLine?: number;
 }

@@ -573,9 +573,14 @@ export function recordAllow(tracker: DenialTracker): void {
   tracker.consecutive = 0;
 }
 
-/** Simple hash for cache keys. */
-export function cacheKey(toolName: string, input: Record<string, unknown>): string {
-  return `${toolName}:${JSON.stringify(input)}`;
+/**
+ * Cache key for a classification. `state` is the exact text sent to the classifier:
+ * it is not a function of the tool input alone for edit-like calls (a preview reads
+ * the target), so it has to be part of the key — otherwise a verdict computed against
+ * one state of the filesystem is served for the same call made against another.
+ */
+export function cacheKey(toolName: string, input: Record<string, unknown>, state?: string): string {
+  return `${toolName}:${JSON.stringify(input)}${state ? `\u0000${state}` : ""}`;
 }
 
 /**

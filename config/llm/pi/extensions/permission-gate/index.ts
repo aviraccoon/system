@@ -17,7 +17,7 @@ import { EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { extractText, getSidecarStats, hasRole, resolveProviderAuth, sidecarComplete } from "../shared/model-roles";
 import { factorProbabilities, hasAllFactors, RISK_FACTORS, verdictFromFactors } from "../shared/risk-factors";
 import { isConfinedBash } from "../shared/sandbox";
-import { computeEditPreview } from "./edit-preview";
+import { computeEditPreview, computeWritePreview } from "./edit-preview";
 
 /** Preview couldn't be computed (load/computation failure). Distinct from
  *  `undefined` (doomed edit) so the gate fails CLOSED, not silently allows. */
@@ -39,6 +39,7 @@ import {
   applyEditFloor,
   blockReason,
   classificationEntry,
+  classifierInput,
   describeToolCall,
   factorsToExplanation,
   mergeExplanations,
@@ -48,7 +49,6 @@ import {
 } from "./explain";
 import {
   autoResolve,
-  cacheKey,
   createInitialState,
   decide,
   findGitRoot,
@@ -132,16 +132,15 @@ export default function permissionGate(pi: ExtensionAPI) {
   /**
    * Classify for auto-allow: the decisions model's verdict, and only when that
    * is unavailable the explain role. Deliberately does not wait for prose: the
-   * verdict must not queue behind the slower chat model.
+   * verdict must not queue behind the slower chat model. Takes the state already
+   * built for the cache key, so the two can never describe different calls.
    */
   async function classify(
-    toolName: string,
-    input: Record<string, unknown>,
     ctx: ExtensionContext,
-    rawDiff?: string,
+    toolName: string,
+    description: string,
     timeoutMs = 5000,
   ): Promise<import("./confirm-ui").ExplanationResult | null> {
-    const description = describeToolCall(toolName, input, rawDiff);
     const factors = await classifyWithFactors(ctx, description, timeoutMs);
     if (factors) return applyEditFloor(factors, EDIT_LIKE_TOOLS.includes(toolName));
     const proseText = await askProse(ctx, description, timeoutMs);
@@ -216,18 +215,22 @@ export default function permissionGate(pi: ExtensionAPI) {
     toolName: string,
     input: Record<string, unknown>,
     ctx: ExtensionContext,
-    rawDiff?: string,
+    diff?: DiffBody,
   ): ExplanationProvider | undefined {
     if (!explainEnabled) return undefined;
 
+    // The state and its cache key come from one place: an edit-like state depends
+    // on the target, so a verdict must not be reused across a change in it.
+    const { description, key } = classifierInput(toolName, input, {
+      rawDiff: diff?.rawDiff,
+      summary: diff?.summary,
+    });
     // Check cache first -- skip the call if this call was already classified
-    const key = cacheKey(toolName, input);
     const cachedResult = state.classifyCache.get(key);
     if (cachedResult) {
       return { promise: Promise.resolve(cachedResult), abort: () => {} };
     }
 
-    const description = describeToolCall(toolName, input, rawDiff);
     const abortController = new AbortController();
     const listeners: Array<(result: ExplanationResult) => void> = [];
 
@@ -549,7 +552,12 @@ export default function permissionGate(pi: ExtensionAPI) {
         // overlap/no-change): no styled diff, gate confirms via details body.
         if ("error" in result) return undefined;
         const styled = renderDiff(result.diff);
-        return { lines: styled.split("\n"), rawDiff: result.diff, firstChangedLine: result.firstChangedLine };
+        return {
+          lines: styled.split("\n"),
+          rawDiff: result.diff,
+          firstChangedLine: result.firstChangedLine,
+          summary: result.summary,
+        };
       }
       if (toolName === "patch" && input.edits && Array.isArray(input.edits)) {
         const path = typeof input.path === "string" ? input.path : "";
@@ -566,21 +574,27 @@ export default function permissionGate(pi: ExtensionAPI) {
           // throw = computation failure → `unavailable` → gate confirms.
           if (!result) return undefined;
           const styled = renderDiff(result.diff);
-          return { lines: styled.split("\n"), rawDiff: result.diff, firstChangedLine: result.firstChangedLine };
+          return {
+            lines: styled.split("\n"),
+            rawDiff: result.diff,
+            firstChangedLine: result.firstChangedLine,
+            summary: result.summary,
+          };
         } catch {
           return { unavailable: true, reason: "patch preview computation failed" };
         }
       }
       if (toolName === "write") {
         const content = typeof input.content === "string" ? input.content : "";
-        if (!content) return undefined;
-        const contentLines = content.split("\n");
-        const lineNumWidth = String(contentLines.length).length;
-        const fakeDiff = contentLines
-          .map((line, i) => `+${String(i + 1).padStart(lineNumWidth, " ")} ${line}`)
-          .join("\n");
-        const styled = renderDiff(fakeDiff);
-        return { lines: styled.split("\n"), rawDiff: fakeDiff };
+        const path = typeof input.path === "string" ? input.path : "";
+        const preview = await computeWritePreview(path, content, cwd);
+        const styled = renderDiff(preview.diff);
+        return {
+          lines: styled.split("\n"),
+          rawDiff: preview.diff,
+          firstChangedLine: preview.firstChangedLine,
+          summary: preview.summary,
+        };
       }
     } catch {
       // Fall through -- diff is nice-to-have, not critical
@@ -644,6 +658,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         ["Allow once", `Allow "${path}" for this session`, "Block"],
         explanation,
         diffBody,
+        detailsBody,
       );
       handleDialogAutoToggle(result, ctx);
       const { choice, note, explanation: explResult } = result;
@@ -778,8 +793,11 @@ export default function permissionGate(pi: ExtensionAPI) {
     } else {
       diffBody = diffResult;
     }
-    const rawDiff = diffBody?.rawDiff;
-    const detailsBody = diffBody ? undefined : computeDetailsBody(event.toolName, input);
+    // A preview with no diff text (an unreadable target) still carries the summary
+    // the classifier needs, but there is nothing to render — the dialog falls back
+    // to the tool input instead of an empty box.
+    const renderableDiff = diffBody?.rawDiff ? diffBody : undefined;
+    const detailsBody = renderableDiff ? undefined : computeDetailsBody(event.toolName, input);
 
     // patch: skip only dry runs + doomed edits (no write happens). If preview
     // was unavailable, fall through to confirm without a diff — never allow.
@@ -802,7 +820,10 @@ export default function permissionGate(pi: ExtensionAPI) {
     // set is not the classifier's to resolve. Runs supervised only — the /auto
     // trigger that selects the unattended bands is not wired yet.
     if (state.autoClassify === "on" && classifierAvailable && !tirithWarning) {
-      const key = cacheKey(event.toolName, input);
+      const { description, key } = classifierInput(event.toolName, input, {
+        rawDiff: diffBody?.rawDiff,
+        summary: diffBody?.summary,
+      });
       const cached = state.classifyCache.get(key);
       const resolve = (result: ExplanationResult) =>
         autoResolve(decision, { verdict: result.verdict, short: result.short }, state.mode, "supervised");
@@ -810,7 +831,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         recordClassification(event.toolName, event.toolCallId, result);
         state.autoAllowLog.push({
           toolName: event.toolName,
-          description: describeToolCall(event.toolName, input, rawDiff),
+          description,
           verdict: result.verdict,
           short: result.short,
           timestamp: Date.now(),
@@ -832,14 +853,14 @@ export default function permissionGate(pi: ExtensionAPI) {
           event,
           decision,
           makePreloadedExplanation(cached),
-          diffBody,
+          renderableDiff,
           detailsBody,
           tirithWarning,
         );
       }
 
       ctx.ui.setWorkingMessage("Classifying...");
-      const explResult = await classify(event.toolName, input, ctx, rawDiff);
+      const explResult = await classify(ctx, event.toolName, description);
       ctx.ui.setWorkingMessage();
 
       if (explResult) {
@@ -860,7 +881,7 @@ export default function permissionGate(pi: ExtensionAPI) {
           event,
           decision,
           makePreloadedExplanation(explResult),
-          diffBody,
+          renderableDiff,
           detailsBody,
           tirithWarning,
         );
@@ -874,8 +895,17 @@ export default function permissionGate(pi: ExtensionAPI) {
     // and the AI take is additive: for a long bash call the human needs to know
     // what the command actually does to judge a tirith finding, not just that
     // a heuristic flagged it. Auto-allow is already suppressed above.
-    const explanation = makeExplanation(event.toolName, input, ctx, rawDiff);
-    return await showConfirmDialog(ctx, event, decision, explanation, diffBody, detailsBody, tirithWarning, tirithNote);
+    const explanation = makeExplanation(event.toolName, input, ctx, diffBody);
+    return await showConfirmDialog(
+      ctx,
+      event,
+      decision,
+      explanation,
+      renderableDiff,
+      detailsBody,
+      tirithWarning,
+      tirithNote,
+    );
   });
 
   // Flush notes captured during the turn as one user message: this runs after
