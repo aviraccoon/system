@@ -34,6 +34,7 @@ import {
   type DiffBody,
   type ExplanationProvider,
   type ExplanationResult,
+  type TirithBanner,
 } from "./confirm-ui";
 import {
   applyEditFloor,
@@ -61,7 +62,14 @@ import {
   suggestPrefix,
 } from "./logic";
 import { EXPLAIN_SYSTEM_PROMPT } from "./prompts";
-import { checkCommand, detectTirith, formatFindingSummary, type TirithVerdict, tirithAnnotation } from "./tirith";
+import {
+  checkCommand,
+  detectTirith,
+  formatVerdictSummary,
+  type TirithVerdict,
+  tirithForcesReview,
+  tirithNote,
+} from "./tirith";
 
 /**
  * Decisions-model classifier. The battery and policy live in shared/risk-factors.ts,
@@ -74,6 +82,20 @@ import { checkCommand, detectTirith, formatFindingSummary, type TirithVerdict, t
 const DECISIONS_PROVIDER = process.env.PI_JEV_PROVIDER ?? "openrouter";
 const DECISIONS_MODEL = process.env.PI_JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
 const decisionsEnabled = process.env.PI_JEV !== "off";
+
+/**
+ * tirith's mapped verdict plus its two text forms: `summary` for the dialog
+ * banner, `note` for the model (empty for a coverage gap — it is not a
+ * detection, so there is nothing to echo). Kept together so the gate action is
+ * read from the mapping (`tirithForcesReview`), never re-derived from the
+ * summary's severity text — a coverage-gap block is a warn whose findings stay
+ * HIGH.
+ */
+interface TirithOutcome {
+  verdict: Extract<TirithVerdict, { action: "block" | "warn" }>;
+  summary: string;
+  note: string;
+}
 
 export default function permissionGate(pi: ExtensionAPI) {
   const state: GateState = createInitialState();
@@ -277,7 +299,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     explanation?: ExplanationProvider,
     diffBody?: DiffBody,
     detailsBody?: DetailsBody,
-    tirithWarning?: string,
+    tirith?: TirithOutcome,
   ): Promise<ConfirmResult> {
     // In non-TUI modes (rpc/print/json), ctx.ui.custom() returns undefined — no
     // TUI to render the multi-option dialog. Fall back to ctx.ui.confirm(), which
@@ -297,20 +319,11 @@ export default function permissionGate(pi: ExtensionAPI) {
       autoClassify: state.autoClassify === "on",
       hasExplainRole: classifierAvailable,
     };
+    const banner: TirithBanner | undefined = tirith
+      ? { action: tirith.verdict.action, summary: tirith.summary }
+      : undefined;
     return ctx.ui.custom<ConfirmResult>((tui, theme, kb, done) =>
-      createConfirmUI(
-        tui,
-        theme,
-        kb,
-        done,
-        title,
-        options,
-        explanation,
-        uiOptions,
-        diffBody,
-        detailsBody,
-        tirithWarning,
-      ),
+      createConfirmUI(tui, theme, kb, done, title, options, explanation, uiOptions, diffBody, detailsBody, banner),
     );
   }
 
@@ -610,8 +623,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     explanation?: ExplanationProvider,
     diffBody?: DiffBody,
     detailsBody?: DetailsBody,
-    tirithWarning?: string,
-    tirithNote?: string,
+    tirith?: TirithOutcome,
   ): Promise<{ block: true; reason: string } | undefined> {
     pi.appendEntry("permission_gate", { event: "pending_confirmation", toolCallId: event.toolCallId });
     explanation?.promise
@@ -629,13 +641,13 @@ export default function permissionGate(pi: ExtensionAPI) {
       }
       options.push("Allow all bash for this session", "Block");
       const title = decision.escalation ? "bash (compound command)" : "bash";
-      const result = await confirm(ctx, title, options, explanation, bashDiffBody, undefined, tirithWarning);
+      const result = await confirm(ctx, title, options, explanation, bashDiffBody, undefined, tirith);
       handleDialogAutoToggle(result, ctx);
       const { choice, note, explanation: explResult } = result;
 
       if (choice === "Block" || choice === null) {
         if (note) queueNote(note, event);
-        return { block: true, reason: blockReason(explResult, event.toolName, tirithNote) };
+        return { block: true, reason: blockReason(explResult, event.toolName, tirith?.note) };
       }
       if (choice?.startsWith('Allow "') && choice.endsWith('" for this session')) {
         state.allowedBashPrefixes.push(prefix);
@@ -646,7 +658,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         ctx.ui.notify("Bash allowed for this session", "warning");
       }
       if (note) queueNote(note, event);
-      if (tirithNote) pendingTirith.set(event.toolCallId, tirithNote);
+      if (tirith?.note) pendingTirith.set(event.toolCallId, tirith.note);
       return undefined;
     }
 
@@ -729,8 +741,7 @@ export default function permissionGate(pi: ExtensionAPI) {
       );
       if (sensitiveRead) decision = sensitiveRead;
     }
-    let tirithWarning: string | undefined;
-    let tirithNote: string | undefined;
+    let tirith: TirithOutcome | undefined;
 
     // tirith safety net (bash only): inspects the FULL command for homograph
     // URLs, pipe-to-shell, exfil, known-bad packages — things the gate's prefix
@@ -743,19 +754,20 @@ export default function permissionGate(pi: ExtensionAPI) {
       if (typeof command === "string") {
         const verdict = await runTirithCached(command);
         if (verdict.action === "block") {
-          tirithNote = tirithAnnotation("block", verdict.findings);
+          const note = tirithNote(verdict);
           if (decision.action === "allow") {
             return {
               block: true,
-              reason: `${tirithNote}\nThe command was NOT executed. Do not retry unless the user asks.`,
+              reason: `${note}\nThe command was NOT executed. Do not retry unless the user asks.`,
             };
           }
-          tirithWarning = formatFindingSummary(verdict.findings);
+          tirith = { verdict, summary: formatVerdictSummary(verdict), note };
         } else if (verdict.action === "warn") {
-          tirithNote = tirithAnnotation("warn", verdict.findings);
-          tirithWarning = formatFindingSummary(verdict.findings);
+          tirith = { verdict, summary: formatVerdictSummary(verdict), note: tirithNote(verdict) };
           if (decision.action === "allow") {
             // Blind spot: would auto-run — force a confirm so the human sees it.
+            // A coverage-gap warn can still be resolved by the classifier below;
+            // a real warn suppresses that and reaches the dialog.
             decision = {
               action: "confirm",
               confirmType: "bash",
@@ -818,8 +830,11 @@ export default function permissionGate(pi: ExtensionAPI) {
     // Auto-classify: call sidecar before showing dialog. Resolution composes the
     // deterministic decision with the verdict (autoResolve), so a floor the gate
     // set is not the classifier's to resolve. Runs supervised only — the /auto
-    // trigger that selects the unattended bands is not wired yet.
-    if (state.autoClassify === "on" && classifierAvailable && !tirithWarning) {
+    // trigger that selects the unattended bands is not wired yet. A tirith
+    // verdict that reports a detection keeps the human in the loop; a
+    // coverage-gap verdict is not a detection, so the classifier decides.
+    const tirithForcesDialog = tirith !== undefined && tirithForcesReview(tirith.verdict);
+    if (state.autoClassify === "on" && classifierAvailable && !tirithForcesDialog) {
       const { description, key } = classifierInput(event.toolName, input, {
         rawDiff: diffBody?.rawDiff,
         summary: diffBody?.summary,
@@ -855,7 +870,7 @@ export default function permissionGate(pi: ExtensionAPI) {
           makePreloadedExplanation(cached),
           renderableDiff,
           detailsBody,
-          tirithWarning,
+          tirith,
         );
       }
 
@@ -883,29 +898,20 @@ export default function permissionGate(pi: ExtensionAPI) {
           makePreloadedExplanation(explResult),
           renderableDiff,
           detailsBody,
-          tirithWarning,
+          tirith,
         );
       }
       // Sidecar failed or parse failure -- fall through to normal dialog
     }
 
     // Normal path: build explanation provider (fires concurrently with dialog).
-    // tirith findings NEVER suppress the sidecar explanation — the dialog keeps
-    // the tirith banner and its Block-default cursor (strongest-signal-wins),
-    // and the AI take is additive: for a long bash call the human needs to know
-    // what the command actually does to judge a tirith finding, not just that
-    // a heuristic flagged it. Auto-allow is already suppressed above.
+    // A tirith verdict never replaces the sidecar explanation — the dialog shows
+    // both: the banner states the finding, the AI take states what the command
+    // actually does, which is what the human needs to judge it. Real tirith
+    // detections suppressed auto-allow above; a coverage-gap verdict may have
+    // been resolved by the classifier and never reaches here.
     const explanation = makeExplanation(event.toolName, input, ctx, diffBody);
-    return await showConfirmDialog(
-      ctx,
-      event,
-      decision,
-      explanation,
-      renderableDiff,
-      detailsBody,
-      tirithWarning,
-      tirithNote,
-    );
+    return await showConfirmDialog(ctx, event, decision, explanation, renderableDiff, detailsBody, tirith);
   });
 
   // Flush notes captured during the turn as one user message: this runs after

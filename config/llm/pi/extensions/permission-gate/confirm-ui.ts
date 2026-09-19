@@ -70,6 +70,17 @@ export interface DetailsBody {
   showHeader?: boolean;
 }
 
+/** tirith banner shown in the dialog. `action` is the mapped gate action, not
+ *  the finding severity: a coverage-gap block is downgraded to warn while
+ *  keeping tirith's HIGH severity text, and the banner/cursor must follow the
+ *  mapping, not re-read the text. */
+export interface TirithBanner {
+  action: "block" | "warn";
+  /** `formatVerdictSummary` output (tirith's own severities + rules, or a
+   *  fallback when the verdict carried no findings). */
+  summary: string;
+}
+
 export function createConfirmUI(
   tui: TUI,
   theme: Theme,
@@ -81,7 +92,7 @@ export function createConfirmUI(
   uiOptions?: ConfirmUIOptions,
   diffBody?: DiffBody,
   detailsBody?: DetailsBody,
-  tirithWarning?: string,
+  tirith?: TirithBanner,
 ): Component {
   const blockIndex = options.length - 1; // "Block" is always last
   const container = new Container();
@@ -152,17 +163,12 @@ export function createConfirmUI(
     });
   }
 
-  // tirith finding: styled banner above the explanation (block=red, warn=yellow).
-  // Distinct from the command body and the sidecar verdict — three assessments,
-  // each in its place.
-  if (tirithWarning) {
-    const sev: "error" | "warning" | "dim" =
-      tirithWarning.startsWith("[HIGH]") || tirithWarning.startsWith("[CRITICAL]")
-        ? "error"
-        : tirithWarning.startsWith("[MEDIUM]")
-          ? "warning"
-          : "dim";
-    container.addChild(new Text(theme.fg(sev, `tirith ${tirithWarning}`), 1, 0));
+  // tirith finding: styled banner above the explanation. The colour follows the
+  // mapped action (block=red, warn=yellow), not the finding severity — a
+  // coverage-gap block downgraded to warn keeps its HIGH severity text.
+  if (tirith) {
+    const sev = tirith.action === "block" ? ("error" as const) : ("warning" as const);
+    container.addChild(new Text(theme.fg(sev, `tirith ${tirith.summary}`), 1, 0));
   }
 
   // Explanation text (shown between diff/details and select list)
@@ -257,10 +263,11 @@ export function createConfirmUI(
   selectList.onCancel = () => finish(null);
   container.addChild(selectList);
 
-  // tirith HIGH → default cursor to Block (strongest-signal-wins with the sidecar:
-  // stays Block even if the sidecar later resolves SAFE, since the sidecar only
-  // moves the cursor on DANGEROUS, never resets it).
-  if (tirithWarning?.startsWith("[HIGH]") || tirithWarning?.startsWith("[CRITICAL]")) {
+  // tirith block → default cursor to Block (strongest-signal-wins with the
+  // sidecar: stays Block even if the sidecar later resolves SAFE, since the
+  // sidecar only moves the cursor on DANGEROUS, never resets it). Keyed on the
+  // mapped action: a coverage-gap block is a warn, so it keeps the Allow default.
+  if (tirith?.action === "block") {
     selectList.setSelectedIndex(blockIndex);
   }
 

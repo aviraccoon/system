@@ -10,7 +10,9 @@
  * Scope: bash only, on every bash call. It can only change the outcome when the
  * gate would otherwise ALLOW (the blind spot) — there the verdict is enforced.
  * On a path the gate already confirms, the verdict is surfaced in the dialog so
- * the human decides informed rather than enforced on top.
+ * the human decides informed rather than enforced on top. A coverage gap is not
+ * a detection: it does not suppress the classifier and is not echoed to the
+ * model.
  *
  * Graceful degradation:
  *  - tirith not on PATH (other machines, uninstalled) → no-op, gate unchanged.
@@ -39,7 +41,7 @@ export interface TirithFinding {
 export type TirithVerdict =
   | { action: "pass" }
   | { action: "block"; reason: string; findings: TirithFinding[] }
-  | { action: "warn"; findings: TirithFinding[] };
+  | { action: "warn"; findings: TirithFinding[]; coverageGap?: true };
 
 interface TirithJson {
   action?: string; // "allow" | "warn" | "block" (schema v3)
@@ -50,13 +52,15 @@ interface TirithJson {
  * Rules whose finding means "could not prove this is safe" rather than "this is
  * unsafe". tirith's tier-3 analyzer cannot resolve some ordinary static POSIX —
  * `if [ … ]; then …; fi`, `while [ … ]`, and `$(…)` inside `$(( ))` — and
- * reports `analysis_incomplete` at HIGH (upstream issue #260). A coverage gap is
- * not a detection: honouring it as a block makes the gate reject shell whose
- * body is fully visible in the source.
+ * reports `analysis_incomplete` at HIGH (upstream issue #260). It also emits the
+ * rule on a warn (MEDIUM) when runtime package-intel lookups fail. A coverage
+ * gap is not a detection: honouring it as a block makes the gate reject shell
+ * whose body is fully visible in the source.
  *
- * Downgraded only when EVERY finding is a coverage gap. A real detection
- * alongside one keeps the block — "could not prove it" plus "here is a concrete
- * problem" still means stop.
+ * A verdict whose findings are ALL coverage gaps carries `coverageGap: true`,
+ * whether tirith returned block or warn. A real detection alongside one keeps
+ * the block — "could not prove it" plus "here is a concrete problem" still means
+ * stop.
  */
 const COVERAGE_GAP_RULES = new Set(["analysis_incomplete"]);
 
@@ -74,17 +78,36 @@ export function mapTirithResult(parsed: TirithJson | null, exitCode: number): Ti
       description: f.description ?? "",
     }));
     if (parsed.action === "block") {
-      if (findings.length > 0 && findings.every((f) => COVERAGE_GAP_RULES.has(f.ruleId))) {
-        return { action: "warn", findings };
+      if (coverageGapFlagged(findings)) {
+        return { action: "warn", findings, coverageGap: true };
       }
       return { action: "block", reason: formatBlockReason(findings), findings };
     }
-    if (parsed.action === "warn") return { action: "warn", findings };
+    if (parsed.action === "warn") {
+      return coverageGapFlagged(findings)
+        ? { action: "warn", findings, coverageGap: true }
+        : { action: "warn", findings };
+    }
     return { action: "pass" };
   }
   if (exitCode === 1) return { action: "block", reason: "tirith: blocked (no detail)", findings: [] };
   if (exitCode === 2) return { action: "warn", findings: [] };
   return { action: "pass" };
+}
+
+/**
+ * Whether a tirith verdict must keep a human in the loop on the supervised
+ * path (suppresses the auto-classify resolution).
+ *
+ * Keyed on the mapped action, never on the finding severity: a coverage-gap
+ * block is downgraded to warn but keeps tirith's HIGH severity, and re-reading
+ * that text is what made the downgrade invisible downstream. A coverage gap is
+ * not a detection — the classifier still decides — while a real warn is one.
+ */
+export function tirithForcesReview(verdict: TirithVerdict): boolean {
+  if (verdict.action === "block") return true;
+  if (verdict.action === "warn") return verdict.coverageGap !== true;
+  return false;
 }
 
 export function formatBlockReason(findings: TirithFinding[]): string {
@@ -97,6 +120,29 @@ export function formatBlockReason(findings: TirithFinding[]): string {
 
 export function formatFindingSummary(findings: TirithFinding[]): string {
   return findings.map((f) => `[${f.severity}] ${f.ruleId}: ${f.title}`).join("; ");
+}
+
+/** True when every finding is a coverage gap (and there is at least one). */
+function coverageGapFlagged(findings: TirithFinding[]): boolean {
+  return findings.length > 0 && findings.every((f) => COVERAGE_GAP_RULES.has(f.ruleId));
+}
+
+/** Dialog banner text for a mapped verdict. Falls back to a description of the
+ *  verdict when tirith returned no findings (exit code only), so a dialog it
+ *  forced open never renders an empty banner. */
+export function formatVerdictSummary(verdict: Extract<TirithVerdict, { action: "block" | "warn" }>): string {
+  const findings = formatFindingSummary(verdict.findings);
+  if (findings) return findings;
+  return verdict.action === "block" ? "blocked (no detail)" : "flagged (no detail)";
+}
+
+/** The LLM-facing annotation for a verdict: a block's findings, or a warn's. A
+ *  coverage gap and a pass carry none — a gap is not a detection, so there is
+ *  nothing to echo back to the model. */
+export function tirithNote(verdict: TirithVerdict): string {
+  if (verdict.action === "block") return tirithAnnotation("block", verdict.findings);
+  if (verdict.action === "warn") return verdict.coverageGap ? "" : tirithAnnotation("warn", verdict.findings);
+  return "";
 }
 
 /**

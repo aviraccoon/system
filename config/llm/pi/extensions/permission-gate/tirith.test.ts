@@ -2,9 +2,12 @@ import { describe, expect, it } from "bun:test";
 import {
   formatBlockReason,
   formatFindingSummary,
+  formatVerdictSummary,
   mapTirithResult,
   type TirithFinding,
   tirithAnnotation,
+  tirithForcesReview,
+  tirithNote,
 } from "./tirith";
 
 // Captured from real tirith 0.3.1 `check --format json` output (schema v3).
@@ -51,30 +54,50 @@ const warnJson = {
   ],
 };
 
+// Trimmed from tirith 0.4.2 output for `pip install somepkg`: a warn whose only
+// finding is a runtime package-intel lookup gap.
+const warnCoverageGapJson = {
+  schema_version: 3,
+  action: "warn",
+  findings: [
+    {
+      rule_id: "analysis_incomplete",
+      severity: "MEDIUM",
+      title: "Package threat intelligence could not be completed",
+      description: "This is incomplete verification, not evidence that the package is malicious.",
+    },
+  ],
+};
+
 const allowJson = { schema_version: 3, action: "allow", findings: [] };
+
+// Trimmed from tirith 0.4.2 output for `for d in …; do n=$(rg …); done`.
+// `analysis_incomplete` means "could not prove it", which is not a detection;
+// blocking it rejects shell whose body is right there in the source.
+const coverageGapJson = {
+  schema_version: 3,
+  action: "block",
+  tier_reached: 3,
+  findings: [
+    {
+      rule_id: "analysis_incomplete",
+      severity: "HIGH",
+      title: "Nested executable body could not be resolved",
+      description: "The command is blocked instead of trusting its benign-looking outer leader.",
+    },
+    { rule_id: "analysis_incomplete", severity: "HIGH", title: "nested command analysis was incomplete" },
+  ],
+};
+
 describe("mapTirithResult", () => {
   it("downgrades a coverage-gap-only block to a warning (tirith #260)", () => {
-    // Captured from tirith 0.4.2 for `for d in …; do n=$(rg …); done`.
-    // `analysis_incomplete` means "could not prove it", which is not a
-    // detection; blocking it rejects shell whose body is right there in the source.
-    const coverageGapJson = {
-      schema_version: 3,
-      action: "block",
-      tier_reached: 3,
-      findings: [
-        {
-          rule_id: "analysis_incomplete",
-          severity: "HIGH",
-          title: "Nested executable body could not be resolved",
-          description: "The command is blocked instead of trusting its benign-looking outer leader.",
-        },
-        { rule_id: "analysis_incomplete", severity: "HIGH", title: "nested command analysis was incomplete" },
-      ],
-    };
     const v = mapTirithResult(coverageGapJson, 1);
     expect(v.action).toBe("warn");
     if (v.action !== "warn") throw new Error("unreachable");
     expect(v.findings).toHaveLength(2);
+    // The downgrade has to be visible downstream: the findings keep HIGH
+    // severity, so consumers must read the flag, not the text.
+    expect(v.coverageGap).toBe(true);
   });
 
   it("keeps the block when a real detection accompanies a coverage gap", () => {
@@ -122,6 +145,15 @@ describe("mapTirithResult", () => {
     expect(v.action).toBe("warn");
     if (v.action !== "warn") throw new Error("unreachable");
     expect(v.findings[0].ruleId).toBe("shortened_url");
+    // Not a downgrade: tirith itself said warn.
+    expect(v.coverageGap).toBeUndefined();
+  });
+
+  it("marks a warn whose findings are all coverage gaps", () => {
+    const v = mapTirithResult(warnCoverageGapJson, 2);
+    expect(v.action).toBe("warn");
+    if (v.action !== "warn") throw new Error("unreachable");
+    expect(v.coverageGap).toBe(true);
   });
 
   it("maps allow → pass", () => {
@@ -142,6 +174,50 @@ describe("mapTirithResult", () => {
   it("treats malformed JSON as null (fail-open via exit code)", () => {
     // safeParse is internal; mapTirithResult(null, 0) models a parse failure on a clean exit.
     expect(mapTirithResult(null, 0).action).toBe("pass");
+  });
+});
+
+describe("tirithForcesReview", () => {
+  it("holds for a block", () => {
+    expect(tirithForcesReview(mapTirithResult(blockJson, 1))).toBe(true);
+  });
+
+  it("holds for a warn that reports a detection", () => {
+    expect(tirithForcesReview(mapTirithResult(warnJson, 2))).toBe(true);
+  });
+
+  it("does not hold for a coverage-gap downgrade (not a detection)", () => {
+    expect(tirithForcesReview(mapTirithResult(coverageGapJson, 1))).toBe(false);
+  });
+
+  it("does not hold for a warn-level coverage gap", () => {
+    expect(tirithForcesReview(mapTirithResult(warnCoverageGapJson, 2))).toBe(false);
+  });
+
+  it("does not hold for pass", () => {
+    expect(tirithForcesReview(mapTirithResult(allowJson, 0))).toBe(false);
+  });
+});
+
+describe("tirithNote", () => {
+  it("carries a block's finding to the model", () => {
+    const note = tirithNote(mapTirithResult(blockJson, 1));
+    expect(note).toContain("command-safety checker");
+    expect(note).toContain("curl_pipe_shell");
+  });
+
+  it("carries a real warn's finding", () => {
+    expect(tirithNote(mapTirithResult(warnJson, 2))).toContain("shortened_url");
+  });
+
+  it("says nothing about a coverage gap (not a detection)", () => {
+    expect(tirithNote(mapTirithResult(coverageGapJson, 1))).toBe("");
+    expect(tirithNote(mapTirithResult(warnCoverageGapJson, 2))).toBe("");
+  });
+
+  it("says nothing for a pass or a no-detail verdict", () => {
+    expect(tirithNote(mapTirithResult(allowJson, 0))).toBe("");
+    expect(tirithNote(mapTirithResult(null, 2))).toBe("");
   });
 });
 
@@ -168,6 +244,18 @@ describe("formatters", () => {
     const s = formatFindingSummary([finding({ severity: "MEDIUM", ruleId: "shortened_url", title: "Shortened URL" })]);
     expect(s).toContain("shortened_url");
     expect(s).toContain("MEDIUM");
+  });
+
+  it("formatVerdictSummary names a verdict that carried no findings", () => {
+    // Banner text for the exit-code-only paths, which would otherwise render empty.
+    const summarize = (parsed: Parameters<typeof mapTirithResult>[0], exitCode: number): string => {
+      const v = mapTirithResult(parsed, exitCode);
+      if (v.action === "pass") throw new Error("unreachable: expected block or warn");
+      return formatVerdictSummary(v);
+    };
+    expect(summarize(null, 1)).toBe("blocked (no detail)");
+    expect(summarize(null, 2)).toBe("flagged (no detail)");
+    expect(summarize(warnJson, 2)).toContain("shortened_url");
   });
 
   it("tirithAnnotation is self-explanatory for the LLM", () => {

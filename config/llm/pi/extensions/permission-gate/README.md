@@ -153,18 +153,26 @@ matches known-bad patterns.
 - **block (HIGH):** when the gate would allow, hard-blocks with the tirith rule and
   remediation as the reason (overrides allows, prefixes and modes). On a confirm, the
   finding appears in the dialog and the user decides.
-- **coverage gaps warn, not block:** a block whose findings are all
-  `analysis_incomplete` is downgraded — "could not prove it" is not a detection
-  ([tirith #260](https://github.com/sheeki03/tirith/issues/260)).
+- **coverage gaps:** a verdict with one or more findings, all `analysis_incomplete`,
+  carries a coverage-gap flag whether tirith returned block or warn (it emits the
+  rule at MEDIUM when runtime package-intel lookups fail). "Could not prove it" is
+  not "proved it unsafe"
+  ([tirith #260](https://github.com/sheeki03/tirith/issues/260)), so the call still
+  goes through auto-classify. A block or warn with no findings at all is never
+  resolved by the classifier; when it reaches the dialog, the banner names the
+  verdict ("blocked (no detail)" or "flagged (no detail)").
 - **warn (MEDIUM, e.g. shortened URLs):** on allow, downgrades to confirm; on
-  confirm, appears at the top of the dialog.
-- **Cursor:** tirith HIGH or sidecar DANGEROUS defaults the cursor to Block, and it
-  stays there even if the sidecar later resolves SAFE.
-- **LLM feedback:** the verdict is returned to the model in the block reason (tirith,
+  confirm, appears at the top of the dialog. A dialog that opens for any other
+  reason still shows the tirith banner.
+- **Cursor and banner:** the gate action, the cursor, and the banner colour follow
+  the mapped action (block or warn), not the finding's severity text. A tirith
+  block or sidecar DANGEROUS defaults the cursor to Block, and it stays there even
+  if the sidecar later resolves SAFE.
+- **LLM feedback:** a detection is returned to the model in the block reason (tirith,
   severity, rule, remediation) and in the tool result for warn-and-allowed commands.
-  A sidecar auto-allow is skipped when tirith flags a command, but the sidecar
-  explanation still runs — the user needs to know what the command does to judge the
-  finding.
+  A coverage-gap verdict produces no LLM feedback. A tirith detection skips the
+  sidecar auto-allow; a coverage-gap verdict does not. The sidecar explanation still
+  runs — the user needs to know what the command does to judge the finding.
 - **Degradation:** tirith missing → the gate behaves as without it; tirith error or
   timeout → the confirm flow is the backstop.
 - **Hot path:** `TIRITH_LOG=0` (pi already logs tool calls). tirith is not run
