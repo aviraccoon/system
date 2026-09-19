@@ -1,6 +1,7 @@
 Time tracking: the `harvest` CLI.
 - Start the timer before the first task action, without asking: `harvest start <alias>`. Pick the alias the work belongs to; if that only becomes clear later, start the project's generic alias and switch once the right alias is clear.
 - Log entries only when the user asks.
+- Run `harvest --help` before any command not listed here, and take the name from its output rather than guessing.
 - `harvest status` — running timer + today's total
 - `harvest start <alias> [-n note] [--offset 25m]` — stops any running timer first
 - `harvest stop`
