@@ -26,6 +26,7 @@ import {
   findNearestProjectAgentsDir,
   loadAgentsFromDir,
 } from "./agents";
+import { resolveMode } from "./mode";
 import { renderCall as renderCallFn, renderResult as renderResultFn, withSessionPaths } from "./render";
 import {
   getAvailableRoles,
@@ -87,13 +88,23 @@ const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
 const SubagentParams = Type.Object({
   agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (for single mode)" })),
   task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
-  tasks: Type.Optional(Type.Array(TaskItem, { description: "Array of {agent, task} for parallel execution" })),
+  tasks: Type.Optional(
+    Type.Array(TaskItem, {
+      description:
+        "Array of {agent, task}: multiple items run in parallel, one item runs as a single streaming run (a blank agent or task stays parallel)",
+    }),
+  ),
   chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" })),
   agentScope: Type.Optional(AgentScopeSchema),
   confirmProjectAgents: Type.Optional(
     Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
   ),
-  cwd: Type.Optional(Type.String({ description: "Working directory for the agent process (single mode)" })),
+  cwd: Type.Optional(
+    Type.String({
+      description:
+        "Working directory for the agent process (explicit single mode; a one-item tasks batch uses the item's cwd)",
+    }),
+  ),
   maxTurns: Type.Optional(
     Type.Integer({
       minimum: 1,
@@ -135,9 +146,12 @@ export default function subagentExtension(pi: ExtensionAPI) {
         const discovery = discoverAgents(ctx.cwd, agentScope);
         const agents = discovery.agents;
 
+        // resolveMode collapses a one-item `tasks` batch to single; see mode.ts.
+        const { parallelTasks, singleAgent, singleTask, singleCwd } = resolveMode(params);
+
         const hasChain = (params.chain?.length ?? 0) > 0;
-        const hasTasks = (params.tasks?.length ?? 0) > 0;
-        const hasSingle = Boolean(params.agent && params.task);
+        const hasTasks = (parallelTasks?.length ?? 0) > 0;
+        const hasSingle = Boolean(singleAgent && singleTask);
         const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
 
         const makeDetails =
@@ -163,8 +177,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
         if ((agentScope === "project" || agentScope === "both") && params.confirmProjectAgents !== false && ctx.hasUI) {
           const requestedAgentNames = new Set<string>();
           if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
-          if (params.tasks) for (const t of params.tasks) requestedAgentNames.add(t.agent);
-          if (params.agent) requestedAgentNames.add(params.agent);
+          if (parallelTasks) for (const t of parallelTasks) requestedAgentNames.add(t.agent);
+          if (singleAgent) requestedAgentNames.add(singleAgent);
 
           const projectAgentsRequested = Array.from(requestedAgentNames)
             .map((name) => agents.find((a) => a.name === name))
@@ -269,25 +283,25 @@ export default function subagentExtension(pi: ExtensionAPI) {
         }
 
         // Parallel mode
-        if (params.tasks && params.tasks.length > 0) {
-          if (params.tasks.length > MAX_PARALLEL_TASKS)
+        if (parallelTasks && parallelTasks.length > 0) {
+          if (parallelTasks.length > MAX_PARALLEL_TASKS)
             return {
               content: [
                 {
                   type: "text",
-                  text: `Too many parallel tasks (${params.tasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
+                  text: `Too many parallel tasks (${parallelTasks.length}). Max is ${MAX_PARALLEL_TASKS}.`,
                 },
               ],
               details: makeDetails("parallel")([]),
             };
 
-          const allResults: SingleResult[] = new Array(params.tasks.length);
+          const allResults: SingleResult[] = new Array(parallelTasks.length);
 
-          for (let i = 0; i < params.tasks.length; i++) {
+          for (let i = 0; i < parallelTasks.length; i++) {
             allResults[i] = {
-              agent: params.tasks[i].agent,
+              agent: parallelTasks[i].agent,
               agentSource: "unknown",
-              task: params.tasks[i].task,
+              task: parallelTasks[i].task,
               exitCode: -1,
               messages: [],
               stderr: "",
@@ -308,7 +322,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
           // Concurrency-limited parallel execution
           const results = await mapWithConcurrencyLimit(
-            params.tasks,
+            parallelTasks,
             MAX_CONCURRENCY,
             async (t: { agent: string; task: string; cwd?: string }, index) => {
               let handleId = 0;
@@ -362,16 +376,14 @@ export default function subagentExtension(pi: ExtensionAPI) {
         }
 
         // Single mode
-        if (params.agent && params.task) {
-          const singleAgent = params.agent;
-          const singleTask = params.task;
+        if (singleAgent && singleTask) {
           let handleId = 0;
           const result = await runSingleAgent(
             ctx.cwd,
             agents,
             singleAgent,
             singleTask,
-            params.cwd,
+            singleCwd,
             undefined,
             signal,
             onUpdate as ((partial: { content: unknown[]; details?: SubagentDetails }) => void) | undefined,

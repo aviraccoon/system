@@ -253,6 +253,13 @@ describe("renderCall", () => {
     expect(text).toContain("2 tasks");
   });
 
+  test("a one-item tasks batch renders as single", () => {
+    const result = renderCall({ tasks: [{ agent: "reviewer", task: "review the change" }] }, theme, {});
+    const text = result.render(80).join("\n");
+    expect(text).toContain("reviewer");
+    expect(text).not.toContain("parallel");
+  });
+
   test("renders chain mode with step count", () => {
     const result = renderCall(
       {

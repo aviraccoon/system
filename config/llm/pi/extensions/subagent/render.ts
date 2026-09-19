@@ -9,6 +9,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { createDebugLogger } from "../shared/debug";
+import { resolveMode } from "./mode";
 import {
   type DisplayItem,
   type DisplayTurn,
@@ -47,8 +48,9 @@ export function renderCall(args: Record<string, unknown>, theme: Theme, context:
     if (!showFull && chain.length > 3) text += `\n  ${theme.fg("muted", `... +${chain.length - 3} more`)}`;
     return new Text(text, 0, 0);
   }
-  if (args.tasks && (args.tasks as Array<unknown>).length > 0) {
-    const tasks = args.tasks as Array<{ agent: string; task: string }>;
+  const resolved = resolveMode(args);
+  if (resolved.parallelTasks && resolved.parallelTasks.length > 0) {
+    const tasks = resolved.parallelTasks;
     let text =
       theme.fg("toolTitle", theme.bold("subagent ")) +
       theme.fg("accent", `parallel (${tasks.length} tasks)`) +
@@ -64,8 +66,8 @@ export function renderCall(args: Record<string, unknown>, theme: Theme, context:
     if (!showFull && tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${tasks.length - 3} more`)}`;
     return new Text(text, 0, 0);
   }
-  const agentName = typeof args.agent === "string" ? args.agent : "...";
-  const taskStr = typeof args.task === "string" ? args.task : "";
+  const agentName = resolved.singleAgent ?? "...";
+  const taskStr = resolved.singleTask ?? "";
   const preview = showFull ? taskStr : taskStr.length > 60 ? `${taskStr.slice(0, 60)}...` : taskStr;
   let text =
     theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", agentName) + theme.fg("muted", ` [${scope}]`);

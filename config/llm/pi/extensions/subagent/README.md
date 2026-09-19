@@ -5,7 +5,7 @@ Delegate tasks to specialized agents with isolated context windows. Spawns a sep
 ## What it does
 
 1. **`subagent` tool** — the LLM can delegate research, code investigation, or other tasks to agents defined in `~/.pi/agent/agents/*.md` (user-level) and `.pi/agents/*.md` (project-level)
-2. **Three modes** — single (`agent` + `task`), parallel (`tasks` array, up to 8 tasks, 4 concurrent), and chain (`chain` array with `{previous}` placeholder for sequential handoffs)
+2. **Three modes** — single (`agent` + `task`), parallel (`tasks` array, up to 8 tasks, 4 concurrent), and chain (`chain` array with `{previous}` placeholder for sequential handoffs). A one-item `tasks` batch runs as single (a blank agent or task keeps it parallel).
 3. **Streaming output** — in single mode, text, thinking, and tool calls appear live in the TUI during execution in exact arrival order. Chain/parallel show completion status only (see Known limitations)
 4. **Agent discovery** — `.md` files with YAML frontmatter define agent name, description, tools, role, extensions, and system prompt
 5. **Model roles** — agent frontmatter `role` field resolves to a model from `roles.json` via the shared `model-roles` module
@@ -151,9 +151,10 @@ Subagents run with:
 | `render.ts` | TUI rendering: `renderCall`/`renderResult` for tool call display and streaming output |
 | `retry.ts` | Retry policy: which failures retry, attempt plan across the role chain |
 | `turn-budget.ts` | Task budget message, nudge threshold and one-shot latch |
-| `retry.test.ts` / `turn-budget.test.ts` | Tests for the retry policy and turn-budget decisions |
-| `agents.test.ts` | Tests for frontmatter parsing, discovery, project directory resolution (19 tests) |
-| `render.test.ts` | Tests for formatting and render output (38 tests) |
+| `mode.ts` | Mode resolution: a one-item `tasks` batch collapses to single; `chain` dispatch stays in `index.ts` |
+| `mode.test.ts` / `retry.test.ts` / `turn-budget.test.ts` | Tests for mode resolution, the retry policy, and turn-budget decisions |
+| `agents.test.ts` | Tests for frontmatter parsing, discovery, project directory resolution |
+| `render.test.ts` | Tests for formatting and render output |
 
 ## Known limitations
 
