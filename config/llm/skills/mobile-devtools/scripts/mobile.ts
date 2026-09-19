@@ -175,23 +175,23 @@ async function mcpCall(tool: string, args: unknown): Promise<unknown> {
 }
 
 type SessionStart = { interactionSessionKey?: string; deviceUUID?: string };
-type Capture = { applicationState?: string; hierarchyPath?: string; screenshotPath?: string };
+type Capture = { applicationState?: string; hierarchyPath?: string; screenshotPath?: string; logsPath?: string };
 
 // ---------------------------------------------------------------- targets
 
 type Kind = "sim" | "android" | "device";
-type Verb = "ui" | "tap" | "shot";
+type Verb = "ui" | "tap" | "type" | "swipe" | "shot" | "logs";
 type Target = { kind: Kind; id: string; label: string; capabilities: Set<Verb> };
 
 const CAPABILITIES: Record<Kind, Set<Verb>> = {
-  sim: new Set<Verb>(["ui", "tap", "shot"]),
-  android: new Set<Verb>(["ui", "tap", "shot"]),
+  sim: new Set<Verb>(["ui", "tap", "type", "swipe", "shot", "logs"]),
+  android: new Set<Verb>(["ui", "tap", "type", "swipe", "shot", "logs"]),
   device: new Set<Verb>(["shot"]),
 };
 
 const NEAREST_ALTERNATIVE: Record<Kind, string> = {
-  sim: "a booted simulator accepts ui/tap/shot",
-  android: "an Android device accepts ui/tap/shot",
+  sim: "a booted simulator accepts ui/tap/type/swipe/shot/logs",
+  android: "an Android device accepts ui/tap/type/swipe/shot/logs",
   device: "physical iPhones only support `mobile shot`; interaction needs an XCUITest or WebDriverAgent harness",
 };
 
@@ -310,7 +310,7 @@ function requireCapability(target: Target, verb: Verb): void {
 
 // ---------------------------------------------------------------- outline
 
-type Element = { type: string; label: string; x: number; y: number };
+type Element = { type: string; label: string; x: number; y: number; focused?: boolean };
 type Refs = Record<string, Element>;
 type Outline = { header: string; elements: Element[] };
 
@@ -357,7 +357,8 @@ function printOutline(target: Target, outline: Outline): void {
   const lines: string[] = [outline.header];
   outline.elements.forEach((element, index) => {
     const ref = String(index + 1);
-    lines.push(`@${ref.padEnd(3)} ${element.type.padEnd(14)} "${element.label}" (${element.x},${element.y})`);
+    const marker = element.focused ? " [focused]" : "";
+    lines.push(`@${ref.padEnd(3)} ${element.type.padEnd(14)} "${element.label}" (${element.x},${element.y})${marker}`);
   });
   if (outline.elements.length === 0) {
     lines.push("  (no labelled elements — look at a screenshot: mobile shot)");
@@ -368,25 +369,66 @@ function printOutline(target: Target, outline: Outline): void {
   console.log(lines.join("\n"));
 }
 
-function parseAppleHierarchy(text: string): Element[] {
-  const elements: Element[] = [];
-  for (const line of text.split("\n")) {
-    const hit = line.match(/hitPoint: \{(-?[\d.]+), (-?[\d.]+)\}/);
-    const type = line.trim().match(/^([A-Za-z]+),/)?.[1];
-    if (!hit || !type || NOISE_TYPES.has(type)) continue;
-    const label =
-      line.match(/label: '([^']+)'/)?.[1] ??
-      line.match(/placeholderValue: '([^']+)'/)?.[1] ??
-      line.match(/value: ([^,]+),/)?.[1] ??
-      "";
-    if (!label.trim()) continue;
-    elements.push({
-      type,
-      label: cleanLabel(label),
-      x: Math.round(Number(hit[1] ?? 0)),
-      y: Math.round(Number(hit[2] ?? 0)),
-    });
+type RawNode = {
+  type: string;
+  line: string;
+  frame?: { x: number; y: number; w: number; h: number };
+  children: RawNode[];
+};
+
+function buildRawTree(text: string): RawNode {
+  const root: RawNode = { type: "Root", line: "", children: [] };
+  const stack: { indent: number; node: RawNode }[] = [{ indent: -1, node: root }];
+  for (const raw of text.split("\n")) {
+    if (!raw.trim()) continue;
+    const indent = raw.length - raw.trimStart().length;
+    const frame = raw.match(/\{\{(-?[\d.]+), (-?[\d.]+)\}, \{(-?[\d.]+), (-?[\d.]+)\}\}/);
+    const node: RawNode = {
+      type: raw.trim().match(/^([A-Za-z]+),/)?.[1] ?? "",
+      line: raw,
+      frame: frame ? { x: Number(frame[1]), y: Number(frame[2]), w: Number(frame[3]), h: Number(frame[4]) } : undefined,
+      children: [],
+    };
+    while (stack.length > 1 && (stack[stack.length - 1]?.indent ?? 0) >= indent) stack.pop();
+    stack[stack.length - 1]?.node.children.push(node);
+    stack.push({ indent, node });
   }
+  return root;
+}
+
+/** A real label, else the current value (a filled field's value is the thing worth seeing),
+ * else the placeholder an empty field would otherwise report on its own. */
+function appleLabel(line: string): string {
+  return (
+    line.match(/label: '([^']+)'/)?.[1] ??
+    line.match(/value: ([^,]+),/)?.[1] ??
+    line.match(/placeholderValue: '([^']+)'/)?.[1] ??
+    ""
+  );
+}
+
+function parseAppleHierarchy(text: string): Element[] {
+  const root = buildRawTree(text);
+  const elements: Element[] = [];
+  // The dump mixes layers: a presented sheet and the screen behind it are siblings in the same
+  // window, so one set of coordinates can carry a different element per layer. Geometry cannot
+  // tell which layer is on top, so report every element and mark the focused one — that is the
+  // field typing reaches. Keyboard/accessory windows are chrome and are walked too.
+  const walk = (node: RawNode): void => {
+    const hit = node.line.match(/hitPoint: \{(-?[\d.]+), (-?[\d.]+)\}/);
+    const label = cleanLabel(appleLabel(node.line));
+    if (hit && label && node.type && !NOISE_TYPES.has(node.type)) {
+      elements.push({
+        type: node.type,
+        label,
+        x: Math.round(Number(hit[1])),
+        y: Math.round(Number(hit[2])),
+        focused: node.line.includes("Keyboard Focused") || /, Focused,? /.test(node.line),
+      });
+    }
+    for (const child of node.children) walk(child);
+  };
+  walk(root);
   return dedupe(elements).slice(0, 80);
 }
 
@@ -552,6 +594,29 @@ async function simTap(x: number, y: number): Promise<void> {
   console.log(`tapped ${x},${y}`);
 }
 
+/** Everything after `kbd ` is literal — only control characters need the \u{...} form. */
+function iosTextEscape(text: string): string {
+  return text.replace(/\r/g, "\\u{000D}").replace(/\n/g, "\\u{000A}").replace(/\t/g, "\\u{0009}");
+}
+
+async function simType(text: string, focus?: { x: number; y: number }): Promise<void> {
+  const keyboard = `sender keyboard kbd ${iosTextEscape(text)}`;
+  await simCapture(focus ? `t ${focus.x} ${focus.y} w 0.4 ${keyboard}` : keyboard);
+  console.log(`typed ${JSON.stringify(text)}`);
+}
+
+async function simSwipe(x1: number, y1: number, x2: number, y2: number, duration: number): Promise<void> {
+  await simCapture(`t ${x1} ${y1} f ${x2} ${y2} ${duration}`);
+  console.log(`swiped ${x1},${y1} → ${x2},${y2} (${duration}s)`);
+}
+
+/** The capture payload carries the app's console output for the session. */
+async function simLogs(grep?: string): Promise<string[]> {
+  const capture = await simCapture("");
+  if (!capture.logsPath || !existsSync(capture.logsPath)) throw new MobileError("capture returned no log file");
+  return filterLines(readFileSync(capture.logsPath, "utf8"), grep);
+}
+
 // ---------------------------------------------------------------- android backend
 
 function androidOutline(target: Target): Outline {
@@ -580,6 +645,44 @@ function androidOutline(target: Target): Outline {
 function androidTap(target: Target, x: number, y: number): void {
   shOrThrow([adbBin(), "-s", target.id, "shell", "input", "tap", String(x), String(y)]);
   console.log(`tapped ${x},${y}`);
+}
+
+/** `adb shell input text` wants spaces as %s and shell metacharacters escaped. */
+function androidTextEscape(text: string): string {
+  return text.replace(/ /g, "%s").replace(/([()<>|;&*\\~^"'`$!?[\]{}])/g, "\\$1");
+}
+
+function androidType(target: Target, text: string): void {
+  if (/[^\x20-\x7E]/.test(text)) {
+    throw new MobileError(
+      "adb `input text` only handles ASCII",
+      "for Unicode text use Chrome DevTools over CDP (`adb forward tcp:9222 localabstract:webview_devtools_remote_<pid>`)",
+    );
+  }
+  shOrThrow([adbBin(), "-s", target.id, "shell", "input", "text", androidTextEscape(text)]);
+  console.log(`typed ${JSON.stringify(text)}`);
+}
+
+function androidSwipe(target: Target, x1: number, y1: number, x2: number, y2: number, duration: number): void {
+  shOrThrow([
+    adbBin(),
+    "-s",
+    target.id,
+    "shell",
+    "input",
+    "swipe",
+    String(x1),
+    String(y1),
+    String(x2),
+    String(y2),
+    String(Math.round(duration * 1000)),
+  ]);
+  console.log(`swiped ${x1},${y1} → ${x2},${y2} (${duration}s)`);
+}
+
+function androidLogs(target: Target, grep?: string): string[] {
+  const out = shOrThrow([adbBin(), "-s", target.id, "logcat", "-d", "-t", "400"]);
+  return filterLines(out, grep);
 }
 
 // ---------------------------------------------------------------- verbs
@@ -650,6 +753,97 @@ async function cmdTap(target: Target, spec: string): Promise<void> {
   else androidTap(target, x, y);
 }
 
+function filterLines(text: string, grep?: string): string[] {
+  const lines = text.split("\n").filter((line) => line.trim().length > 0);
+  return grep ? lines.filter((line) => line.includes(grep)) : lines;
+}
+
+function parsePoint(spec: string, target: Target): { x: number; y: number } {
+  return resolvePoint(spec, target);
+}
+
+/** Re-capture and rewrite refs without printing. Mutation verbs call this first. */
+async function refreshRefs(target: Target): Promise<Element[]> {
+  const elements = await elementsFor(target);
+  writeRefs(target, elements);
+  return elements;
+}
+
+/**
+ * Target for a mutating verb. `@N` and `--label` are resolved against a *fresh* capture by
+ * label, not by the cached index: a ref that survived a screen change must not type into
+ * whatever now sits at those coordinates. Explicit `X,Y` is taken as given.
+ */
+async function resolveTargetForType(target: Target, spec: string): Promise<{ x: number; y: number }> {
+  if (/^\d+,\d+$/.test(spec)) return parsePoint(spec, target);
+  let label = spec;
+  let type: string | undefined;
+  if (spec.startsWith("@")) {
+    const cached = readRefs(target)[spec.slice(1)];
+    if (!cached) throw new MobileError(`no ref ${spec}`, "re-run `mobile ui` — refs change between captures");
+    label = cached.label;
+    type = cached.type;
+  }
+  const elements = await refreshRefs(target);
+  // Match the ref's type too: a field and its own label text are separate elements with the
+  // same label.
+  const sameType = type ? elements.filter((element) => element.label === label && element.type === type) : [];
+  const exact = sameType.length > 0 ? sameType : elements.filter((element) => element.label === label);
+  const matches =
+    exact.length > 0 ? exact : elements.filter((element) => element.label.toLowerCase().includes(label.toLowerCase()));
+  if (matches.length === 0) {
+    throw new MobileError(`'${label}' is not on screen now`, "the screen changed — re-run `mobile ui`");
+  }
+  if (matches.length > 1) {
+    throw new MobileError(
+      `'${label}' now matches ${matches.length} elements: ${matches.map((m) => `"${m.label}"`).join(", ")}`,
+      "re-run `mobile ui` and pass a @ref",
+    );
+  }
+  const match = matches[0];
+  if (!match) throw new MobileError(`'${label}' is not on screen now`, "re-run `mobile ui`");
+  return { x: match.x, y: match.y };
+}
+
+async function cmdType(target: Target, text: string, focusSpec?: string): Promise<void> {
+  requireCapability(target, "type");
+  if (!focusSpec) {
+    // No target: the text goes to whatever holds focus — which is what a sheet's field does.
+    // The outline marks it [focused].
+    if (target.kind === "sim") await simType(text);
+    else androidType(target, text);
+    return;
+  }
+  const focus = await resolveTargetForType(target, focusSpec);
+  if (target.kind === "sim") {
+    await simType(text, focus);
+    return;
+  }
+  androidTap(target, focus.x, focus.y);
+  androidType(target, text);
+}
+
+async function cmdSwipe(target: Target, from: string, to: string, duration: number): Promise<void> {
+  requireCapability(target, "swipe");
+  const start = parsePoint(from, target);
+  const end = parsePoint(to, target);
+  if (target.kind === "sim") {
+    await simSwipe(start.x, start.y, end.x, end.y, duration);
+    return;
+  }
+  androidSwipe(target, start.x, start.y, end.x, end.y, duration);
+}
+
+async function cmdLogs(target: Target, grep?: string): Promise<void> {
+  requireCapability(target, "logs");
+  const lines = target.kind === "sim" ? await simLogs(grep) : androidLogs(target, grep);
+  if (lines.length === 0) {
+    console.log(grep ? `(no log lines matching ${JSON.stringify(grep)})` : "(no log lines)");
+    return;
+  }
+  console.log(lines.slice(-200).join("\n"));
+}
+
 async function cmdShot(target: Target, out?: string): Promise<void> {
   requireCapability(target, "shot");
   if (target.kind === "sim") {
@@ -680,6 +874,9 @@ function usage(): void {
   mobile devices [--json]                            list every target
   mobile ui [--device D] [--json]                    screen outline with @N refs
   mobile tap @N | X,Y | --label "Text" [--device D]  tap a ref, a point, or a unique label
+  mobile type "Text" [--ref @N] [--device D]         type (optionally focusing a field first)
+  mobile swipe X1,Y1 X2,Y2 [--duration 0.3]          swipe or drag between two points
+  mobile logs [--grep TEXT] [--device D]             recent app log lines
   mobile shot [--out FILE] [--device D]              screenshot (also on physical phones)
   mobile sim start --project PATH [--device NAME]    open the project + start a session
   mobile sim end                                     close the sim session
@@ -696,6 +893,9 @@ async function main(): Promise<void> {
       device: { type: "string", short: "d" },
       out: { type: "string", short: "o" },
       label: { type: "string", short: "l" },
+      ref: { type: "string" },
+      duration: { type: "string" },
+      grep: { type: "string", short: "g" },
       project: { type: "string" },
       json: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -724,6 +924,20 @@ async function main(): Promise<void> {
       if (!spec) throw new MobileError("specify @N, X,Y or --label TEXT");
       return cmdTap(resolveTarget(values.device), spec);
     }
+    case "type": {
+      const text = rest[0];
+      if (text === undefined) throw new MobileError('usage: mobile type "Text" [--ref @N]');
+      return cmdType(resolveTarget(values.device), text, values.ref ?? values.label);
+    }
+    case "swipe": {
+      const [from, to] = rest;
+      if (!from || !to) throw new MobileError("usage: mobile swipe X1,Y1 X2,Y2 [--duration 0.3]");
+      const duration = values.duration === undefined ? 0.3 : Number(values.duration);
+      if (Number.isNaN(duration)) throw new MobileError(`--duration must be seconds (got '${values.duration}')`);
+      return cmdSwipe(resolveTarget(values.device), from, to, duration);
+    }
+    case "logs":
+      return cmdLogs(resolveTarget(values.device), values.grep);
     case "shot":
       return cmdShot(resolveTarget(values.device), values.out);
     default:

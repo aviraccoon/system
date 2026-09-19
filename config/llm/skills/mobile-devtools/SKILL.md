@@ -9,8 +9,8 @@ description: Observe and act on iOS simulators, Android emulators/devices, and p
 
 | Target | Verbs |
 |---|---|
-| iOS simulator | `ui`, `tap`, `shot` |
-| Android emulator/device | `ui`, `tap`, `shot` |
+| iOS simulator | `ui`, `tap`, `type`, `swipe`, `shot`, `logs` |
+| Android emulator/device | `ui`, `tap`, `type`, `swipe`, `shot`, `logs` |
 | physical iPhone | `shot` only |
 
 A phone can be looked at but not touched: `ui` and `tap` exit immediately with the hint `physical iPhones only support mobile shot`; real-device interaction needs an XCUITest or WebDriverAgent harness. The Android outline includes WebView content, so the element list is trustworthy on web screens too; clickable web elements can still surface as plain `TextView`s (trust the coordinates, not the class), and `android layout` fails transiently right after a screen change (the CLI retries once).
@@ -28,12 +28,17 @@ bun $M ui                 # observe again; refs are only valid for the last capt
 
 Never guess coordinates from a screenshot when the element is in the outline — use its ref. Verify with a screenshot (`bun $M shot`) when the visual result matters, and quote the file path as evidence. An empty outline prints its own "look at a screenshot" hint.
 
+A sheet and the screen behind it both appear in the outline, so the same area can hold two elements; the field that receives typing is marked `[focused]`, and `bun $M type "Text"` with no target goes to it.
+
 ## Commands
 
 ```bash
 bun $M devices [--json]                            # simulators, Android serials, phones
 bun $M ui [--device D] [--json]                    # outline; --json for structured elements
 bun $M tap @7 | 201,750 | --label "Tasks"          # ref, point, or unique label
+bun $M type "Text" [--ref @7] [--device D]         # type; no target = the focused field
+bun $M swipe 200,600 200,200 [--duration 0.3]      # swipe or drag between two points
+bun $M logs [--grep TEXT] [--device D]             # recent app log lines
 bun $M shot [--out FILE] [--device D]              # PNG path (works on a phone too)
 bun $M sim start --project PATH [--device NAME]    # open the project + start a session
 bun $M sim end                                     # close the session
