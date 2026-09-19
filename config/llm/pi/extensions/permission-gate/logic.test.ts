@@ -108,12 +108,23 @@ describe("hasShellEscalation", () => {
     expect(hasShellEscalation("rg foo | head -5")).toBe(false);
     expect(hasShellEscalation("rg foo | tail -3")).toBe(false);
     expect(hasShellEscalation("rg foo | wc -l")).toBe(false);
-    expect(hasShellEscalation("rg foo | sort | uniq")).toBe(false);
+    expect(hasShellEscalation("rg foo | uniq | wc -l")).toBe(false);
     expect(hasShellEscalation("cat file.json | jq .key")).toBe(false);
   });
 
+  test("pipe target that can execute or write is escalation", () => {
+    // Name-only check, so an inert-looking command is unsafe as soon as one of
+    // its arguments can run code or write a file.
+    expect(hasShellEscalation("printf foo | awk '{system(\"true\")}'")).toBe(true);
+    expect(hasShellEscalation("printf foo | sed -i 's/a/b/' notes.txt")).toBe(true);
+    expect(hasShellEscalation("printf foo | sed 'w notes.txt'")).toBe(true);
+    expect(hasShellEscalation("printf foo | sort -o out.txt")).toBe(true);
+    expect(hasShellEscalation("printf foo | rg --pre 'echo hi' pattern file.txt")).toBe(true);
+    expect(hasShellEscalation("printf foo | yq -i '.a = 1' config.yaml")).toBe(true);
+  });
+
   test("pipe chain with one unsafe target is escalation", () => {
-    expect(hasShellEscalation("rg foo | sort | xargs rm")).toBe(true);
+    expect(hasShellEscalation("rg foo | head | xargs rm")).toBe(true);
   });
 
   test("semicolon is escalation", () => {
@@ -456,6 +467,14 @@ describe("isBashAllowed", () => {
     const state: GateState = { ...baseState, allowedBashPrefixes: ["rg"] };
     expect(isBashAllowed("rg foo | head -5", state)).toBe(true);
     expect(isBashAllowed("rg foo | tail -3", state)).toBe(true);
+  });
+
+  test("piped command to a write- or exec-capable target is not allowed", () => {
+    const state: GateState = { ...baseState, allowedBashPrefixes: ["rg"] };
+    expect(isBashAllowed("rg foo | sort -o out.txt", state)).toBe(false);
+    expect(isBashAllowed("rg foo | awk '{system(\"true\")}'", state)).toBe(false);
+    expect(isBashAllowed("rg foo | yq -i '.a = 1' config.yaml", state)).toBe(false);
+    expect(isBashAllowed("rg foo | rg --pre 'echo hi' pattern file.txt", state)).toBe(false);
   });
 
   test("chained command not allowed even with matching prefix", () => {

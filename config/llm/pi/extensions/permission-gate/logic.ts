@@ -212,21 +212,24 @@ export function suggestPrefix(command: string): string {
   return tokens[0];
 }
 
-/** Read-only commands safe to pipe to. These can't escalate a simple command. */
+/**
+ * Inert pipe targets: commands that can only read and print. A command belongs
+ * here only if no argument it accepts can execute a program or write a file.
+ * The check is by name with no flag inspection, so an entry that can do either
+ * is a silent allow waiting to happen: `awk '{system(...)}'` runs commands,
+ * `sed 'w file'` and `sort -o file` write, `rg --pre CMD` executes per file,
+ * `yq -i` edits in place, and `less`/`more`/`bat`/`fzf` spawn shells, pagers or
+ * preview commands. When in doubt leave it out — a missing entry costs one
+ * confirmation, an extra entry costs the guarantee.
+ */
 const SAFE_PIPE_TARGETS = new Set([
   "head",
   "tail",
   "wc",
-  "sort",
   "uniq",
   "grep",
-  "rg",
-  "awk",
-  "sed", // sed without -i is read-only in a pipe
   "cut",
   "tr",
-  "less",
-  "more",
   "cat",
   "column",
   "fmt",
@@ -238,9 +241,6 @@ const SAFE_PIPE_TARGETS = new Set([
   "expand",
   "unexpand",
   "jq",
-  "yq",
-  "bat",
-  "fzf",
 ]);
 
 /**
