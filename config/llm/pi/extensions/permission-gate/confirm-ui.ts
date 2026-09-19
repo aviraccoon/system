@@ -34,10 +34,12 @@ export interface ExplanationResult {
 }
 
 export interface ExplanationProvider {
-  /** Promise that resolves with the parsed explanation. */
+  /** Resolves with the first usable result (factor scores when available). */
   promise: Promise<ExplanationResult | null>;
   /** Abort the in-flight request. */
   abort: () => void;
+  /** Later, richer results — e.g. prose arriving after the factor scores. */
+  subscribe?: (listener: (result: ExplanationResult) => void) => void;
 }
 
 export interface ConfirmUIOptions {
@@ -195,6 +197,15 @@ export function createConfirmUI(
   // Kick off explanation loading
   if (explanation) {
     updateExplanationDisplay();
+    // A later result (prose after the factor scores) replaces what is shown
+    // without disturbing the verdict default set from the first result.
+    explanation.subscribe?.((result) => {
+      explanationResult = result;
+      if (explanationState === "none") explanationState = "ready";
+      updateExplanationDisplay();
+      updateLabels();
+      tui.requestRender();
+    });
     explanation.promise
       .then((result) => {
         if (result) {

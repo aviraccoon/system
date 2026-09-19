@@ -74,20 +74,51 @@ export function notesMessage(notes: string[]): string {
 }
 
 /**
- * Render a factor-battery verdict as the dialog's short/detail pair. The
- * decisions model returns no prose, so the fired factors are the tl;dr and the
- * probabilities above the threshold are the detail.
+ * Render a factor-battery verdict for the dialog and the auto-allow log. The
+ * decisions model returns no prose, so the score is the explanation: the short
+ * line carries the factors that fired and their probabilities, the detail lists
+ * every factor above the noise floor against the thresholds.
  */
 export function factorsToExplanation(decision: FactorDecision, source = "jev"): ExplanationResult {
-  const fired = decision.reasons.join(", ") || "no factor fired";
-  const lines = Object.entries(decision.probabilities)
-    .filter(([, probability]) => probability >= 0.5)
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, probability]) => `${name} ${probability.toFixed(2)}`);
+  const scored = Object.entries(decision.probabilities).sort((a, b) => b[1] - a[1]);
+  const fired = scored.filter(([, probability]) => probability >= 0.5).slice(0, 3);
+  const short =
+    fired.length > 0
+      ? `${source}: ${fired.map(([name, p]) => `${name} ${p.toFixed(2)}`).join(", ")}`
+      : `${source}: nothing fired`;
+  const lines = scored
+    .filter(([, probability]) => probability >= 0.3)
+    .map(([name, probability]) => `${probability >= 0.5 ? "*" : " "} ${name} ${probability.toFixed(2)}`);
   return {
     verdict: decision.verdict,
-    short: `${source}: ${fired}`,
-    detail: lines.length > 0 ? lines.join("\n") : "every factor below 0.5",
+    short,
+    detail: [`thresholds: risky >= 0.50, dangerous >= 0.70`, ...lines].join("\n"),
+  };
+}
+
+/**
+ * Merge the decisions verdict and factor scores with the explain role's prose.
+ * The verdict is the decisions model's; the prose supplies the human sentence.
+ */
+export function mergeExplanations(factors: ExplanationResult, prose: ExplanationResult): ExplanationResult {
+  return {
+    verdict: factors.verdict,
+    short: `${prose.short} · ${factors.short}`,
+    detail: [factors.detail, prose.detail].filter(Boolean).join("\n\n"),
+  };
+}
+
+/**
+ * Edit-like tools mutate by definition, so a factor answer that says otherwise
+ * must not produce a SAFE verdict that auto-allows a write. The other factors
+ * still decide how bad the mutation is.
+ */
+export function applyEditFloor(result: ExplanationResult, isEditTool: boolean): ExplanationResult {
+  if (!isEditTool || result.verdict !== "safe") return result;
+  return {
+    verdict: "risky",
+    short: `${result.short} (edits files)`,
+    detail: `edit-like tool: mutation assumed\n${result.detail}`,
   };
 }
 

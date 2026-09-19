@@ -18,7 +18,6 @@
 
 import {
   DEFAULT_DECISIONS_MODEL,
-  DEFAULT_DECISIONS_PROVIDER,
   type DecisionsAnswer,
   type DecisionsQuestion,
   decisionsComplete,
@@ -34,7 +33,9 @@ import { type FactorRow, printFactorRun } from "./factor-report";
 import { fmt, loadProviders, mapWithConcurrency, resolveApiKey, type TestCase } from "./shared";
 
 const MODEL = process.env.JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
-const PROVIDER = process.env.JEV_PROVIDER ?? DEFAULT_DECISIONS_PROVIDER;
+// models.json carries this provider's credential; the pi-side gate uses the
+// built-in `openrouter` provider instead, whose key comes from pi's auth store.
+const PROVIDER = process.env.JEV_PROVIDER ?? "openrouter-sidecar";
 const CONCURRENCY = Number(process.env.BENCH_CONCURRENCY ?? 6);
 
 const QUESTIONS: Record<string, DecisionsQuestion> = {

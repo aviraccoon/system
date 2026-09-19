@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { verdictFromFactors } from "../shared/risk-factors";
 import {
+  applyEditFloor,
   blockReason,
   describeToolCall,
   factorsToExplanation,
   findVerdictLine,
+  mergeExplanations,
   noteMessage,
   notesMessage,
   parseExplanation,
@@ -13,23 +15,55 @@ import {
 // ── factorsToExplanation ──
 
 describe("factorsToExplanation", () => {
-  test("names the fired factors in the short and the probabilities in the detail", () => {
+  test("puts the fired factors and their scores on the short line", () => {
     const decision = verdictFromFactors({ mutates_state: 0.9, touches_credentials: 0.6, runs_remote_code: 0.1 });
     const explanation = factorsToExplanation(decision);
     expect(explanation.verdict).toBe("risky");
-    expect(explanation.short).toBe("jev: mutates_state, touches_credentials");
-    expect(explanation.detail).toBe("mutates_state 0.90\ntouches_credentials 0.60");
+    expect(explanation.short).toBe("jev: mutates_state 0.90, touches_credentials 0.60");
+    expect(explanation.detail).toContain("thresholds: risky >= 0.50, dangerous >= 0.70");
+    expect(explanation.detail).toContain("* mutates_state 0.90");
+    expect(explanation.detail).not.toContain("runs_remote_code 0.10");
   });
 
   test("says so when nothing fired", () => {
-    const explanation = factorsToExplanation(verdictFromFactors({}));
+    const explanation = factorsToExplanation(verdictFromFactors({ mutates_state: 0.2 }));
     expect(explanation.verdict).toBe("safe");
-    expect(explanation.short).toBe("jev: no factor fired");
-    expect(explanation.detail).toBe("every factor below 0.5");
+    expect(explanation.short).toBe("jev: nothing fired");
+    expect(explanation.detail).toContain("thresholds:");
   });
 
   test("carries the backend label", () => {
-    expect(factorsToExplanation(verdictFromFactors({}), "chat").short).toBe("chat: no factor fired");
+    expect(factorsToExplanation(verdictFromFactors({}), "chat").short).toBe("chat: nothing fired");
+  });
+});
+
+describe("mergeExplanations", () => {
+  test("keeps the decisions verdict and puts the human sentence first", () => {
+    const merged = mergeExplanations(
+      { verdict: "risky", short: "jev: mutates_state 0.95", detail: "thresholds: risky >= 0.50" },
+      { verdict: "safe", short: "Deletes a build directory", detail: "The command removes the output folder." },
+    );
+    expect(merged.verdict).toBe("risky");
+    expect(merged.short).toBe("Deletes a build directory \u00b7 jev: mutates_state 0.95");
+    expect(merged.detail).toContain("thresholds: risky >= 0.50");
+    expect(merged.detail).toContain("The command removes the output folder.");
+  });
+});
+
+describe("applyEditFloor", () => {
+  const safe = { verdict: "safe" as const, short: "jev: nothing fired", detail: "thresholds: risky >= 0.50" };
+
+  test("lifts a safe verdict on a write to risky", () => {
+    const floored = applyEditFloor(safe, true);
+    expect(floored.verdict).toBe("risky");
+    expect(floored.short).toContain("(edits files)");
+    expect(floored.detail).toContain("mutation assumed");
+  });
+
+  test("leaves reads and higher verdicts untouched", () => {
+    expect(applyEditFloor(safe, false)).toEqual(safe);
+    const dangerous = { verdict: "dangerous" as const, short: "", detail: "" };
+    expect(applyEditFloor(dangerous, true)).toEqual(dangerous);
   });
 });
 

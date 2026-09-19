@@ -39,15 +39,17 @@ parse never auto-allows, and a dead sidecar just means the user confirms.
 
 ### Classifier
 
-Auto-classify asks a decisions model a battery of independent yes/no risk
-factors, and derives the verdict from thresholds in code — the factors and the
-policy live in `shared/risk-factors.ts`, shared with the benchmarks that measure
-them. Fired factors are the dialog's tl;dr and the probabilities are the detail;
-the short line is prefixed with the backend that answered.
+The confirm dialog and auto-classify share one classifier. A decisions model
+answers a battery of independent yes/no risk factors and the verdict comes from
+thresholds in code — the factors and policy live in `shared/risk-factors.ts`,
+shared with the benchmarks that measure them. The `explain` role still writes
+the human sentence; both run in parallel, so the dialog shows the sentence and
+the fired factors with their probabilities on one line, and `Ctrl+E` adds the
+factor list against the thresholds plus the longer explanation.
 
 When the decisions call fails, the provider has no credential, or any factor is
-missing, the `explain` role classifies instead — the behavior degrades to the
-previous path rather than to no classification. The model is pinned in
+missing, the verdict comes from the `explain` role alone — the display degrades,
+never the fail-closed behavior. The model is pinned in
 `shared/decisions.ts` because the thresholds are tuned per version; re-run the
 factor benchmark before bumping the pin. `PI_JEV=off` disables the decisions
 path; `PI_JEV_MODEL` and `PI_JEV_PROVIDER` point it elsewhere.

@@ -12,7 +12,8 @@ import {
   renderDiff,
 } from "@earendil-works/pi-coding-agent";
 import { computePatchPreview } from "../patch/preview";
-import { DEFAULT_DECISIONS_MODEL, DEFAULT_DECISIONS_PROVIDER, decisionsComplete } from "../shared/decisions";
+import { DEFAULT_DECISIONS_MODEL, decisionsComplete } from "../shared/decisions";
+import { EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { extractText, getSidecarStats, hasRole, resolveProviderAuth, sidecarComplete } from "../shared/model-roles";
 import { factorProbabilities, hasAllFactors, RISK_FACTORS, verdictFromFactors } from "../shared/risk-factors";
 import { isConfinedBash } from "../shared/sandbox";
@@ -35,9 +36,11 @@ import {
   type ExplanationResult,
 } from "./confirm-ui";
 import {
+  applyEditFloor,
   blockReason,
   describeToolCall,
   factorsToExplanation,
+  mergeExplanations,
   noteMessage,
   notesMessage,
   parseExplanation,
@@ -63,9 +66,11 @@ import { checkCommand, detectTirith, formatFindingSummary, type TirithVerdict, t
  * Decisions-model classifier. The battery and policy live in shared/risk-factors.ts,
  * shared with the benchmarks; the chat explain role is the fallback, so a
  * provider outage or an incomplete answer set degrades to the previous behavior.
- * PI_JEV=off disables the decisions path entirely.
+ * PI_JEV=off disables the decisions path entirely. The provider must be one the
+ * roles config references, because pi resolves its credential through the model
+ * registry.
  */
-const DECISIONS_PROVIDER = process.env.PI_JEV_PROVIDER ?? DEFAULT_DECISIONS_PROVIDER;
+const DECISIONS_PROVIDER = process.env.PI_JEV_PROVIDER ?? "openrouter";
 const DECISIONS_MODEL = process.env.PI_JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
 const decisionsEnabled = process.env.PI_JEV !== "off";
 
@@ -95,6 +100,8 @@ export default function permissionGate(pi: ExtensionAPI) {
     pi.sendUserMessage(text, { deliverAs: "steer" });
   }
   let explainEnabled = false;
+  /** At least one classifier backend exists (decisions model or explain role). */
+  let classifierAvailable = false;
   /** Latest auto-allow verdict for the widget. Cleared each agent turn. */
   let lastVerdict: string | null = null;
 
@@ -122,8 +129,9 @@ export default function permissionGate(pi: ExtensionAPI) {
   }
 
   /**
-   * Classify a tool call: the decisions model first, the explain role as
-   * fallback. Returns null when neither produces a verdict.
+   * Classify for auto-allow: the decisions model's verdict, and only when that
+   * is unavailable the explain role. Deliberately does not wait for prose: the
+   * verdict must not queue behind the slower chat model.
    */
   async function classify(
     toolName: string,
@@ -133,9 +141,19 @@ export default function permissionGate(pi: ExtensionAPI) {
     timeoutMs = 5000,
   ): Promise<import("./confirm-ui").ExplanationResult | null> {
     const description = describeToolCall(toolName, input, rawDiff);
-    const fromFactors = await classifyWithFactors(ctx, description, timeoutMs);
-    if (fromFactors) return fromFactors;
+    const factors = await classifyWithFactors(ctx, description, timeoutMs);
+    if (factors) return applyEditFloor(factors, EDIT_LIKE_TOOLS.includes(toolName));
+    const proseText = await askProse(ctx, description, timeoutMs);
+    return proseText ? parseExplanation(proseText, true) : null;
+  }
 
+  /** Ask the explain role for the human sentence. Null on failure or timeout. */
+  async function askProse(
+    ctx: ExtensionContext,
+    description: string,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<string | null> {
     const result = await Promise.race([
       sidecarComplete(
         "explain",
@@ -144,25 +162,24 @@ export default function permissionGate(pi: ExtensionAPI) {
           messages: [{ role: "user", content: description, timestamp: Date.now() }],
         },
         ctx.modelRegistry,
-        { notify: ctx.ui.notify },
+        { signal, notify: ctx.ui.notify },
       ),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), timeoutMs)),
     ]);
-    if (!result) return null;
-    // strict: parse failure = null (don't auto-allow garbage)
-    return parseExplanation(extractText(result.message), true);
+    return result ? extractText(result.message) : null;
   }
 
   /**
    * Ask the decisions model the factor battery. Null when disabled, when the
    * provider has no credential, when any factor is missing (a partial answer
-   * set must not read as "nothing fired"), or when the call fails — each of
-   * those falls back to the chat classifier.
+   * set must not read as "nothing fired"), or when the call fails — the verdict
+   * then comes from the explain role alone.
    */
   async function classifyWithFactors(
     ctx: ExtensionContext,
     description: string,
     timeoutMs: number,
+    signal?: AbortSignal,
   ): Promise<import("./confirm-ui").ExplanationResult | null> {
     if (!decisionsEnabled) return null;
     try {
@@ -170,7 +187,7 @@ export default function permissionGate(pi: ExtensionAPI) {
       if (!auth?.apiKey) return null;
       const result = await decisionsComplete(
         { model: DECISIONS_MODEL, state: description, questions: RISK_FACTORS },
-        { apiKey: auth.apiKey, headers: auth.headers, timeoutMs },
+        { apiKey: auth.apiKey, headers: auth.headers, timeoutMs, signal },
       );
       if (!hasAllFactors(result.answers)) return null;
       return factorsToExplanation(verdictFromFactors(factorProbabilities(result.answers)));
@@ -179,7 +196,11 @@ export default function permissionGate(pi: ExtensionAPI) {
     }
   }
 
-  /** Build an ExplanationProvider that calls the "explain" sidecar role. */
+  /**
+   * ExplanationProvider for the confirm dialog: factor scores resolve first,
+   * then the human sentence merges in when the explain role answers, so the
+   * fast classifier is never held up by the slow one.
+   */
   function makeExplanation(
     toolName: string,
     input: Record<string, unknown>,
@@ -188,7 +209,7 @@ export default function permissionGate(pi: ExtensionAPI) {
   ): ExplanationProvider | undefined {
     if (!explainEnabled) return undefined;
 
-    // Check cache first -- skip sidecar call if we already classified this
+    // Check cache first -- skip the call if this call was already classified
     const key = cacheKey(toolName, input);
     const cachedResult = state.classifyCache.get(key);
     if (cachedResult) {
@@ -197,27 +218,36 @@ export default function permissionGate(pi: ExtensionAPI) {
 
     const description = describeToolCall(toolName, input, rawDiff);
     const abortController = new AbortController();
+    const listeners: Array<(result: ExplanationResult) => void> = [];
+
+    const factorsPromise = classifyWithFactors(ctx, description, 5000, abortController.signal);
+    const prosePromise = askProse(ctx, description, 5000, abortController.signal);
 
     const promise = (async (): Promise<ExplanationResult | null> => {
-      const result = await sidecarComplete(
-        "explain",
-        {
-          systemPrompt: EXPLAIN_SYSTEM_PROMPT,
-          messages: [{ role: "user", content: description, timestamp: Date.now() }],
-        },
-        ctx.modelRegistry,
-        { signal: abortController.signal, notify: ctx.ui.notify },
-      );
-      if (!result) return null;
-      const parsed = parseExplanation(extractText(result.message));
-      // Populate cache so it's warm if auto-classify is toggled on later
-      if (parsed) {
-        state.classifyCache.set(key, { verdict: parsed.verdict, short: parsed.short, detail: parsed.detail });
+      const factors = await factorsPromise;
+      if (factors) {
+        const floored = applyEditFloor(factors, EDIT_LIKE_TOOLS.includes(toolName));
+        state.classifyCache.set(key, { ...floored });
+        void prosePromise.then((text) => {
+          const prose = text ? parseExplanation(text) : null;
+          if (!prose) return;
+          const merged = mergeExplanations(floored, prose);
+          state.classifyCache.set(key, { ...merged });
+          for (const listener of listeners) listener(merged);
+        });
+        return floored;
       }
-      return parsed;
+      const text = await prosePromise;
+      const prose = text ? parseExplanation(text, true) : null;
+      if (prose) state.classifyCache.set(key, { ...prose });
+      return prose;
     })();
 
-    return { promise, abort: () => abortController.abort() };
+    return {
+      promise,
+      abort: () => abortController.abort(),
+      subscribe: (listener) => listeners.push(listener),
+    };
   }
 
   /** Build an ExplanationProvider from an already-resolved result. */
@@ -251,7 +281,7 @@ export default function permissionGate(pi: ExtensionAPI) {
 
     const uiOptions: ConfirmUIOptions = {
       autoClassify: state.autoClassify === "on",
-      hasExplainRole: hasRole("explain"),
+      hasExplainRole: classifierAvailable,
     };
     return ctx.ui.custom<ConfirmResult>((tui, theme, kb, done) =>
       createConfirmUI(
@@ -308,7 +338,8 @@ export default function permissionGate(pi: ExtensionAPI) {
     state.toolOverrides = {};
     state.classifyCache.clear();
     state.autoAllowLog = [];
-    explainEnabled = hasRole("explain");
+    classifierAvailable = decisionsEnabled || hasRole("explain");
+    explainEnabled = classifierAvailable;
     tirithAvailable = await detectTirith();
     tirithCache.clear();
     pendingTirith.clear();
@@ -320,8 +351,8 @@ export default function permissionGate(pi: ExtensionAPI) {
   pi.registerShortcut("ctrl+shift+c", {
     description: "Toggle auto-classify",
     handler: async (ctx) => {
-      if (!hasRole("explain")) {
-        ctx.ui.notify("No 'explain' role configured in ~/.pi/agent/roles.json", "warning");
+      if (!classifierAvailable) {
+        ctx.ui.notify("No classifier: decisions path disabled and no 'explain' role configured", "warning");
         return;
       }
       state.autoClassify = state.autoClassify === "on" ? "off" : "on";
@@ -364,8 +395,8 @@ export default function permissionGate(pi: ExtensionAPI) {
           msg += `  ${t}: ${setting}\n`;
         }
 
-        msg += `\nAuto-classify: ${state.autoClassify}${hasRole("explain") ? "" : " (no 'explain' role in roles.json)"}\n`;
-        msg += `Explain: ${explainEnabled ? "on" : "off"}${hasRole("explain") ? "" : " (no 'explain' role in roles.json)"}\n`;
+        msg += `\nAuto-classify: ${state.autoClassify}${classifierAvailable ? "" : " (no classifier configured)"}\n`;
+        msg += `Explain: ${explainEnabled ? "on" : "off"}${classifierAvailable ? "" : " (no classifier configured)"}\n`;
         const stats = getSidecarStats();
         if (stats.calls > 0) {
           msg += `Sidecar: ${stats.calls} calls, $${stats.cost.toFixed(4)}\n`;
@@ -410,7 +441,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         if (choice === "Done" || choice === undefined) break;
 
         if (choice?.startsWith("Toggle auto-classify")) {
-          if (hasRole("explain")) {
+          if (classifierAvailable) {
             state.autoClassify = state.autoClassify === "on" ? "off" : "on";
             if (state.autoClassify === "off") {
               lastVerdict = null;
@@ -419,7 +450,7 @@ export default function permissionGate(pi: ExtensionAPI) {
             ctx.ui.notify(`Auto-classify: ${state.autoClassify}`, "info");
             updateStatus(ctx);
           } else {
-            ctx.ui.notify("No 'explain' role configured in ~/.pi/agent/roles.json", "warning");
+            ctx.ui.notify("No classifier: decisions path disabled and no 'explain' role configured", "warning");
           }
         } else if (choice === "View auto-allow log") {
           let logMsg = `Auto-allowed calls (${state.autoAllowLog.length}):\n\n`;
@@ -444,11 +475,11 @@ export default function permissionGate(pi: ExtensionAPI) {
           state.toolOverrides.bash = state.toolOverrides.bash === "allow" ? undefined : "allow";
           ctx.ui.notify(`bash: ${state.toolOverrides.bash ?? "confirm"}`, "info");
         } else if (choice?.startsWith("Toggle explain")) {
-          if (hasRole("explain")) {
+          if (classifierAvailable) {
             explainEnabled = !explainEnabled;
             ctx.ui.notify(`Explain: ${explainEnabled ? "on" : "off"}`, "info");
           } else {
-            ctx.ui.notify("No 'explain' role configured in ~/.pi/agent/roles.json", "warning");
+            ctx.ui.notify("No classifier: decisions path disabled and no 'explain' role configured", "warning");
           }
         } else if (choice === "Add path glob rule") {
           const glob = await ctx.ui.input("Path glob (e.g. **/*.nix, config/llm/pi/**):");
@@ -753,7 +784,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     }
 
     // Auto-classify: call sidecar before showing dialog
-    if (state.autoClassify === "on" && hasRole("explain") && !tirithWarning) {
+    if (state.autoClassify === "on" && classifierAvailable && !tirithWarning) {
       const key = cacheKey(event.toolName, input);
       const cached = state.classifyCache.get(key);
 

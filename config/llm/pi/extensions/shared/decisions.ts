@@ -84,10 +84,6 @@ export const DEFAULT_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
  * Callers may override with PI_JEV_MODEL / JEV_MODEL.
  */
 export const DEFAULT_DECISIONS_MODEL = "typesafe/jev-1.13";
-
-/** Provider in pi's models.json whose credential reaches the endpoint. */
-export const DEFAULT_DECISIONS_PROVIDER = "openrouter-sidecar";
-
 export interface DecisionsOptions {
   apiKey: string;
   /** Extra request headers, e.g. OpenRouter routing. Null values are dropped. */
