@@ -1,6 +1,6 @@
 ---
 name: editor
-description: Edit a draft for slop, padding and machine-written prose. Read-only; returns findings with the quoted line and a concrete rewrite, never edits the file.
+description: Review prose for slop, padding and machine-written voice — docs, READMEs, commit messages, comments. Use before committing any change that touches prose. Read-only; returns findings with the quoted line and a concrete rewrite, never edits the file.
 role: explain
 tools: read,grep,find,ls,bash
 extensions: sandbox-bash
