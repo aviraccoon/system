@@ -1,5 +1,36 @@
 import { describe, expect, test } from "bun:test";
-import { fmt, loadProviders, parseModelArgs, resolveRoleModels } from "./shared";
+import { fmt, loadProviders, mapWithConcurrency, parseModelArgs, resolveRoleModels } from "./shared";
+
+// ── mapWithConcurrency ──
+
+describe("mapWithConcurrency", () => {
+  test("preserves input order regardless of completion order", async () => {
+    const out = await mapWithConcurrency([30, 5, 15, 1], 4, async (ms) => {
+      await new Promise((r) => setTimeout(r, ms));
+      return ms;
+    });
+    expect(out).toEqual([30, 5, 15, 1]);
+  });
+
+  test("never exceeds the limit", async () => {
+    let active = 0;
+    let peak = 0;
+    await mapWithConcurrency([...Array(10).keys()], 3, async () => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((r) => setTimeout(r, 5));
+      active--;
+      return 0;
+    });
+    expect(peak).toBeLessThanOrEqual(3);
+    expect(peak).toBeGreaterThan(1);
+  });
+
+  test("handles empty input and limits above the item count", async () => {
+    expect(await mapWithConcurrency([], 4, async () => 1)).toEqual([]);
+    expect(await mapWithConcurrency([1, 2], 8, async (n) => n * 2)).toEqual([2, 4]);
+  });
+});
 
 // ── fmt ──
 

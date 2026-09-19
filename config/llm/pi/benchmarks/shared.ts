@@ -347,24 +347,51 @@ export interface BenchConfig<T extends string> {
   buildMessages?: MessageBuilder;
 }
 
+/** Run tasks with bounded concurrency, preserving input order. */
+export async function mapWithConcurrency<I, O>(
+  items: readonly I[],
+  limit: number,
+  fn: (item: I, index: number) => Promise<O>,
+): Promise<O[]> {
+  const results = new Array<O>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      results[i] = await fn(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/** Concurrency for case execution. Cases are independent requests, so the run
+ *  is limited by the provider, not the runner. Override with BENCH_CONCURRENCY. */
+function parseConcurrency(): number {
+  const raw = Number(process.env.BENCH_CONCURRENCY ?? 6);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 6;
+}
+
 export async function runBenchmark<T extends string>(config: BenchConfig<T>): Promise<void> {
   const modelFilters = parseModelArgs();
   const resolved = resolveRoleModels(config.role, modelFilters);
   const color = config.color ?? valueColor;
+  const concurrency = parseConcurrency();
 
   // Print model plan up front
   console.log(
-    `\n${BOLD}Role:${RESET} ${config.role}  ${BOLD}Models:${RESET} ${resolved.map((m) => m.label).join(", ")}  ${DIM}(${resolved.length} model${resolved.length > 1 ? "s" : ""}, ${config.tests.length} tests)${RESET}`,
+    `\n${BOLD}Role:${RESET} ${config.role}  ${BOLD}Models:${RESET} ${resolved.map((m) => m.label).join(", ")}  ${DIM}(${resolved.length} model${resolved.length > 1 ? "s" : ""}, ${config.tests.length} tests, concurrency ${concurrency})${RESET}`,
   );
 
   for (const model of resolved) {
     console.log(`\n${BOLD}${model.label}${RESET}\n`);
 
-    const rows: TestResult[] = [];
-    for (const test of config.tests) {
-      const r = await runOne(model, test, config.systemPrompt, config.parseOutput, config.buildMessages);
-      rows.push(r);
+    const rows = await mapWithConcurrency(config.tests, concurrency, (test) =>
+      runOne(model, test, config.systemPrompt, config.parseOutput, config.buildMessages),
+    );
 
+    for (const r of rows) {
       const icon = r.pass ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
       const gotCol = color(r.got);
       const expCol = color(r.expected);

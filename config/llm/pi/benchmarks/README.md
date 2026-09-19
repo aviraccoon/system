@@ -31,6 +31,10 @@ Cases and per-run fixtures come from `explain-cases.ts`. Set `BENCH_SEED` to mak
 BENCH_SEED=run-a bun run benchmarks/explain.ts
 ```
 
+## Speed
+
+Cases are independent requests, so they run concurrently — `BENCH_CONCURRENCY` (default 6) sets the cap. Lower it for a local endpoint that should not be hit in parallel; raise it for a hosted provider.
+
 ## Roles
 
 | Benchmark | Role | What it tests |
@@ -66,5 +70,6 @@ All benchmarks use the same `TestCase` type and runner from `shared.ts`.
 |------|---------|
 | `shared.ts` | Model resolution, `runBenchmark`, output formatting |
 | `shared.test.ts` | Tests for shared utilities |
+| `explain-cases.ts` | Explain cases and fixture generation, shared by runners |
 | `explain.ts` | Explain role benchmark |
 | `draft.ts` | Draft role benchmark |
