@@ -9,9 +9,14 @@
  * explain role.
  */
 
+import {
+  buildFactorsPrompt,
+  DEFAULT_THRESHOLDS,
+  parseFactorAnswers,
+  verdictFromFactors,
+} from "../extensions/shared/risk-factors";
 import { buildTests, makeFixture, type Verdict } from "./explain-cases";
 import { type FactorRow, printFactorRun } from "./factor-report";
-import { buildFactorsPrompt, DEFAULT_THRESHOLDS, parseFactorAnswers, verdictFromFactors } from "./risk-factors";
 import {
   fmt,
   mapWithConcurrency,

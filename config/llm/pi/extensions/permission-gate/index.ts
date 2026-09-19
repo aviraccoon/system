@@ -12,7 +12,9 @@ import {
   renderDiff,
 } from "@earendil-works/pi-coding-agent";
 import { computePatchPreview } from "../patch/preview";
-import { extractText, getSidecarStats, hasRole, sidecarComplete } from "../shared/model-roles";
+import { DEFAULT_DECISIONS_MODEL, DEFAULT_DECISIONS_PROVIDER, decisionsComplete } from "../shared/decisions";
+import { extractText, getSidecarStats, hasRole, resolveProviderAuth, sidecarComplete } from "../shared/model-roles";
+import { factorProbabilities, hasAllFactors, RISK_FACTORS, verdictFromFactors } from "../shared/risk-factors";
 import { isConfinedBash } from "../shared/sandbox";
 import { computeEditPreview } from "./edit-preview";
 
@@ -32,7 +34,14 @@ import {
   type ExplanationProvider,
   type ExplanationResult,
 } from "./confirm-ui";
-import { blockReason, describeToolCall, noteMessage, notesMessage, parseExplanation } from "./explain";
+import {
+  blockReason,
+  describeToolCall,
+  factorsToExplanation,
+  noteMessage,
+  notesMessage,
+  parseExplanation,
+} from "./explain";
 import {
   cacheKey,
   createInitialState,
@@ -49,6 +58,16 @@ import {
 } from "./logic";
 import { EXPLAIN_SYSTEM_PROMPT } from "./prompts";
 import { checkCommand, detectTirith, formatFindingSummary, type TirithVerdict, tirithAnnotation } from "./tirith";
+
+/**
+ * Decisions-model classifier. The battery and policy live in shared/risk-factors.ts,
+ * shared with the benchmarks; the chat explain role is the fallback, so a
+ * provider outage or an incomplete answer set degrades to the previous behavior.
+ * PI_JEV=off disables the decisions path entirely.
+ */
+const DECISIONS_PROVIDER = process.env.PI_JEV_PROVIDER ?? DEFAULT_DECISIONS_PROVIDER;
+const DECISIONS_MODEL = process.env.PI_JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
+const decisionsEnabled = process.env.PI_JEV !== "off";
 
 export default function permissionGate(pi: ExtensionAPI) {
   const state: GateState = createInitialState();
@@ -102,7 +121,10 @@ export default function permissionGate(pi: ExtensionAPI) {
     ctx.ui.setWidget("permission-gate", [lastVerdict], { placement: "belowEditor" });
   }
 
-  /** Classify a tool call via sidecar. Returns parsed result or null on failure/timeout. */
+  /**
+   * Classify a tool call: the decisions model first, the explain role as
+   * fallback. Returns null when neither produces a verdict.
+   */
   async function classify(
     toolName: string,
     input: Record<string, unknown>,
@@ -111,6 +133,9 @@ export default function permissionGate(pi: ExtensionAPI) {
     timeoutMs = 5000,
   ): Promise<import("./confirm-ui").ExplanationResult | null> {
     const description = describeToolCall(toolName, input, rawDiff);
+    const fromFactors = await classifyWithFactors(ctx, description, timeoutMs);
+    if (fromFactors) return fromFactors;
+
     const result = await Promise.race([
       sidecarComplete(
         "explain",
@@ -126,6 +151,32 @@ export default function permissionGate(pi: ExtensionAPI) {
     if (!result) return null;
     // strict: parse failure = null (don't auto-allow garbage)
     return parseExplanation(extractText(result.message), true);
+  }
+
+  /**
+   * Ask the decisions model the factor battery. Null when disabled, when the
+   * provider has no credential, when any factor is missing (a partial answer
+   * set must not read as "nothing fired"), or when the call fails — each of
+   * those falls back to the chat classifier.
+   */
+  async function classifyWithFactors(
+    ctx: ExtensionContext,
+    description: string,
+    timeoutMs: number,
+  ): Promise<import("./confirm-ui").ExplanationResult | null> {
+    if (!decisionsEnabled) return null;
+    try {
+      const auth = await resolveProviderAuth(DECISIONS_PROVIDER, ctx.modelRegistry);
+      if (!auth?.apiKey) return null;
+      const result = await decisionsComplete(
+        { model: DECISIONS_MODEL, state: description, questions: RISK_FACTORS },
+        { apiKey: auth.apiKey, headers: auth.headers, timeoutMs },
+      );
+      if (!hasAllFactors(result.answers)) return null;
+      return factorsToExplanation(verdictFromFactors(factorProbabilities(result.answers)));
+    } catch {
+      return null;
+    }
   }
 
   /** Build an ExplanationProvider that calls the "explain" sidecar role. */

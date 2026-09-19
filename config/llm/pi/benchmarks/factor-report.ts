@@ -3,7 +3,7 @@
  * and a chat-model runner (factors.ts) print comparable tables.
  */
 
-import { DEFAULT_THRESHOLDS, type FactorVerdict } from "./risk-factors";
+import { DEFAULT_THRESHOLDS, type FactorVerdict } from "../extensions/shared/risk-factors";
 import { valueColor } from "./shared";
 
 const GREEN = "\x1b[32m";
@@ -27,7 +27,7 @@ export interface FactorRow {
 }
 
 export interface FactorRun {
-  /** What produced the answers, e.g. "typesafe/jev-1.13 via openrouter-sidecar". */
+  /** What produced the answers, e.g. "<decisions model> via <provider>". */
   label: string;
   /** Short parenthetical, e.g. "58 tests, 10 factors + 1 choice, concurrency 6". */
   meta: string;

@@ -128,6 +128,29 @@ export function parseRef(ref: string): { provider: string; modelId: string } | n
   return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) };
 }
 
+/**
+ * Resolve auth for a provider rather than a model: decision endpoints take a
+ * provider credential but are not in the model catalog, so any model from that
+ * provider in the roles config stands in for it.
+ */
+export async function resolveProviderAuth(
+  providerName: string,
+  modelRegistry: ModelRegistry,
+): Promise<{ apiKey: string | undefined; headers: ProviderHeaders | undefined } | null> {
+  const config = loadConfig();
+  for (const role of Object.values(config)) {
+    for (const entry of role?.models ?? []) {
+      const parsed = parseRef(entry.ref);
+      if (!parsed || parsed.provider !== providerName) continue;
+      const model = modelRegistry.find(parsed.provider, parsed.modelId);
+      if (!model) continue;
+      const auth = await modelRegistry.getApiKeyAndHeaders(model);
+      if (auth.ok) return { apiKey: auth.apiKey, headers: auth.headers };
+    }
+  }
+  return null;
+}
+
 export type ResolvedRoleModel = ResolvedModel & { entry: ModelEntry };
 
 /**

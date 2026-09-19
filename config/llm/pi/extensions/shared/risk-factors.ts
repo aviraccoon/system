@@ -14,7 +14,7 @@
  * dangerous.
  */
 
-import type { DecisionsAnswer, DecisionsQuestion } from "../extensions/shared/decisions";
+import type { DecisionsAnswer, DecisionsQuestion } from "./decisions";
 
 const noul = (instructions: string): DecisionsQuestion => ({ type: "noul", instructions });
 
@@ -233,6 +233,12 @@ export interface FactorDecision {
   reasons: string[];
   /** Probabilities read, for logging. */
   probabilities: Record<string, number>;
+}
+
+/** True when every factor was answered. A partial answer set must not be read
+ *  as "that factor did not fire" — it means the decision cannot be trusted. */
+export function hasAllFactors(answers: Record<string, DecisionsAnswer>): boolean {
+  return FACTOR_NAMES.every((name) => answers[name]?.type === "noul");
 }
 
 /** Read the factor answers as probabilities, missing ones as 0. */

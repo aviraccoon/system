@@ -16,14 +16,25 @@
  * so the two runners can be scored against identical inputs (same BENCH_SEED).
  */
 
-import { type DecisionsAnswer, type DecisionsQuestion, decisionsComplete } from "../extensions/shared/decisions";
+import {
+  DEFAULT_DECISIONS_MODEL,
+  DEFAULT_DECISIONS_PROVIDER,
+  type DecisionsAnswer,
+  type DecisionsQuestion,
+  decisionsComplete,
+} from "../extensions/shared/decisions";
+import {
+  DEFAULT_THRESHOLDS,
+  factorProbabilities,
+  RISK_FACTORS,
+  verdictFromFactors,
+} from "../extensions/shared/risk-factors";
 import { buildTests, makeFixture, type Verdict } from "./explain-cases";
 import { type FactorRow, printFactorRun } from "./factor-report";
-import { DEFAULT_THRESHOLDS, factorProbabilities, RISK_FACTORS, verdictFromFactors } from "./risk-factors";
 import { fmt, loadProviders, mapWithConcurrency, resolveApiKey, type TestCase } from "./shared";
 
-const MODEL = process.env.JEV_MODEL ?? "typesafe/jev-1.13";
-const PROVIDER = process.env.JEV_PROVIDER ?? "openrouter-sidecar";
+const MODEL = process.env.JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
+const PROVIDER = process.env.JEV_PROVIDER ?? DEFAULT_DECISIONS_PROVIDER;
 const CONCURRENCY = Number(process.env.BENCH_CONCURRENCY ?? 6);
 
 const QUESTIONS: Record<string, DecisionsQuestion> = {

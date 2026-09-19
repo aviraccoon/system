@@ -3,6 +3,7 @@
  * No pi imports — testable independently.
  */
 
+import type { FactorDecision } from "../shared/risk-factors";
 import type { ExplanationResult, ExplanationVerdict } from "./confirm-ui";
 
 // ── Tool call description ──
@@ -70,6 +71,24 @@ export function noteMessage(note: string, toolName: string, input: unknown): str
 /** Join the notes captured in one turn into a single user message. */
 export function notesMessage(notes: string[]): string {
   return notes.join("\n\n");
+}
+
+/**
+ * Render a factor-battery verdict as the dialog's short/detail pair. The
+ * decisions model returns no prose, so the fired factors are the tl;dr and the
+ * probabilities above the threshold are the detail.
+ */
+export function factorsToExplanation(decision: FactorDecision, source = "jev"): ExplanationResult {
+  const fired = decision.reasons.join(", ") || "no factor fired";
+  const lines = Object.entries(decision.probabilities)
+    .filter(([, probability]) => probability >= 0.5)
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, probability]) => `${name} ${probability.toFixed(2)}`);
+  return {
+    verdict: decision.verdict,
+    short: `${source}: ${fired}`,
+    detail: lines.length > 0 ? lines.join("\n") : "every factor below 0.5",
+  };
 }
 
 // ── Verdict parsing ──

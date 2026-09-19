@@ -1,5 +1,37 @@
 import { describe, expect, test } from "bun:test";
-import { blockReason, describeToolCall, findVerdictLine, noteMessage, notesMessage, parseExplanation } from "./explain";
+import { verdictFromFactors } from "../shared/risk-factors";
+import {
+  blockReason,
+  describeToolCall,
+  factorsToExplanation,
+  findVerdictLine,
+  noteMessage,
+  notesMessage,
+  parseExplanation,
+} from "./explain";
+
+// ── factorsToExplanation ──
+
+describe("factorsToExplanation", () => {
+  test("names the fired factors in the short and the probabilities in the detail", () => {
+    const decision = verdictFromFactors({ mutates_state: 0.9, touches_credentials: 0.6, runs_remote_code: 0.1 });
+    const explanation = factorsToExplanation(decision);
+    expect(explanation.verdict).toBe("risky");
+    expect(explanation.short).toBe("jev: mutates_state, touches_credentials");
+    expect(explanation.detail).toBe("mutates_state 0.90\ntouches_credentials 0.60");
+  });
+
+  test("says so when nothing fired", () => {
+    const explanation = factorsToExplanation(verdictFromFactors({}));
+    expect(explanation.verdict).toBe("safe");
+    expect(explanation.short).toBe("jev: no factor fired");
+    expect(explanation.detail).toBe("every factor below 0.5");
+  });
+
+  test("carries the backend label", () => {
+    expect(factorsToExplanation(verdictFromFactors({}), "chat").short).toBe("chat: no factor fired");
+  });
+});
 
 // ── describeToolCall ──
 

@@ -77,8 +77,21 @@ export interface DecisionsResult {
 
 export const DEFAULT_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 
+/**
+ * Pinned on purpose: the gate's thresholds are tuned per model version, so a
+ * silent upgrade would move decisions under a fixed policy. Bump the pin after
+ * re-running the factor benchmark, which measures the version it is pinned to.
+ * Callers may override with PI_JEV_MODEL / JEV_MODEL.
+ */
+export const DEFAULT_DECISIONS_MODEL = "typesafe/jev-1.13";
+
+/** Provider in pi's models.json whose credential reaches the endpoint. */
+export const DEFAULT_DECISIONS_PROVIDER = "openrouter-sidecar";
+
 export interface DecisionsOptions {
   apiKey: string;
+  /** Extra request headers, e.g. OpenRouter routing. Null values are dropped. */
+  headers?: Record<string, string | null> | undefined;
   baseUrl?: string;
   signal?: AbortSignal;
   timeoutMs?: number;
@@ -191,6 +204,7 @@ export async function decisionsComplete(
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${options.apiKey}`,
+        ...Object.fromEntries(Object.entries(options.headers ?? {}).filter(([, value]) => typeof value === "string")),
       },
       body: JSON.stringify(buildDecisionsBody(request)),
       signal: controller.signal,

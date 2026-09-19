@@ -4,6 +4,7 @@ import {
   DEFAULT_THRESHOLDS,
   FACTOR_NAMES,
   factorProbabilities,
+  hasAllFactors,
   parseFactorAnswers,
   verdictFromFactors,
 } from "./risk-factors";
@@ -97,6 +98,17 @@ describe("factorProbabilities", () => {
     expect(probs.mutates_state).toBe(0.8);
     expect(probs.runs_remote_code).toBe(0);
     expect(Object.keys(probs)).toHaveLength(20);
+  });
+});
+
+describe("hasAllFactors", () => {
+  test("requires every factor to be answered", () => {
+    const complete: Record<string, { type: "noul"; noul: number }> = Object.fromEntries(
+      FACTOR_NAMES.map((name) => [name, { type: "noul", noul: 0.1 }]),
+    );
+    expect(hasAllFactors(complete)).toBe(true);
+    const { [FACTOR_NAMES[0]]: _missing, ...partial } = complete;
+    expect(hasAllFactors(partial)).toBe(false);
   });
 });
 
