@@ -423,13 +423,13 @@ function parseAppleHierarchy(text: string): Element[] {
         label,
         x: Math.round(Number(hit[1])),
         y: Math.round(Number(hit[2])),
-        focused: node.line.includes("Keyboard Focused") || /, Focused,? /.test(node.line),
+        focused: node.line.includes("Keyboard Focused"),
       });
     }
     for (const child of node.children) walk(child);
   };
   walk(root);
-  return dedupe(elements).slice(0, 80);
+  return dedupe(elements);
 }
 
 type AndroidNode = {
@@ -484,7 +484,7 @@ function parseAndroidLayout(text: string): Element[] {
     if (record.children !== undefined) walk(record.children);
   };
   walk(parsed);
-  return dedupe(elements).slice(0, 80);
+  return dedupe(elements);
 }
 
 // ---------------------------------------------------------------- sim backend
