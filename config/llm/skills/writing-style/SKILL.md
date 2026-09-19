@@ -144,6 +144,14 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 **Instead**: State what the change does and the failure it prevents. A measurement belongs only when it justifies the decision — what was probed and what it showed. A check result that would not change what the reader does is noise.
 
+### Change-Relative Prose
+
+**Patterns to avoid**: *as before*, *previously*, *used to*, *no longer*, *which is where it ran before*, *as it did*, *the old path* — any comparison of the text's subject to its own earlier form.
+
+**The problem**: Docs and comments describe the code as it is. A reader with only the current tree cannot place "before", and the comparison turns a fact into a diff. Old and new belong in the change's own record — the commit message, the journal, a design note — and only as the failure the change prevents.
+
+**Instead**: State the current behavior on its own terms. If the earlier behavior explains why the code is shaped the way it is, it belongs in the commit message, the journal, or a design note.
+
 ### Collaborative Language Leakage
 
 **Words to avoid**: *I hope this helps*, *Of course!*, *Certainly!*, *You're absolutely right!*, *Would you like...*, *is there anything else*, *let me know*, *here is a...*
@@ -313,4 +321,3 @@ The fundamental problem with typical AI writing is regression toward the generic
 ---
 
 *Adapted from [Wikipedia: Signs of AI writing](https://en.wikipedia.org/wiki/Wikipedia:Signs_of_AI_writing)*
-*Last updated: 2026-09-19*
