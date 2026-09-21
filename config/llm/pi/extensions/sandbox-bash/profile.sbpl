@@ -60,6 +60,16 @@
   (literal (param "HOME_ZSHRC"))
   (literal (param "HOME_SHELL_PROFILE")))
 
+; Node realpaths a script entry by lstat-ing each ancestor. Literals, not a
+; subtree: only these segments get the metadata channel — dot-entries the
+; class closes stay closed, including names no filename deny below matches.
+(allow file-read-metadata
+  (literal (param "HOME_LOCAL"))
+  (literal (param "HOME_LOCAL_SHARE"))
+  (literal (param "HOME_LOCAL_STATE"))
+  (literal (param "HOME_CONFIG"))
+  (literal (param "HOME_CACHE")))
+
 ; Credential stores, denied after the reopenings so they win inside them too.
 (deny file-read*
   (subpath (param "HOME_SSH"))

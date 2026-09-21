@@ -37,10 +37,17 @@ export function profileParams(paths: SandboxPaths): string[] {
     // tool provably needs it. Credential material is dotfiles, and a list of
     // credential paths cannot stay complete, so the class is what gets closed.
     `HOME_DOTFILES=^${escapeRegex(home)}/\\.[^/]*`,
-    `HOME_CONFIG_GIT=${home}/.config/git`,
-    `HOME_CONFIG_MISE=${home}/.config/mise`,
+    // Node realpaths a script entry by lstat-ing each segment, so the
+    // segments between $HOME and the reopened subtrees below must resolve.
+    `HOME_LOCAL=${home}/.local`,
+    `HOME_LOCAL_SHARE=${home}/.local/share`,
+    `HOME_LOCAL_STATE=${home}/.local/state`,
+    `HOME_CONFIG=${home}/.config`,
+    `HOME_CACHE=${home}/.cache`,
     // On PATH: without it, PATH lookup fails for every binary in the directory.
     `HOME_LOCAL_BIN=${home}/.local/bin`,
+    `HOME_CONFIG_GIT=${home}/.config/git`,
+    `HOME_CONFIG_MISE=${home}/.config/mise`,
     `HOME_LOCAL_SHARE_MISE=${home}/.local/share/mise`,
     `HOME_LOCAL_STATE_MISE=${home}/.local/state/mise`,
     `HOME_CACHE_MISE=${home}/.cache/mise`,

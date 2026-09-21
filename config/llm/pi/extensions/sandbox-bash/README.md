@@ -21,8 +21,13 @@ extensions: sandbox-bash
 
 Reads outside `$HOME` are open. Inside `$HOME` every dot-entry is denied, with a few
 paths reopened for tools that treat a missing config file as fatal (git, mise, shell
-startup files) plus `~/.local/bin`, which is on PATH. Credential stores inside those
-paths stay denied, and secret-bearing filenames are denied anywhere on the filesystem —
+startup files) plus `~/.local/bin`, which is on PATH. Metadata reads of the segments
+between `$HOME` and those subtrees are allowed too (`~/.local`, `~/.local/share`,
+`~/.local/state`, `~/.config`, `~/.cache`): node resolves a script's real path by
+lstat-ing each ancestor. Literals, not a subtree allow: the class deny stays in
+force for every other dot-entry, including names no filename deny matches.
+Credential stores inside those paths stay denied, and secret-bearing filenames are
+denied anywhere on the filesystem —
 the deny also blocks path resolution, so a scratch tree containing a matching name
 cannot be removed either. `profile.sbpl` is the authority for these lists.
 

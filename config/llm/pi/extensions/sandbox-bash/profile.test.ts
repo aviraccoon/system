@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { boundaryProbeScript, profileParams, SANDBOX_EXEC, sandboxArgs } from "./wrap";
@@ -13,6 +13,15 @@ function runs(profilePath: string, params: string[], script: string): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+function deniedOutput(script: string): string {
+  try {
+    execFileSync(SANDBOX_EXEC, sandboxArgs(PROFILE, PARAMS, script), { stdio: ["ignore", "pipe", "pipe"] });
+    return "";
+  } catch (err) {
+    return (err as { stderr?: Buffer }).stderr?.toString() ?? "";
   }
 }
 
@@ -78,5 +87,30 @@ describe.skipIf(!nestable())("profile.sbpl", () => {
   it("closes a dotfile that no rule names", () => {
     if (!existsSync(join(HOME, ".zsh_history"))) return;
     expect(runs(PROFILE, PARAMS, `cat "$HOME/.zsh_history" >/dev/null 2>&1`)).toBe(false);
+  });
+
+  it("lets node's realpath walk resolve the reopened subtrees' ancestor segments", () => {
+    // Metadata only: node stats each segment on the way to a script entry.
+    for (const segment of [".local", ".local/share", ".local/state", ".config", ".cache"]) {
+      if (!existsSync(join(HOME, segment))) continue;
+      expect(runs(PROFILE, PARAMS, `[ -d "$HOME/${segment}" ]`)).toBe(true);
+    }
+  });
+
+  it("denies metadata of an entry in an unreopened .local subtree", () => {
+    // Created by the test: the denial fires on an existing vnode — a missing
+    // leaf yields ENOENT under a correct profile too, so an absent fixture
+    // would make a correct profile fail and a broken one pass. Deliberately
+    // not secret-shaped: a filename deny would confound the assertion.
+    const parent = join(HOME, ".local/share");
+    const parentWasMissing = !existsSync(parent);
+    mkdirSync(parent, { recursive: true });
+    const dir = mkdtempSync(join(parent, "sandbox-bash-test-"));
+    try {
+      expect(deniedOutput(`stat "${dir}"`)).toContain("not permitted");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      if (parentWasMissing) rmSync(parent, { recursive: true, force: true });
+    }
   });
 });
