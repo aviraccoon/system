@@ -45,13 +45,13 @@ description = "Run checks"
 depends = ["fmt-check", "pi-check", "mcp-check", "harvest-check"]
 
 [tasks.pi-check]
-description = "Lint and test pi extensions"
+description = "Biome config/llm, then type-check and test the pi extensions"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-cd config/llm/pi
 echo "==> biome check"
-biome check .
+biome check config/llm
+cd config/llm/pi
 echo "==> tsc --noEmit"
 tsc --noEmit
 echo "==> bun test"
@@ -59,8 +59,8 @@ bun test
 """
 
 [tasks.pi-fmt]
-description = "Format pi extensions"
-run = "cd config/llm/pi && biome check --write ."
+description = "Biome-format the config/llm tree"
+run = "biome check --write config/llm"
 
 [tasks.mcp-check]
 description = "Lint and test MCP servers"

@@ -25,7 +25,7 @@
  */
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 const BRIDGE_WAIT_MS = 10_000;
@@ -537,19 +537,79 @@ async function listWorkspace(): Promise<string | undefined> {
   return workspaces?.message?.match(/workspaceIdentifier: ([^,]+),/)?.[1];
 }
 
+function xcodeRunning(): boolean {
+  return sh(["pgrep", "-x", "Xcode"]).stdout.trim() !== "";
+}
+
+/** List workspaces; on the not-approved refusal, launch Xcode if it is down and call
+ * XcodeOpenWorkspace — its invocation is what makes Xcode show the agent-approval dialog.
+ * A successful open also hands back the workspace id, so no follow-up listing is needed.
+ * On the final attempt a bridge timeout surfaces as-is instead of a retry. */
+async function listWorkspaceOrPrompt(project: string, final = false): Promise<string | undefined> {
+  try {
+    return await listWorkspace();
+  } catch (err) {
+    if (!(err instanceof MobileError)) throw err;
+    // A bridge that does not answer yet is the caller's retry's job; the final
+    // attempt surfaces it.
+    if (/did not answer/i.test(err.message)) {
+      if (final) throw err;
+      return undefined;
+    }
+    if (!/isn'?t approved/i.test(err.message)) throw err;
+    // The approval dialog lives in Xcode's UI; a workspace can be registered with the MCP
+    // service while Xcode.app is closed, and the prompt then never appears anywhere.
+    if (!xcodeRunning()) {
+      console.error("mobile: Xcode is not running — launching it (the approval dialog appears there)");
+      const launched = sh(["open", project]);
+      if (launched.code !== 0) {
+        throw new MobileError(`could not launch Xcode: ${launched.stderr.trim() || `exit ${launched.code}`}`);
+      }
+      for (let i = 0; i < 20 && !xcodeRunning(); i++) Bun.sleepSync(500);
+    }
+    try {
+      const opened = (await mcpCall("XcodeOpenWorkspace", { path: project })) as {
+        workspaceIdentifier?: string;
+        message?: string;
+      };
+      if (opened?.workspaceIdentifier) return opened.workspaceIdentifier;
+      // An approval-pending reply carries Xcode's own instructions — surface
+      // them instead of the generic workspace error.
+      throw new MobileError(opened?.message ?? "XcodeOpenWorkspace returned no workspace identifier");
+    } catch (openErr) {
+      // The not-approved refusal maps to the dialog hint.
+      if (openErr instanceof MobileError && /isn'?t approved/i.test(openErr.message)) {
+        throw new MobileError(
+          openErr.message,
+          "if Xcode is showing the agent-approval dialog, click Allow and re-run this command (the grant lives in Xcode Settings > Intelligence > Model Context Protocol)",
+        );
+      }
+      if (openErr instanceof MobileError && /did not answer/i.test(openErr.message)) {
+        if (final) throw openErr;
+        return undefined;
+      }
+      // A denial reaches here: rethrown rather than retried — a retry would
+      // re-prompt the person who just refused.
+      throw openErr;
+    }
+  }
+}
+
 async function cmdSimStart(project: string, device?: string): Promise<SessionStart> {
   if (!project) throw new MobileError("specify --project /path/to/App.xcodeproj");
   if (!existsSync(project)) throw new MobileError(`project not found: ${project}`);
+  project = resolve(project);
   saveState({ simProject: project });
+
   const status = sh(["xcrun", "mcp-server", "status", "--format", "json"]);
   if (!status.stdout.includes('"running" : true')) sh(["xcrun", "mcp-server", "open", project]);
   // Workspace identifiers change when the Xcode service restarts, so a cached one is never
   // reused: list, re-open once if the list is empty, and give up rather than pass a stale id.
-  let ws = await listWorkspace();
+  let ws = await listWorkspaceOrPrompt(project);
   if (!ws) {
     sh(["xcrun", "mcp-server", "open", project]);
     Bun.sleepSync(1000);
-    ws = await listWorkspace();
+    ws = await listWorkspaceOrPrompt(project, true);
   }
   if (!ws) throw new MobileError("no workspace open in Xcode's MCP service", `xcrun mcp-server open ${project}`);
   saveState({ simWorkspace: ws });
