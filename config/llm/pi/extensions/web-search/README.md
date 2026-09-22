@@ -42,7 +42,10 @@ agent-browser --session pi-fetch-<project> click @e3
 agent-browser --session pi-fetch-<project> screenshot page.png
 ```
 
-Session name is `pi-fetch-<project-basename>`, isolated per project.
+Session name is `pi-fetch-<project-basename>`, isolated per project. Subagents
+get an ephemeral per-process session (`pi-fetch-<project>-p<pid>`) that the
+child closes on exit. Children fetch with a cold session — they do not
+inherit the parent's cookies.
 
 ## Commands
 

@@ -114,9 +114,19 @@ async function resolveNavHeaders(baseArgs: string[], signal?: AbortSignal): Prom
 
 // ── Session naming ──
 
-/** Derive a session name from cwd to isolate browser state per project. */
+/**
+ * Derive a session name from cwd to isolate browser state per project.
+ *
+ * Subagents append a per-process discriminator (`-p<pid>`): every child is a
+ * full pi session whose web-search extension closes the browser on exit
+ * (`session_shutdown` → `closeSession`), so sharing the project session would
+ * tear it down under the parent and sibling children, and one tab shared
+ * across concurrent children would interleave navigations (the fetch mutex is
+ * per-process). Closing its own session on exit is therefore correct.
+ */
 export function sessionName(cwd: string): string {
-  return `pi-fetch-${basename(cwd)}`;
+  const base = `pi-fetch-${basename(cwd)}`;
+  return process.env.PI_SUBAGENT === "1" ? `${base}-p${process.pid}` : base;
 }
 
 // ── Browser commands ──

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import { USER_AGENT } from "./feeds/http";
 import {
@@ -16,12 +16,31 @@ import {
 } from "./web-fetch";
 
 describe("sessionName", () => {
+  // sessionName reads PI_SUBAGENT; subagent shells run with it set, so the
+  // block clears it before each test and restores it after.
+  let prevSubagent: string | undefined;
+
+  beforeEach(() => {
+    prevSubagent = process.env.PI_SUBAGENT;
+    delete process.env.PI_SUBAGENT;
+  });
+
+  afterEach(() => {
+    if (prevSubagent === undefined) delete process.env.PI_SUBAGENT;
+    else process.env.PI_SUBAGENT = prevSubagent;
+  });
+
   test("derives from basename", () => {
-    expect(sessionName("/Users/avi/system")).toBe("pi-fetch-system");
+    expect(sessionName("/Users/foo/bar-project")).toBe("pi-fetch-bar-project");
   });
 
   test("handles nested paths", () => {
-    expect(sessionName("/Users/avi/dev/my-project")).toBe("pi-fetch-my-project");
+    expect(sessionName("/Users/foo/dev/baz-app")).toBe("pi-fetch-baz-app");
+  });
+
+  test("appends a per-process discriminator for subagents", () => {
+    process.env.PI_SUBAGENT = "1";
+    expect(sessionName("/Users/foo/bar-project")).toBe(`pi-fetch-bar-project-p${process.pid}`);
   });
 });
 

@@ -111,6 +111,11 @@ export default function (pi: ExtensionAPI) {
       .map((p) => p.name)
       .join("|");
 
+  // Subagent children fetch in their own browser session and get no
+  // agent-browser invitation (their read-only sandbox denies unix sockets);
+  // children are spawned with PI_SUBAGENT=1.
+  const isSubagent = process.env.PI_SUBAGENT === "1";
+
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
@@ -122,7 +127,11 @@ export default function (pi: ExtensionAPI) {
       "freshness/includeDomains narrow results (e.g. recent docs, a specific site). excludeDomains support varies by provider.",
       "extractCount fetches full page content for the top N results inline — useful when you'd otherwise web_fetch several of them. Not all providers support this.",
       "When search results reference a page that likely has the answer, use web_fetch to read the full page.",
-      "For complex browser interactions beyond simple page reading, use bash with agent-browser CLI directly (e.g., agent-browser open <url> && agent-browser snapshot -i).",
+      ...(isSubagent
+        ? []
+        : [
+            "For complex browser interactions beyond simple page reading, use bash with agent-browser CLI directly (e.g., agent-browser open <url> && agent-browser snapshot -i).",
+          ]),
     ],
     parameters: Type.Object({
       query: Type.String({ description: "Search query" }),
@@ -201,12 +210,19 @@ export default function (pi: ExtensionAPI) {
     name: "web_fetch",
     label: "Web Fetch",
     description:
-      "Fetch a web page and extract its text content. Uses a headless browser that handles JavaScript rendering and bot detection. Use after web_search to read a specific result page. For complex interactions (clicking, filling forms, screenshots), use bash with `agent-browser` CLI directly.\n\n" +
-      `Structured feeds (fetched as clean markdown, no page chrome):\n${feedHints()}`,
+      "Fetch a web page and extract its text content. Uses a headless browser that handles JavaScript rendering and bot detection. Use after web_search to read a specific result page." +
+      (isSubagent
+        ? ""
+        : " For complex interactions (clicking, filling forms, screenshots), use bash with `agent-browser` CLI directly.") +
+      `\n\nStructured feeds (fetched as clean markdown, no page chrome):\n${feedHints()}`,
     promptSnippet: "web_fetch: Fetch a web page and extract its text content. Parameters: url (string, required)",
     promptGuidelines: [
       "Use web_fetch to read pages found via web_search. It handles JS-rendered pages and bot detection.",
-      "For interactive browser tasks (login, click, fill, screenshot), use `agent-browser` CLI via bash instead. The browser session is shared -- after web_fetch opens a page, you can run `agent-browser --session <session> snapshot -i` to inspect interactive elements, then click/fill/type as needed.",
+      ...(isSubagent
+        ? []
+        : [
+            "For interactive browser tasks (login, click, fill, screenshot), use `agent-browser` CLI via bash instead. The browser session is shared -- after web_fetch opens a page, you can run `agent-browser --session <session> snapshot -i` to inspect interactive elements, then click/fill/type as needed.",
+          ]),
     ],
     parameters: Type.Object({
       url: Type.String({ description: "URL to fetch" }),
@@ -226,7 +242,9 @@ export default function (pi: ExtensionAPI) {
         const redirectNote = result.url !== params.url ? `[Redirected to: ${result.url}]\n\n` : "";
         const spill = truncated ? await spillNote(result.url, result.content) : "";
         const session = sessionName(ctx.cwd);
-        const sessionNote = `\n\n[Browser session: ${session} -- use \`agent-browser --session ${session}\` for further interaction]`;
+        const sessionNote = isSubagent
+          ? ""
+          : `\n\n[Browser session: ${session} -- use \`agent-browser --session ${session}\` for further interaction]`;
 
         return {
           content: [{ type: "text", text: `${titleLine}${redirectNote}${text}${spill}${sessionNote}` }],
