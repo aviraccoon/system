@@ -152,6 +152,14 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 **Instead**: State the current behavior on its own terms. If the earlier behavior explains why the code is shaped the way it is, it belongs in the commit message, the journal, or a design note.
 
+### Mechanism Shorthand
+
+**Patterns to avoid**: *the stubs land*, *once the flag flips*, *after the frames land*, *once the wiring is in* — the session's own words for a condition, in place of the condition itself.
+
+**The problem**: Status posts, cards, TODOs, and handoffs written mid-task absorb the project's working vocabulary — tool-specific words and half-coined shorthand. Readers outside the working session cannot parse them, and weeks later the author often can't either.
+
+**Instead**: State the checkable condition, not the mechanism. "Blocked until the components render with fake data", not "blocked on the stubs"; "once the designs exist to compare against", not "once the frames land". Test: can a reader tell when the condition is met without asking what a word means?
+
 ### Collaborative Language Leakage
 
 **Words to avoid**: *I hope this helps*, *Of course!*, *Certainly!*, *You're absolutely right!*, *Would you like...*, *is there anything else*, *let me know*, *here is a...*
