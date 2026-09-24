@@ -306,7 +306,9 @@ describe("renderResult", () => {
       agentSource: "user",
       task: "find TODOs",
       exitCode: 0,
-      messages: [],
+      // A success carries an answer: the failed predicate treats a stop with
+      // no final text as failure, so tests default to an answered run.
+      messages: [{ role: "assistant", content: [{ type: "text", text: "findings" }] }] as SingleResult["messages"],
       stderr: "",
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
       ...overrides,

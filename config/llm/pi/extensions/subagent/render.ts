@@ -17,6 +17,7 @@ import {
   formatUsageStats,
   getDisplayTurns,
   getFinalOutput,
+  resultFailed,
   type SingleResult,
   type SubagentDetails,
   type UsageStats,
@@ -76,12 +77,6 @@ export function renderCall(args: Record<string, unknown>, theme: Theme, context:
 }
 
 // ── helpers ──
-
-function isErrorResult(r: SingleResult): boolean {
-  return (
-    r.exitCode !== 0 || r.stopReason === "error" || r.stopReason === "aborted" || r.stopReason === "max_turns_exceeded"
-  );
-}
 
 function styleThinking(theme: Theme, text: string): string {
   return theme.italic(theme.fg("thinkingText", text));
@@ -177,7 +172,7 @@ function usageLine(r: SingleResult, theme: Theme): string {
 }
 
 function statusHeader(r: SingleResult, theme: Theme): string {
-  const isError = isErrorResult(r);
+  const isError = resultFailed(r);
   const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
   let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
   if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
@@ -226,9 +221,9 @@ function renderSingle(r: SingleResult, expanded: boolean, theme: Theme): string 
     parts.push(theme.fg("muted", "─── Task ───"), theme.fg("dim", r.task));
     const body = renderTurnsBody(turns, r.userInputs ?? [], theme) || theme.fg("muted", "(no output)");
     parts.push(body);
-    if (isErrorResult(r) && r.errorMessage) parts.push(theme.fg("error", `Error: ${r.errorMessage}`));
+    if (resultFailed(r) && r.errorMessage) parts.push(theme.fg("error", `Error: ${r.errorMessage}`));
   } else {
-    if (isErrorResult(r) && r.errorMessage) {
+    if (resultFailed(r) && r.errorMessage) {
       parts.push(theme.fg("error", `Error: ${r.errorMessage}`));
     } else {
       const { text, skipped } = renderRecentTurns(turns, r.userInputs ?? [], theme, COLLAPSED_TURNS);
@@ -311,7 +306,7 @@ function aggregateUsage(results: SingleResult[]): UsageStats {
 
 function renderChain(details: SubagentDetails, expanded: boolean, theme: Theme): string {
   const results = details.results;
-  const successCount = results.filter((r) => r.exitCode === 0).length;
+  const successCount = results.filter((r) => !resultFailed(r)).length;
   const icon = successCount === results.length ? theme.fg("success", "✓") : theme.fg("error", "✗");
   const parts: string[] = [
     `${icon} ${theme.fg("toolTitle", theme.bold("chain "))}${theme.fg("accent", `${successCount}/${results.length} steps`)}`,
@@ -319,7 +314,7 @@ function renderChain(details: SubagentDetails, expanded: boolean, theme: Theme):
 
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
-    const rIcon = r.exitCode === 0 ? theme.fg("success", "✓") : theme.fg("error", "✗");
+    const rIcon = resultFailed(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
     const lines: string[] = [`${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`];
     if (expanded) lines.push(theme.fg("dim", `Task: ${r.task}`));
     // Chain deliverable is the last step's output — show its preview when collapsed.
@@ -338,8 +333,9 @@ function renderChain(details: SubagentDetails, expanded: boolean, theme: Theme):
 function renderParallel(details: SubagentDetails, expanded: boolean, theme: Theme): string {
   const results = details.results;
   const running = results.filter((r) => r.exitCode === -1).length;
-  const successCount = results.filter((r) => r.exitCode === 0).length;
-  const failCount = results.filter((r) => r.exitCode > 0).length;
+  const done = results.filter((r) => r.exitCode !== -1);
+  const failCount = done.filter(resultFailed).length;
+  const successCount = done.length - failCount;
   const isRunning = running > 0;
   const icon = isRunning
     ? theme.fg("warning", "⏳")
@@ -355,9 +351,9 @@ function renderParallel(details: SubagentDetails, expanded: boolean, theme: Them
     const rIcon =
       r.exitCode === -1
         ? theme.fg("warning", "⏳")
-        : r.exitCode === 0
-          ? theme.fg("success", "✓")
-          : theme.fg("error", "✗");
+        : resultFailed(r)
+          ? theme.fg("error", "✗")
+          : theme.fg("success", "✓");
     const lines: string[] = [`${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`];
     if (expanded) lines.push(theme.fg("dim", `Task: ${r.task}`));
     lines.push(renderResultSummary(r, theme, { expanded, running: isRunning, showFinalOutput: false }));

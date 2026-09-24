@@ -5,7 +5,9 @@
  * produced a single message — is worth another attempt: the next model in the
  * role chain is a different upstream, and even the same model can be routed to
  * a different provider on retry. A user abort or a turn-budget stop is not:
- * the run did what it was told.
+ * the run did what it was told. A natural stop with no usable answer is the
+ * sneaky third case: the model reasons, narrates a plan, and stops without
+ * acting or answering — the run claims success while carrying nothing.
  */
 
 export const MAX_ATTEMPTS = 3;
@@ -17,11 +19,15 @@ export interface AttemptOutcome {
   stopReason?: string;
   exitCode: number;
   messageCount: number;
+  /** The stopping message carries no answer text — the run carried nothing out. */
+  outputEmpty?: boolean;
 }
 
 export function isRetryable(outcome: AttemptOutcome): boolean {
   if (outcome.stopReason === "error") return true;
   if (outcome.stopReason === "aborted" || outcome.stopReason === "max_turns_exceeded") return false;
+  // A natural stop with no answer is a model failure, not a completed run.
+  if (outcome.outputEmpty) return true;
   // Non-zero exit with nothing produced means the child never came up
   // (spawn failure, crash before the first message).
   return outcome.exitCode !== 0 && outcome.messageCount === 0;

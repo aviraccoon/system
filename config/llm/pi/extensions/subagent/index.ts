@@ -32,6 +32,7 @@ import {
   getAvailableRoles,
   getFinalOutput,
   getRolePrimaryModel,
+  resultFailed,
   runSingleAgent,
   type SingleResult,
   type SubagentDetails,
@@ -245,11 +246,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
             unregisterHandle(handleId);
             results.push(result);
 
-            const isError =
-              result.exitCode !== 0 ||
-              result.stopReason === "error" ||
-              result.stopReason === "aborted" ||
-              result.stopReason === "max_turns_exceeded";
+            const isError = resultFailed(result);
             if (isError) {
               const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
               const attemptsNote = (result.attempts ?? 1) > 1 ? ` (after ${result.attempts} attempts)` : "";
@@ -356,10 +353,10 @@ export default function subagentExtension(pi: ExtensionAPI) {
             },
           );
 
-          const successCount = results.filter((r) => r.exitCode === 0).length;
+          const successCount = results.filter((r) => !resultFailed(r)).length;
           const summaries = results.map((r) => {
             const output = getFinalOutput(r.messages);
-            return `[${r.agent}] ${r.exitCode === 0 ? "completed" : "failed"}:\n${output || "(no output)"}`;
+            return `[${r.agent}] ${resultFailed(r) ? "failed" : "completed"}:\n${output || "(no output)"}`;
           });
           return {
             content: [
@@ -397,11 +394,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
             },
           );
           unregisterHandle(handleId);
-          const isError =
-            result.exitCode !== 0 ||
-            result.stopReason === "error" ||
-            result.stopReason === "aborted" ||
-            result.stopReason === "max_turns_exceeded";
+          const isError = resultFailed(result);
           if (isError) {
             const errorMsg = result.errorMessage || result.stderr || getFinalOutput(result.messages) || "(no output)";
             const attemptsNote = (result.attempts ?? 1) > 1 ? ` (after ${result.attempts} attempts)` : "";

@@ -15,7 +15,7 @@ import { createDebugLogger } from "../shared/debug";
 import { loadConfig, resolveRole, resolveRoleChain } from "../shared/model-roles";
 import { BASH_SANDBOX_ENV } from "../shared/sandbox";
 import type { AgentConfig } from "./agents";
-import { attemptPlan, isRetryable, MAX_ATTEMPTS } from "./retry";
+import { type AttemptOutcome, attemptPlan, isRetryable, MAX_ATTEMPTS } from "./retry";
 import { type NudgeState, steerNudge, taskWithBudget } from "./turn-budget";
 
 const SUBAGENT_SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-sessions");
@@ -128,6 +128,39 @@ export function getFinalOutput(messages: Message[]): string {
     }
   }
   return "";
+}
+
+/**
+ * Text of the last assistant message's own parts. Unlike getFinalOutput this
+ * does not walk back to earlier messages: narration from a previous turn is
+ * not the answer to the run that stopped without one.
+ */
+export function finalAnswerText(messages: Message[]): string {
+  const msg = messages[messages.length - 1];
+  if (msg?.role !== "assistant") return "";
+  return msg.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("");
+}
+
+/** A run that did not deliver an answer: spawn failure, error, abort, turn
+ * budget, or a stop whose final message carries no text. */
+export function resultFailed(r: SingleResult): boolean {
+  if (r.exitCode === -1) return false; // still running
+  if (r.exitCode !== 0) return true;
+  if (r.stopReason === "error" || r.stopReason === "aborted" || r.stopReason === "max_turns_exceeded") return true;
+  return finalAnswerText(r.messages).trim() === "";
+}
+
+/** Attempt outcome for the retry policy. */
+export function attemptOutcome(result: SingleResult): AttemptOutcome {
+  return {
+    stopReason: result.stopReason,
+    exitCode: result.exitCode,
+    messageCount: result.messages.length,
+    outputEmpty: finalAnswerText(result.messages).trim() === "",
+  };
 }
 
 export type DisplayItem =
@@ -349,9 +382,7 @@ export async function runSingleAgent(
   for (const [i, model] of plan.entries()) {
     result = await runAttempt(model);
     result.attempts = i + 1;
-    if (
-      !isRetryable({ stopReason: result.stopReason, exitCode: result.exitCode, messageCount: result.messages.length })
-    ) {
+    if (!isRetryable(attemptOutcome(result))) {
       break;
     }
     debugLog("retry", 0, {

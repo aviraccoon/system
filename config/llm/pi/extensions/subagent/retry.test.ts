@@ -19,6 +19,21 @@ describe("isRetryable", () => {
     expect(isRetryable({ stopReason: "stop", exitCode: 0, messageCount: 5 })).toBe(false);
     expect(isRetryable({ stopReason: "stop", exitCode: 1, messageCount: 2 })).toBe(false);
   });
+
+  test("retries a natural stop that produced no answer", () => {
+    expect(isRetryable({ stopReason: "stop", exitCode: 0, messageCount: 2, outputEmpty: true })).toBe(true);
+  });
+
+  test("an empty-output abort or turn-budget stop stays final", () => {
+    expect(isRetryable({ stopReason: "aborted", exitCode: 1, messageCount: 2, outputEmpty: true })).toBe(false);
+    expect(isRetryable({ stopReason: "max_turns_exceeded", exitCode: 0, messageCount: 30, outputEmpty: true })).toBe(
+      false,
+    );
+  });
+
+  test("outcomes without the flag keep the old verdict", () => {
+    expect(isRetryable({ stopReason: "stop", exitCode: 0, messageCount: 3, outputEmpty: undefined })).toBe(false);
+  });
 });
 
 describe("attemptPlan", () => {
