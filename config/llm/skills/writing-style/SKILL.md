@@ -272,6 +272,18 @@ Sometimes three items are genuinely what you need. The problem is padding lists 
 
 ---
 
+## Who Is It For
+
+Judge the text against its audience, not against a generic notion of good prose. Name the audience before flagging or cutting anything.
+
+- **A README, guide or reference serves someone using the thing.** They came to do a task. Design justification, history, and internal mechanism are not theirs to carry — cut them, or keep one line where a limitation would otherwise look like a bug.
+- **A decision document — design note, journal entry, review, post — serves a reader who has to agree or disagree.** The reasoning is the content; trimming it to "just the facts" destroys the text. Restating the mechanism is still padding; the argument is not.
+- **Agent-facing text — AGENTS.md, code comments, prompts — serves a reader who acts without you.** It needs the mechanism and the failure it prevents, compressed. Narrative and motivation are waste; specifics are not.
+- Mixed documents exist (a README with an architecture section). Judge section by section, not the file as one voice.
+- If you cannot tell, state which audience you assumed.
+
+---
+
 ## What Good AI Writing Looks Like
 
 The common thread across all good writing: **specificity over vagueness**.

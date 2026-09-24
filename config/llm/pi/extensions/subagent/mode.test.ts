@@ -20,7 +20,7 @@ describe("resolveMode", () => {
   });
 
   test("a top-level cwd applies to an explicit single call", () => {
-    expect(resolveMode({ agent: "editor", task: "trim", cwd: "/tmp" }).singleCwd).toBe("/tmp");
+    expect(resolveMode({ agent: "reviewer", task: "trim", cwd: "/tmp" }).singleCwd).toBe("/tmp");
   });
 
   test("two items stay parallel", () => {
@@ -36,12 +36,12 @@ describe("resolveMode", () => {
 
   test("an explicit single call does not collapse the batch (invalid combination)", () => {
     const { parallelTasks, singleAgent } = resolveMode({
-      agent: "editor",
+      agent: "reviewer",
       task: "trim",
       tasks: [{ agent: "a", task: "x" }],
     });
     expect(parallelTasks).toEqual([{ agent: "a", task: "x" }]);
-    expect(singleAgent).toBe("editor");
+    expect(singleAgent).toBe("reviewer");
   });
 
   test("a chain does not collapse the batch (invalid combination)", () => {
