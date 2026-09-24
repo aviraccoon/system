@@ -1,6 +1,6 @@
 ---
 name: writing-style
-description: Write prose that reads as human-written rather than LLM-generated. Use when writing or reviewing docs, posts, READMEs, commit messages, or handouts.
+description: Load and read this file in full BEFORE writing or reviewing any prose another person will read — docs, posts, READMEs, commit messages, code comments, forum replies, handouts. Mandatory first step, not a reference to consult after feedback.
 ---
 
 # LLM Writing Guide
