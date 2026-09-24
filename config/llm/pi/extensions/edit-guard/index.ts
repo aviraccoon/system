@@ -22,6 +22,8 @@ import { Type } from "typebox";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { loadJournalConfig } from "../shared/journal-context";
 import { isShellTool } from "../shared/shell-tools";
+import { journalDirFor, journalIsCurrent } from "./journal-fresh";
+import { isGatedProsePath, mentionsWritingStyleSkill, proseGateReason } from "./prose-gate";
 import {
   type CompiledPathRule,
   compileRules,
@@ -102,8 +104,19 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   // Paths whose write-to-existing block was already issued once this session;
   // a re-issued write to the same path proceeds (genuine full rewrite).
   const rewriteAllowed = new Set<string>();
+  // Prose gate: whether the writing-style skill has been read this session.
+  let writingStyleLoaded = false;
+  // Journal gate: dispatches need a journal write newer than this timestamp.
+  // Set at session start; every real user message re-arms it.
+  let journalThreshold = 0;
+  // Set when a journal-gate block is issued; re-issuing the dispatch proceeds
+  // (covers the user explicitly skipping journaling for the session).
+  let journalGateOpened = false;
 
   function startSession(ctx: ExtensionContext) {
+    writingStyleLoaded = false;
+    journalThreshold = Date.now();
+    journalGateOpened = false;
     const { config, loadErrors } = loadRuleConfig();
     for (const error of loadErrors) ctx.ui.notify(error, "warning");
     const result = compileRules(config);
@@ -117,9 +130,44 @@ export default function editGuardExtension(pi: ExtensionAPI) {
     startSession(ctx);
   });
 
+  // ── Journal gate: real user messages re-arm the freshness requirement ──
+
+  pi.on("input", async (event) => {
+    if (event.source === "extension") return;
+    journalThreshold = Date.now();
+  });
+
   // ── Write-guard: write is for new files, not wholesale replacement ──
 
   pi.on("tool_call", async (event, ctx) => {
+    // ── Journal gate: the project journal must be current before a dispatch ──
+    if (event.toolName === "subagent" && !journalGateOpened) {
+      const journalDir = journalDirFor(journalNotesDir(), ctx.cwd);
+      if (!journalIsCurrent(journalDir, journalThreshold)) {
+        journalGateOpened = true;
+        return {
+          block: true,
+          reason:
+            `edit-guard: dispatch blocked — the project journal (${journalDir}) has no write newer than ` +
+            "the last user message. Update the journal to the current state first — findings, decisions, " +
+            "unfinished work so far — then re-dispatch; a subagent must never read a stale record. " +
+            "If the user explicitly said to skip journaling, re-issue the identical dispatch.",
+        };
+      }
+    }
+
+    // ── Prose gate: writing-style skill must be loaded before prose edits ──
+    if (!writingStyleLoaded && EDIT_LIKE_TOOLS.includes(event.toolName)) {
+      const roots = rootsFor(ctx);
+      const gated = collectToolPaths(event.toolName, event.input as Record<string, unknown>)
+        .map((raw) => resolveInputPath(raw, ctx.cwd))
+        .find((abs) => isGatedProsePath(abs, roots));
+      if (gated) {
+        const rel = relative(ctx.cwd, gated);
+        return { block: true, reason: proseGateReason(rel.length > 0 ? rel : gated) };
+      }
+    }
+
     if (event.toolName !== "write") return;
     const input = event.input as { path?: unknown };
     if (typeof input.path !== "string") return;
@@ -152,6 +200,12 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   pi.on("tool_result", async (event, ctx) => {
     if (event.isError) return;
 
+    // Prose-gate flag: a successful read of the skill file counts as loaded.
+    if (event.toolName === "read") {
+      const p = (event.input as { path?: unknown }).path;
+      if (typeof p === "string" && mentionsWritingStyleSkill(p)) writingStyleLoaded = true;
+    }
+
     const roots: RuntimeRoots = {
       cwd: ctx.cwd,
       notesDir: journalNotesDir(),
@@ -165,6 +219,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
       const input = event.input as { command?: unknown };
       const command = typeof input.command === "string" ? input.command : "";
       if (command.length === 0) return;
+      if (mentionsWritingStyleSkill(command)) writingStyleLoaded = true;
       const blocks: string[] = [];
       const labels: string[] = [];
       for (const rule of compiled) {
@@ -247,7 +302,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
 
   function todoTarget(args: string, ctx: ExtensionContext): string {
     const target = args.trim();
-    return target ? resolveInputPath(target, ctx.cwd) : join(journalNotesDir(), basename(ctx.cwd), "TODO.md");
+    return target ? resolveInputPath(target, ctx.cwd) : join(journalDirFor(journalNotesDir(), ctx.cwd), "TODO.md");
   }
 
   function sweepReport(result: { blocks: string[] }): string {

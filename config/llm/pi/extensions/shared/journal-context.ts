@@ -30,7 +30,7 @@ const FILENAME_LIST_CURRENT = 30;
 const FILENAME_LIST_OTHER = 5;
 
 /** Only files matching this pattern are treated as journal entries. */
-const JOURNAL_FILE_RE = /^\d{4}-\d{2}-\d{2}-\d{2}-.+\.md$/;
+export const JOURNAL_FILE_RE = /^\d{4}-\d{2}-\d{2}-\d{2}-.+\.md$/;
 
 function isJournalFile(filename: string): boolean {
   return JOURNAL_FILE_RE.test(filename);

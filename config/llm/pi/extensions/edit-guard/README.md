@@ -16,6 +16,17 @@ losing to the model's habits is mirrored here as line patterns.
 - `write` to an existing non-empty file is blocked once with a pointer to
   `patch` (write is for new files). Re-issuing the same write proceeds, so
   genuine full rewrites stay possible.
+- **Prose gate:** an edit to a text-first prose file (`.md`, `.mdx`, `.txt`,
+  `.rst`, `.adoc`, `.org`, `.tex`, `.typ`) outside the journal and session dirs
+  is blocked until the writing-style skill has been loaded this session. Prompt
+  steering missed twice; the read is now enforced. Not covered: files written
+  through `bash`, code comments, subagents (the default child set excludes
+  edit-guard).
+- **Journal gate:** a `subagent` dispatch is blocked until the project journal
+  has a top-level entry written after the last real user message; the dir
+  resolves through a `.worktrees` ancestor to the main project. Any fresh
+  entry write clears it. Re-issuing the dispatch proceeds, for sessions where
+  the user said to skip journaling.
 - Silent when clean — no "0 violations" noise.
 - Files the edit did not change are never scanned. A file written through
   `bash` is never read — only the command line is checked.

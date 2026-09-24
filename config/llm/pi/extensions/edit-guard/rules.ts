@@ -219,7 +219,7 @@ export interface CompileResult {
   errors: string[];
 }
 
-function under(dir: string, abs: string): boolean {
+export function under(dir: string, abs: string): boolean {
   return abs === dir || abs.startsWith(`${dir}/`);
 }
 
