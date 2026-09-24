@@ -114,10 +114,18 @@ describe("TODO.md rule", () => {
     expect(scanContent("the rest would be done in the next pass", rules)).toHaveLength(0);
     expect(scanContent("the first part is done, the rest remains", rules)).toHaveLength(0);
     expect(scanContent("waiting on the new version to unblock this", rules)).toHaveLength(0);
+    expect(scanContent("- parser notes — donegal sprint log", rules)).toHaveLength(0);
   });
 
   test("flags check glyphs and done tags", () => {
     expect(scanContent("✅ finished\n☑ also\n✓ third\n(done) last\n[Done] tagged", rules)).toHaveLength(5);
+  });
+
+  test("flags the trailing em-dash done annotation (reworded done item)", () => {
+    expect(labelsOf(scanContent("- spike the parser — done.", rules))).toEqual([["done annotation (— done)"]]);
+    expect(labelsOf(scanContent("- review pass — done, merged upstream", rules))).toEqual([
+      ["done annotation (— done)"],
+    ]);
   });
 
   test("flags commit hashes narrating landed work", () => {

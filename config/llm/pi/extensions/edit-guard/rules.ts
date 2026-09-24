@@ -65,6 +65,7 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
       { label: "strikethrough", regex: "~~" },
       { label: "checkmark", regex: "[\u2705\u2611\u2713]" },
       { label: "done tag", regex: "\\[(?:done|completed)\\]|\\((?:done|completed)\\)", flags: "i" },
+      { label: "done annotation (— done)", regex: "—\\s*done\\b" },
       {
         // Commit hashes narrate landed work ("shipped in cafebabe"). All-digit
         // hashes are real (~3% of 7-char hashes are digits-only), so digits are
