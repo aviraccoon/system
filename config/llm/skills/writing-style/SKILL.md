@@ -129,6 +129,8 @@ These patterns are bad regardless of context.
 
 **The problem**: Using 20 words where 8 would do. Restating things multiple ways. Adding unnecessary detail.
 
+**Existence comes before wording**: Is this needed — does it bring anything the reader lacks? If not, delete it, don't tighten it. What survives often still carries padding — cut until only the important stuff remains.
+
 **Example**:
 > "The process of migrating the database involved a series of steps that were undertaken over a period of time in order to ensure that the transition was completed successfully."
 
