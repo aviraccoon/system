@@ -18,10 +18,11 @@ losing to the model's habits is mirrored here as line patterns.
   genuine full rewrites stay possible.
 - **Prose gate:** an edit to a text-first prose file (`.md`, `.mdx`, `.txt`,
   `.rst`, `.adoc`, `.org`, `.tex`, `.typ`) outside the journal and session dirs
-  is blocked until the writing-style skill has been loaded this session. Prompt
-  steering missed twice; the read is now enforced. Not covered: files written
-  through `bash`, code comments, subagents (the default child set excludes
-  edit-guard).
+  is blocked until the writing-style skill has been loaded this session.
+  Forks, resumes, and /reload look for the skill in the inherited history,
+  so a lineage that already read it does not block. A blocked `write` stashes its
+  content — re-issue with the guide's corrections, or `cp` the stash only if it
+  is fine as-is. Not covered: `bash`-written files, code comments, subagents.
 - **Journal gate:** a `subagent` dispatch is blocked until the project journal
   has a top-level entry written after the last real user message; the dir
   resolves through a `.worktrees` ancestor to the main project. Any fresh

@@ -14,8 +14,8 @@
  * (wrap-up use: finds stale rule violations no live edit would re-trigger).
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -23,7 +23,8 @@ import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { loadJournalConfig } from "../shared/journal-context";
 import { isShellTool } from "../shared/shell-tools";
 import { journalDirFor, journalIsCurrent } from "./journal-fresh";
-import { isGatedProsePath, mentionsWritingStyleSkill, proseGateReason } from "./prose-gate";
+import { proseGateBlock, rewriteBlock } from "./blocks";
+import { isGatedProsePath, mentionsWritingStyleSkill, skillLoadedThisSession } from "./prose-gate";
 import {
   type CompiledPathRule,
   compileRules,
@@ -34,6 +35,7 @@ import {
   validateRuleConfig,
 } from "./rules";
 import { formatViolations, scanContent } from "./scan";
+import { stashWriteContent } from "./stash";
 
 function configDir(): string {
   return process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
@@ -106,6 +108,9 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   const rewriteAllowed = new Set<string>();
   // Prose gate: whether the writing-style skill has been read this session.
   let writingStyleLoaded = false;
+  // Prose gate: history scan runs once per session, on the first gated edit
+  // after a flag miss (fork/resume/reload reset the flag but inherit history).
+  let proseGateHistoryScanned = false;
   // Journal gate: dispatches need a journal write newer than this timestamp.
   // Set at session start; every real user message re-arms it.
   let journalThreshold = 0;
@@ -115,6 +120,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
 
   function startSession(ctx: ExtensionContext) {
     writingStyleLoaded = false;
+    proseGateHistoryScanned = false;
     journalThreshold = Date.now();
     journalGateOpened = false;
     const { config, loadErrors } = loadRuleConfig();
@@ -163,8 +169,19 @@ export default function editGuardExtension(pi: ExtensionAPI) {
         .map((raw) => resolveInputPath(raw, ctx.cwd))
         .find((abs) => isGatedProsePath(abs, roots));
       if (gated) {
-        const rel = relative(ctx.cwd, gated);
-        return { block: true, reason: proseGateReason(rel.length > 0 ? rel : gated) };
+        if (!proseGateHistoryScanned) {
+          proseGateHistoryScanned = true;
+          writingStyleLoaded = skillLoadedThisSession(ctx.sessionManager);
+        }
+        if (!writingStyleLoaded) {
+          const rel = relative(ctx.cwd, gated);
+          const writeContent = (event.input as { content?: unknown }).content;
+          const stashPath =
+            event.toolName === "write" && typeof writeContent === "string"
+              ? stashWriteContent(rel, writeContent)
+              : undefined;
+          return { block: true, reason: proseGateBlock(rel.length > 0 ? rel : gated, gated, stashPath) };
+        }
       }
     }
 
@@ -178,20 +195,11 @@ export default function editGuardExtension(pi: ExtensionAPI) {
     const rel = relative(ctx.cwd, abs);
     rewriteAllowed.add(abs);
     // Stash the blocked content so the agent can copy it instead of retyping.
-    let stashNote = "";
     const content = (event.input as { content?: unknown }).content;
-    if (typeof content === "string") {
-      const stashPath = join(tmpdir(), `edit-guard-write-${rel.replace(/[^a-zA-Z0-9._-]/g, "-")}-${Date.now()}`);
-      writeFileSync(stashPath, content);
-      stashNote = ` The blocked content is saved at ${stashPath} (NOT applied). Either cp ${stashPath} <target> (preferred — cheaper than re-emitting long content), or simply re-issue the write (any content) — the path is now allowed for the rest of the session.`;
-    }
+    const stashPath = typeof content === "string" ? stashWriteContent(rel, content) : undefined;
     return {
       block: true,
-      reason:
-        `edit-guard: ${rel} already exists (${lines} lines). Don't use write to replace existing files — ` +
-        "use patch for targeted changes (write is for genuinely new files only). " +
-        "If a full rewrite is genuinely intended, re-issue the write (any content) — the path is then allowed for the rest of the session." +
-        stashNote,
+      reason: rewriteBlock(rel, lines, abs, stashPath),
     };
   });
 

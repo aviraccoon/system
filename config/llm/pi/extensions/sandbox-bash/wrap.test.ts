@@ -2,8 +2,9 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { BASH_SANDBOX_ENV, isConfinedBash, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
+import { shellQuote } from "../shared/shell-quote";
 import { CONFINED_TOOL, READONLY_TOOL } from "../shared/shell-tools";
-import { formatReadonlyCall, profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode, shellQuote } from "./wrap";
+import { formatReadonlyCall, profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode } from "./wrap";
 
 const PATHS = { home: "/Users/foo" };
 const PROFILE = join(import.meta.dir, "profile.sbpl");

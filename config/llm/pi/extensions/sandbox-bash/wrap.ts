@@ -6,6 +6,7 @@
  */
 
 import { SANDBOX_COMMAND_ENV } from "../shared/sandbox";
+import { shellQuote } from "../shared/shell-quote";
 import { READONLY_TOOL } from "../shared/shell-tools";
 
 /** Absolute path — the extension only activates where this exists. */
@@ -90,11 +91,6 @@ export interface ActivationInput {
 export function sandboxMode(input: ActivationInput): SandboxMode {
   if (input.platform !== "darwin" || !input.hasSandboxExec || !input.hasProfile) return null;
   return input.subagent === "1" ? "override" : "extra";
-}
-
-/** Single-quote for the shell string the wrapper is built in. */
-export function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 /**
