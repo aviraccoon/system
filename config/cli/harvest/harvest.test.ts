@@ -603,6 +603,142 @@ describe("cmdLog", () => {
   });
 });
 
+describe("cmdEdit", () => {
+  const me = [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }];
+  // Two client projects sharing one task set by id, one internal project with
+  // its own tasks — the two shapes the carryover rule separates.
+  const shared = [
+    { id: 100, name: "Development" },
+    { id: 101, name: "Analysis" },
+  ];
+  const base = {
+    me,
+    projectAssignments: [
+      [
+        assignment({ id: 10, name: "Website Phase 1" }, "Acme", shared),
+        assignment({ id: 11, name: "Website Phase 2" }, "Acme", shared),
+        assignment({ id: 12, name: "Internal" }, null, [
+          { id: 200, name: "Development Budget" },
+          { id: 201, name: "Research" },
+        ]),
+      ],
+    ],
+  };
+
+  test("moves between projects sharing a task id without --task", async () => {
+    const moved = timeEntry({ id: 55, project: { id: 11, name: "Website Phase 2" } });
+    const bodies: unknown[] = [];
+    const api = apiStub({
+      ...base,
+      timeEntry: [Promise.resolve(timeEntry({ id: 55, hours: 1.5, task: { id: 100, name: "Development" } }))],
+      request: [
+        (_m: unknown, _p: unknown, body: unknown) => {
+          bodies.push(body);
+          return Promise.resolve(moved);
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdEdit(deps, "55", { project: "phase 2" });
+    expect(bodies[0]).toEqual({ project_id: 11, task_id: 100 });
+    expect(r.text).toContain("moved Acme / Website Phase 2 / Development");
+    expect(r.text).toContain("id 55");
+  });
+
+  test("explicit --task by id wins on a disjoint project", async () => {
+    const moved = timeEntry({ id: 55, project: { id: 12, name: "Internal" }, client: null });
+    const bodies: unknown[] = [];
+    const api = apiStub({
+      ...base,
+      timeEntry: [Promise.resolve(timeEntry({ id: 55, hours: 1.5 }))],
+      request: [
+        (_m: unknown, _p: unknown, body: unknown) => {
+          bodies.push(body);
+          return Promise.resolve(moved);
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    await cmdEdit(deps, "55", { project: "internal", task: "201" });
+    expect(bodies[0]).toEqual({ project_id: 12, task_id: 201 });
+  });
+
+  test("no carryover on a disjoint project fails with the task list", async () => {
+    const api = apiStub({
+      ...base,
+      timeEntry: [Promise.resolve(timeEntry({ id: 55, hours: 1.5 }))],
+    });
+    const { deps } = makeDeps(api);
+    expect(cmdEdit(deps, "55", { project: "internal" })).rejects.toThrow(
+      /task "Development" is not on Internal and no --task given[\s\S]*Development Budget/,
+    );
+  });
+
+  test("task-only move resolves against the entry's current project", async () => {
+    const moved = timeEntry({ id: 55, task: { id: 101, name: "Analysis" } });
+    const bodies: unknown[] = [];
+    const api = apiStub({
+      ...base,
+      timeEntry: [Promise.resolve(timeEntry({ id: 55, hours: 1.5 }))],
+      request: [
+        (_m: unknown, _p: unknown, body: unknown) => {
+          bodies.push(body);
+          return Promise.resolve(moved);
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    await cmdEdit(deps, "55", { task: "analysis" });
+    expect(bodies[0]).toEqual({ task_id: 101 });
+  });
+
+  test("single-task target autopicks without --task", async () => {
+    const moved = timeEntry({ id: 55, project: { id: 13, name: "Solo" } });
+    const bodies: unknown[] = [];
+    const api = apiStub({
+      ...base,
+      projectAssignments: [
+        [
+          assignment({ id: 10, name: "Website Phase 1" }, "Acme", shared),
+          assignment({ id: 13, name: "Solo" }, null, [{ id: 300, name: "Only Task" }]),
+        ],
+      ],
+      timeEntry: [Promise.resolve(timeEntry({ id: 55, hours: 1.5 }))],
+      request: [
+        (_m: unknown, _p: unknown, body: unknown) => {
+          bodies.push(body);
+          return Promise.resolve(moved);
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    await cmdEdit(deps, "55", { project: "solo" });
+    expect(bodies[0]).toEqual({ project_id: 13, task_id: 300 });
+  });
+
+  test("hours-only edit keeps the edited verb and skips the GET", async () => {
+    const bodies: unknown[] = [];
+    const api = apiStub({
+      ...base,
+      request: [
+        (_m: unknown, _p: unknown, body: unknown) => {
+          bodies.push(body);
+          return Promise.resolve(timeEntry({ id: 55, hours: 2 }));
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdEdit(deps, "55", { hours: "2" });
+    expect(bodies[0]).toEqual({ hours: 2 });
+    expect(r.text).toContain("edited Acme / Website / Development");
+  });
+
+  test("nothing to edit lists all fields", async () => {
+    const { deps } = makeDeps(apiStub(base));
+    expect(cmdEdit(deps, "55", {})).rejects.toThrow(/nothing to edit.*--project.*--task/);
+  });
+});
+
 describe("requireNoteLinks", () => {
   const base = {
     me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],

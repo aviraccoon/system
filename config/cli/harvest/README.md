@@ -36,7 +36,7 @@ Harvest wants a `User-Agent` with app name and contact. The default works; a rea
 | `harvest start acme dev --offset 25m` | start, crediting time already spent |
 | `harvest stop` | stop the running timer |
 | `harvest log 1:30 acme dev --date 2026-09-14` | log past time; hours: `1.5`, `1:30`, `90m` |
-| `harvest edit <id> [--hours H] [-n text] [--date D]` | edit an entry |
+| `harvest edit <id> [--hours H] [-n text] [--date D] [--project P] [--task T]` | edit an entry; `--project`/`--task` move it |
 | `harvest delete <id> [--force]` | delete; prompts on a TTY, agents use `--force` |
 | `harvest today` | today's entries and total |
 | `harvest week` | ISO week, per-day and per-project totals |
@@ -54,6 +54,8 @@ Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space eq
 `--json` prints structured output. Money appears in status/today/week/month when a rate is known; `--conceal` hides amounts (screen-sharing, pasted output) in both text and JSON (strips amount/rate fields).
 
 Entry lists (status, today, week) lead each line with the entry id, so `edit`/`delete` need no `--json` detour.
+
+`edit --project` moves an entry to another project (the project resolves like `log`: alias, id, or fuzzy name; an alias's stored task is not used here). Without `--task`, the entry's task carries over when the target project has that task assigned (Harvest task ids are account-global, so sibling projects often share a task set), or the target's only task is used; otherwise the command fails listing the target's tasks — pass `--task` with a name or id.
 
 `harvest audit [YYYY-MM | --days N | --from D --to D]` scans a date range (default: current month, one range mode at a time) for data-quality flags: notes missing entirely, notes with no link, zero-hour entries, whole-hour durations (a sign of guessed time), and entries that repeat another entry's date/project/task/hours/notes. Running entries are exempt from the duration checks. A locked entry (its timesheet was submitted) is tagged only when it also has a flag: a clean locked entry needs no action, a flagged one needs the timesheet reopened. It only reports; fix with `harvest edit <id>`. `--json` returns the flagged entries with their issue tags and the resolved `range`.
 

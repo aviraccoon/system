@@ -6,7 +6,7 @@ Time tracking: the `harvest` CLI.
 - `harvest start <alias> [-n note] [--offset 25m]` — stops any running timer first
 - `harvest stop` — stopping the timer auto-creates an entry carrying the start note; never `harvest log` on top of a stopped timer — `harvest edit <id>` that entry with the sized hours, final note and links
 - `harvest log <hours> <alias> [-n note] [--date YYYY-MM-DD]` — hours: `1.5` | `1:30` | `90m`
-- `harvest edit <id> [--hours H] [-n note] [--date D]`
+- `harvest edit <id> [--hours H] [-n note] [--date D] [--project P] [--task T]` — fix hours, note, date, or move to another project/task
 - `harvest delete <id> [--force]` — confirms on a TTY, `--force` skips
 - `harvest audit [YYYY-MM]` — month scan: missing/URL-less notes, whole-hour durations
 - `harvest projects` · `harvest tasks <project>` · `harvest alias list`

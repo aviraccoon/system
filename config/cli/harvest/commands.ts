@@ -374,10 +374,40 @@ export async function cmdLog(
   };
 }
 
+/**
+ * Project/task target for an edit move. Project: resolveProjectRef (alias
+ * wins, id or fuzzy name). Task: an explicit --task wins; otherwise the
+ * entry's task when the target project has it assigned (task ids are
+ * account-global, so projects sharing a task set carry it over); otherwise
+ * the project's single assigned task; otherwise fail — task sets differ
+ * across projects, so guessing is not safe.
+ */
+async function resolveEditTarget(
+  deps: Deps,
+  entry: TimeEntry,
+  opts: { project?: string; task?: string },
+): Promise<{ projectId: number; taskId: number }> {
+  const ref =
+    opts.project !== undefined
+      ? await resolveProjectRef(deps, opts.project)
+      : { id: entry.project.id, name: entry.project.name };
+  const tasks = await ensureTasks(deps, ref.id);
+  if (opts.task !== undefined) {
+    const hit = matchOne(opts.task, tasks);
+    if (hit.kind === "none") fail(`no task matching "${opts.task}" on ${ref.name}. Tasks:\n${formatCandidates(tasks)}`);
+    if (hit.kind === "ambiguous")
+      fail(`ambiguous task "${opts.task}" on ${ref.name}:\n${formatCandidates(hit.candidates)}`);
+    return { projectId: ref.id, taskId: hit.item.id };
+  }
+  if (tasks.some((t) => t.id === entry.task.id)) return { projectId: ref.id, taskId: entry.task.id };
+  if (tasks.length === 1 && tasks[0]) return { projectId: ref.id, taskId: tasks[0].id };
+  fail(`task "${entry.task.name}" is not on ${ref.name} and no --task given. Tasks:\n${formatCandidates(tasks)}`);
+}
+
 export async function cmdEdit(
   deps: Deps,
   entryId: string,
-  opts: { hours?: string; notes?: string; date?: string },
+  opts: { hours?: string; notes?: string; date?: string; project?: string; task?: string },
 ): Promise<CmdResult> {
   const id = Number(entryId);
   if (!Number.isInteger(id) || id <= 0) fail(`bad entry id "${entryId}"`);
@@ -389,10 +419,17 @@ export async function cmdEdit(
   }
   if (opts.notes !== undefined) body.notes = opts.notes;
   if (opts.date !== undefined) body.spent_date = opts.date;
-  if (Object.keys(body).length === 0) fail("nothing to edit (use --hours, --note, or --date)");
+  if (opts.project !== undefined || opts.task !== undefined) {
+    const current = await deps.getApi().timeEntry(id);
+    const target = await resolveEditTarget(deps, current, opts);
+    if (opts.project !== undefined) body.project_id = target.projectId;
+    body.task_id = target.taskId;
+  }
+  if (Object.keys(body).length === 0) fail("nothing to edit (use --hours, --note, --date, --project, or --task)");
   const entry = await deps.getApi().request<TimeEntry>("PATCH", `/time_entries/${id}`, body);
+  const verb = body.project_id !== undefined || body.task_id !== undefined ? "moved" : "edited";
   const lines = withNotes(
-    `edited ${entryLabel(entry)} (${entry.spent_date}, id ${entry.id}) → ${formatHours(entry.hours)}`,
+    `${verb} ${entryLabel(entry)} (${entry.spent_date}, id ${entry.id}) → ${formatHours(entry.hours)}`,
     entry.notes,
     "",
   );

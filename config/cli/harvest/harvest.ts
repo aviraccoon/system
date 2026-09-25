@@ -36,7 +36,8 @@ commands:
   start <project> [<task>]    start a timer (stops the running one; --offset 25m credits prior time)
   stop                        stop the running timer
   log <hours> <project> [<task>] [--date D]   log past time (1.5, 1:30, 90m)
-  edit <entry-id> [--hours H] [-n text] [--date D]   edit an entry
+  edit <entry-id> [--hours H] [-n text] [--date D] [--project P] [--task T]
+                              edit an entry; --project/--task move it
   today                       today's entries and total
   week                        this ISO week, per-day and per-project totals
   month [YYYY-MM]             monthly overview, per-project hours and money
@@ -56,6 +57,8 @@ flags:
   --to <yyyy-mm-dd>           audit range end (with --from)
   --days <n>                  audit: last n days including today
   --hours <hours>             hours for edit
+  --project <query>           with edit: project to move the entry to
+  --task <query>              with edit: task on the target (or current) project
   --offset <duration>         with start: time already spent (25m, 1:30, 1h30m)
   -f, --force                 with delete: skip the confirm prompt
   --group-by <dim>            group today/week/month by project|task|note
@@ -81,6 +84,8 @@ interface Cli {
   to?: string;
   days?: string;
   hours?: string;
+  project?: string;
+  task?: string;
   offset?: string;
   remove: boolean;
   force: boolean;
@@ -103,6 +108,8 @@ export function parseCli(argv: string[]): Cli {
       to: { type: "string" },
       days: { type: "string" },
       hours: { type: "string" },
+      project: { type: "string" },
+      task: { type: "string" },
       offset: { type: "string" },
       remove: { type: "boolean", short: "r" },
       force: { type: "boolean", short: "f" },
@@ -134,6 +141,8 @@ export function parseCli(argv: string[]): Cli {
     to,
     days: values.days,
     hours: values.hours,
+    project: values.project,
+    task: values.task,
     offset: values.offset,
     remove: values.remove === true,
     force: values.force === true,
@@ -232,7 +241,13 @@ async function run(argv: string[]): Promise<number> {
     case "edit": {
       const err = arity("edit", p, 1, 1);
       if (err) return failArg(err);
-      result = await cmdEdit(deps, p[0] ?? "", { hours: cli.hours, notes: cli.note, date: cli.date });
+      result = await cmdEdit(deps, p[0] ?? "", {
+        hours: cli.hours,
+        notes: cli.note,
+        date: cli.date,
+        project: cli.project,
+        task: cli.task,
+      });
       break;
     }
     case "today": {
