@@ -4,7 +4,7 @@ Time tracking: the `harvest` CLI.
 - Run `harvest --help` before any command not listed here, and take the name from its output rather than guessing.
 - `harvest status` — running timer + today's total
 - `harvest start <alias> [-n note] [--offset 25m]` — stops any running timer first
-- `harvest stop`
+- `harvest stop` — stopping the timer auto-creates an entry carrying the start note; never `harvest log` on top of a stopped timer — `harvest edit <id>` that entry with the sized hours, final note and links
 - `harvest log <hours> <alias> [-n note] [--date YYYY-MM-DD]` — hours: `1.5` | `1:30` | `90m`
 - `harvest edit <id> [--hours H] [-n note] [--date D]`
 - `harvest delete <id> [--force]` — confirms on a TTY, `--force` skips
