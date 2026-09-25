@@ -25,7 +25,7 @@ These patterns are bad regardless of context.
 
 ### Importance Inflation
 
-**Words to avoid**: *stands/serves as*, *is a testament/reminder*, *plays a vital/significant/crucial/pivotal role*, *underscores/highlights its importance*, *impactful*, *reflects broader*, *symbolizing its ongoing/enduring/lasting impact*, *key turning point*, *indelible mark*, *deeply rooted*, *profound heritage*, *revolutionary*, *tapestry* (abstract)
+**Words to avoid**: *stands/serves as*, *is a testament/reminder*, *plays a vital/significant/crucial/pivotal role*, *underscores/highlights its importance*, *impactful*, *reflects broader*, *symbolizing its ongoing/enduring/lasting impact*, *key turning point*, *indelible mark*, *deeply rooted*, *profound heritage*, *revolutionary*, *tapestry* (abstract), *load-bearing* (figurative)
 
 **The problem**: Asserting significance rather than demonstrating it. Even mundane details get wrapped in importance language.
 
@@ -129,7 +129,7 @@ These patterns are bad regardless of context.
 
 **The problem**: Using 20 words where 8 would do. Restating things multiple ways. Adding unnecessary detail.
 
-**Existence comes before wording**: Is this needed — does it bring anything the reader lacks? If not, delete it, don't tighten it. What survives often still carries padding — cut until only the important stuff remains.
+**Existence comes before wording**: Is this needed — does it bring anything the reader lacks? If not, delete it, don't tighten it. What survives often still carries padding — cut until only the important stuff remains. The rule scales to whole documents: keep a README or guide short, and never overexplain.
 
 **Example**:
 > "The process of migrating the database involved a series of steps that were undertaken over a period of time in order to ensure that the transition was completed successfully."
@@ -137,6 +137,12 @@ These patterns are bad regardless of context.
 **Instead**: "The database migration took three weeks."
 
 Brevity is not rudeness. Concise writing respects the reader's time.
+
+### Re-Explaining What the Document Already Shows
+
+**The problem**: Prose that re-walks the document's table, re-transcribes a tool's `--help` output, or repeats one fact across sections. The copies drift until they contradict each other.
+
+**Instead**: One fact, one home. A table (or the tool's own help) is the command reference; prose carries only what the table cannot — runtime gotchas and non-obvious defaults. A useless detail is not improved by moving it; delete it.
 
 ### Commit-Message Status Prose
 
