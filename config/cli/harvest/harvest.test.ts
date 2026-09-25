@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createClient, HarvestApiError, type HarvestClient, type TimeEntry } from "./api";
 import {
+  aliasList,
   aliasRemove,
   aliasSet,
   auditIssues,
@@ -158,6 +159,7 @@ const items: Candidate[] = [
   { id: 1, name: "Acme Website", code: "AW", client: "Acme Corp" },
   { id: 2, name: "Acme Redesign", code: "AR", client: "Acme Corp" },
   { id: 3, name: "Internal Admin", code: null, client: null },
+  { id: 4, name: "998", code: null, client: null },
 ];
 const acme = items[0] as Candidate;
 const redesign = items[1] as Candidate;
@@ -184,7 +186,14 @@ describe("matchOne", () => {
     const r = matchOne("acme", items);
     if (r.kind !== "ambiguous") throw new Error(`expected ambiguous, got ${r.kind}`);
     expect(r.candidates).toHaveLength(2);
-    expect(formatCandidates(r.candidates)).toContain("Acme Website (AW)");
+    expect(formatCandidates(r.candidates)).toContain("  1  Acme Website (AW)");
+  });
+
+  test("numeric query matches by id only, no name fallback", () => {
+    expect(matchOne("2", items)).toEqual({ kind: "match", item: redesign });
+    // id 99 is absent; the name tier would start-with-match "998", so this
+    // none proves numeric queries never fall back to name matching.
+    expect(matchOne("99", items).kind).toBe("none");
   });
 
   test("separator-insensitive", () => {
@@ -665,6 +674,14 @@ describe("alias commands", () => {
     expect(removed.text).toBe("removed alias web");
     expect(() => aliasRemove(deps, "web")).toThrow('no alias "web"');
   });
+
+  test("list shows the stored ids", () => {
+    const cfg: HarvestConfig = {
+      aliases: { web: { projectId: 10, projectName: "Website", taskId: 20, taskName: "Development" } },
+    };
+    const { deps } = makeDeps(apiStub({}), cfg);
+    expect(aliasList(deps).text).toBe("  web → 10  Website / 20  Development");
+  });
 });
 
 describe("cmdTasks", () => {
@@ -684,6 +701,19 @@ describe("cmdTasks", () => {
     const json = r.json as { project: { id: number; name: string; code: string | null } };
     expect(json.project.id).toBe(10);
     expect(json.project.code).toBe("WEB");
+  });
+  test("numeric project arg matches by id", async () => {
+    const api = apiStub({
+      me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
+      projectAssignments: [
+        [assignment({ id: 10, name: "Website", code: "WEB" }, "Acme", [{ id: 20, name: "Development" }])],
+      ],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdTasks(deps, "10");
+    expect(r.text).toContain("20  Development");
+    const json = r.json as { project: { id: number } };
+    expect(json.project.id).toBe(10);
   });
 });
 

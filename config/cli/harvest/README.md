@@ -49,7 +49,7 @@ Harvest wants a `User-Agent` with app name and contact. The default works; a rea
 | `harvest alias -r acme` | remove an alias |
 | `harvest whoami` | auth check: user, timer mode, cache state |
 
-Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space equivalent; matches name, code, or client). Ambiguous matches list the candidates. An alias without a task defers the task choice to each start/log; with one task assigned, it's picked automatically.
+Project and task arguments are fuzzy-matched (case-insensitive, `-`/`_`/space equivalent; matches name, code, or client); a numeric argument matches by id instead. Ambiguous matches list the candidates with ids, so the next command can take an id directly. An alias without a task defers the task choice to each start/log; with one task assigned, it's picked automatically.
 
 `--json` prints structured output. Money appears in status/today/week/month when a rate is known; `--conceal` hides amounts (screen-sharing, pasted output) in both text and JSON (strips amount/rate fields).
 

@@ -757,7 +757,7 @@ export function aliasList(deps: Deps): CmdResult {
   const lines = names.map((n) => {
     const a = deps.cfg.aliases[n];
     if (!a) return `  ${n}`;
-    return `  ${n} → ${a.projectName}${a.taskName ? ` / ${a.taskName}` : ""}`;
+    return `  ${n} → ${a.projectId}  ${a.projectName}${a.taskName ? ` / ${a.taskId}  ${a.taskName}` : ""}`;
   });
   return { text: lines.join("\n"), json: { aliases: deps.cfg.aliases } };
 }

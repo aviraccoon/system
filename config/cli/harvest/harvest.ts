@@ -64,8 +64,9 @@ flags:
   --conceal                   hide money amounts (status/today/week/month)
   -h, --help                  this help
 
-no command = status. Project/task args are fuzzy-matched; set aliases for
-the common cases (harvest alias acme "Acme Website" Development).
+no command = status. Project/task args are fuzzy-matched; a numeric arg
+matches by id. Set aliases for the common cases (harvest alias acme
+"Acme Website" Development).
 
 setup: create a Personal Access Token (not an OAuth2 app) at
 https://id.getharvest.com/developers (Developers section), then store it via
