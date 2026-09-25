@@ -45,7 +45,7 @@ commands:
                               ranges: --days 7, or --from D --to D
   projects                    list active projects (refreshes the cache)
   tasks <project>             list tasks assigned to a project
-  alias                       list aliases
+  alias [list|ls]             list aliases
   alias <name> <project> [<task>]   set an alias (resolved once, stored by id)
   alias -r <name>             remove an alias
   whoami                      auth check: user, timer mode, cache state
@@ -174,6 +174,11 @@ function parseGroupBy(value: string | undefined): "project" | "task" | "note" | 
   throw new Error(`--group-by must be project, task, or note (got "${value}")`);
 }
 
+/** True when the alias positionals mean the list form. Exported for tests. */
+export function isAliasListForm(p: string[]): boolean {
+  return p.length === 0 || (p.length === 1 && (p[0] === "list" || p[0] === "ls"));
+}
+
 function arity(cmd: string, positionals: string[], min: number, max: number): string | null {
   if (positionals.length < min) return `${cmd}: missing argument(s)`;
   if (positionals.length > max) return `${cmd}: too many arguments`;
@@ -300,12 +305,12 @@ async function run(argv: string[]): Promise<number> {
         const err = arity("alias -r", p, 1, 1);
         if (err) return failArg(err);
         result = aliasRemove(deps, p[0] ?? "");
-      } else if (p.length === 0) {
+      } else if (isAliasListForm(p)) {
         result = aliasList(deps);
       } else if (p.length === 2 || p.length === 3) {
         result = await aliasSet(deps, p[0] ?? "", p[1] ?? "", p[2]);
       } else {
-        return failArg("alias: expected 0, 2, or 3 arguments (list, set with task optional)");
+        return failArg("alias: expected nothing, list/ls, or <name> <project> [<task>]");
       }
       break;
     }

@@ -44,7 +44,7 @@ Harvest wants a `User-Agent` with app name and contact. The default works; a rea
 | `harvest audit [YYYY-MM \| --days N \| --from D --to D]` | scan a range for entries needing attention |
 | `harvest projects` | list projects + refresh cache |
 | `harvest tasks acme` | list tasks assigned to a project |
-| `harvest alias` | list aliases |
+| `harvest alias [list\|ls]` | list aliases |
 | `harvest alias acme "Acme Website" Development` | set an alias (task optional) |
 | `harvest alias -r acme` | remove an alias |
 | `harvest whoami` | auth check: user, timer mode, cache state |

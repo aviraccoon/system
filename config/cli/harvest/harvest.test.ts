@@ -34,7 +34,7 @@ import {
   spentDateClockToDate,
   weekDates,
 } from "./format";
-import { concealMoney, parseCli } from "./harvest";
+import { concealMoney, isAliasListForm, parseCli } from "./harvest";
 import { type Candidate, formatCandidates, matchOne } from "./resolve";
 
 // ---------- format ----------
@@ -1182,6 +1182,16 @@ describe("parseCli", () => {
     expect([r.from, r.to]).toEqual(["2026-08-01", "2026-08-15"]);
     expect(() => parseCli(["audit", "--from", "yesterday"])).toThrow(/yyyy-mm-dd/);
     expect(() => parseCli(["audit", "--to", "2026/08/15"])).toThrow(/yyyy-mm-dd/);
+  });
+});
+
+describe("isAliasListForm", () => {
+  test("bare, list, and ls are the list form", () => {
+    expect(isAliasListForm([])).toBe(true);
+    expect(isAliasListForm(["list"])).toBe(true);
+    expect(isAliasListForm(["ls"])).toBe(true);
+    expect(isAliasListForm(["foo"])).toBe(false);
+    expect(isAliasListForm(["list", "acme"])).toBe(false);
   });
 });
 
