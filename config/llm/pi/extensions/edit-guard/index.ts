@@ -22,8 +22,8 @@ import { Type } from "typebox";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { loadJournalConfig } from "../shared/journal-context";
 import { isShellTool } from "../shared/shell-tools";
-import { journalDirFor, journalIsCurrent } from "./journal-fresh";
 import { proseGateBlock, rewriteBlock } from "./blocks";
+import { dispatchRan, journalDirFor, journalIsCurrent, journalLinkBlockReason } from "./journal-fresh";
 import { isGatedProsePath, mentionsWritingStyleSkill, skillLoadedThisSession } from "./prose-gate";
 import {
   type CompiledPathRule,
@@ -112,10 +112,12 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   // after a flag miss (fork/resume/reload reset the flag but inherit history).
   let proseGateHistoryScanned = false;
   // Journal gate: dispatches need a journal write newer than this timestamp.
-  // Set at session start; every real user message re-arms it.
+  // Set at session start; re-armed by every real user message and every
+  // concluded dispatch where a child ran.
   let journalThreshold = 0;
-  // Set when a journal-gate block is issued; re-issuing the dispatch proceeds
-  // (covers the user explicitly skipping journaling for the session).
+  // Set when a journal-freshness block is issued; covers one re-issue after
+  // a freshness block (the user explicitly skipping journaling for that
+  // dispatch). Every cycle reset below re-opens the check.
   let journalGateOpened = false;
 
   function startSession(ctx: ExtensionContext) {
@@ -141,24 +143,33 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   pi.on("input", async (event) => {
     if (event.source === "extension") return;
     journalThreshold = Date.now();
+    journalGateOpened = false;
   });
 
   // ── Write-guard: write is for new files, not wholesale replacement ──
 
   pi.on("tool_call", async (event, ctx) => {
-    // ── Journal gate: the project journal must be current before a dispatch ──
-    if (event.toolName === "subagent" && !journalGateOpened) {
+    // ── Journal gate: the journal must be current, and the dispatch must link it ──
+    if (event.toolName === "subagent") {
       const journalDir = journalDirFor(journalNotesDir(), ctx.cwd);
-      if (!journalIsCurrent(journalDir, journalThreshold)) {
+      if (!journalGateOpened && !journalIsCurrent(journalDir, journalThreshold)) {
         journalGateOpened = true;
         return {
           block: true,
           reason:
             `edit-guard: dispatch blocked — the project journal (${journalDir}) has no write newer than ` +
-            "the last user message. Update the journal to the current state first — findings, decisions, " +
-            "unfinished work so far — then re-dispatch; a subagent must never read a stale record. " +
-            "If the user explicitly said to skip journaling, re-issue the identical dispatch.",
+            "the last user message or completed dispatch. Update the journal to the current state first — " +
+            "findings, decisions, unfinished work so far — then re-dispatch; a subagent must never read " +
+            "a stale record. If the user explicitly said to skip journaling, re-issue the identical dispatch.",
         };
+      }
+      const input = event.input as Record<string, unknown>;
+      // Stateless by design: the opt-out is the journal param, not a
+      // re-issue escape — a block-once flag would let a second concurrent
+      // dispatch in the same turn sail through after the first was blocked.
+      const linkBlock = journalLinkBlockReason(input, journalDir);
+      if (linkBlock) {
+        return { block: true, reason: linkBlock };
       }
     }
 
@@ -206,6 +217,20 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   // ── Post-edit scan: append violations to the tool result ──
 
   pi.on("tool_result", async (event, ctx) => {
+    // A dispatch that returns a result with children — success or failure —
+    // re-arms the freshness cycle like a user message: the next dispatch must
+    // follow a journal write recording that child's outcome. An aborted
+    // dispatch throws and returns no children: it does not re-arm; the abort
+    // ends the turn. Blocked attempts emit no tool_result at all (pi skips
+    // the handler), and no-op declines ran no child (details.results empty).
+    if (event.toolName === "subagent") {
+      if (dispatchRan(event.details)) {
+        journalThreshold = Date.now();
+        journalGateOpened = false;
+      }
+      return;
+    }
+
     if (event.isError) return;
 
     // Prose-gate flag: a successful read of the skill file counts as loaded.

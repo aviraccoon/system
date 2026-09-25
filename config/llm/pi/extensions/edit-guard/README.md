@@ -24,10 +24,12 @@ losing to the model's habits is mirrored here as line patterns.
   content — re-issue with the guide's corrections, or `cp` the stash only if it
   is fine as-is. Not covered: `bash`-written files, code comments, subagents.
 - **Journal gate:** a `subagent` dispatch is blocked until the project journal
-  has a top-level entry written after the last real user message; the dir
-  resolves through a `.worktrees` ancestor to the main project. Any fresh
-  entry write clears it. Re-issuing the dispatch proceeds, for sessions where
-  the user said to skip journaling.
+  has a top-level entry written after the last real user message or completed
+  dispatch, and until the dispatch links the journal path (or passes
+  `journal: "none"` on the subagent call, for children that deliberately run
+  without context). The dir resolves through a `.worktrees` ancestor to the
+  main project. Any fresh entry write clears freshness; a re-issued dispatch
+  also proceeds, for sessions where the user said to skip journaling.
 - Silent when clean — no "0 violations" noise.
 - Files the edit did not change are never scanned. A file written through
   `bash` is never read — only the command line is checked.

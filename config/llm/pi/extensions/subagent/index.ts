@@ -113,6 +113,12 @@ const SubagentParams = Type.Object({
       default: DEFAULT_MAX_TURNS,
     }),
   ),
+  journal: Type.Optional(
+    Type.Literal("none", {
+      description:
+        "Skip the journal-link requirement for this dispatch: the child runs without journal context (blind review, throwaway lookup). Default: the dispatch must link the project journal path.",
+    }),
+  ),
 });
 
 // ── Extension ──
@@ -132,6 +138,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
       label: "Subagent",
       description: buildToolDescription(allAgents),
       parameters: SubagentParams,
+      promptGuidelines: [
+        'Link the project journal (its path plus a read instruction) in every dispatch task so the child starts from the current record — edit-guard blocks unlinked dispatches. Pass journal: "none" only when the child deliberately runs without journal context (blind review, throwaway lookup).',
+      ],
 
       async execute(_toolCallId, params, signal, onUpdate, ctx) {
         if (!toolEnabled) {
