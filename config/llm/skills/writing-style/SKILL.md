@@ -144,13 +144,19 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 **Instead**: One fact, one home. A table (or the tool's own help) is the command reference; prose carries only what the table cannot — runtime gotchas and non-obvious defaults. A useless detail is not improved by moving it; delete it.
 
-### Commit-Message Status Prose
+### Status Prose
 
-**Patterns to avoid**: test pass counts, "verified by ...", "all checks pass", check transcripts, restating the diff.
+**Applies to**: every durable text — commit messages, code and doc comments, READMEs, design notes, handoffs. Status belongs in the moment (chat, a working update); text that is read later is not its place.
 
-**The problem**: The message reports the process instead of the change. The reader has the diff; what they lack is the decision behind it.
+**Patterns to avoid**:
+- Verification and test results: *verified by ...*, *confirmed by running X*, *all checks pass*, *53 tests green*, pass counts, check transcripts, CI status, coverage percentages.
+- Work narration: what was run and in what order, attempts and review rounds, elapsed time (*took three rounds*, *first try*, *after some back-and-forth*).
+- Change numbers and effect sizes: deltas (*p95 dropped from 420 ms to 180 ms*), counts of things added, fixed or removed (*now covers 26 more providers*, *coverage rose from 71% to 89%*, *7 findings fixed*), diff size (*+233/−118*).
+- Restating the diff, the boast built from any of it (*now handles every case*), and progress labels (*WIP*, *90% done*, *ready to merge*).
 
-**Instead**: State what the change does and the failure it prevents. A measurement belongs only when it justifies the decision — what was probed and what it showed. A check result that would not change what the reader does is noise.
+**The problem**: A later reader sees the current tree, never the version it replaced, so a delta is unreadable there; re-running the measurement moves the numbers, so an effect size goes stale; a verification claim or a test count cannot be checked from the file it sits in and has to be re-run anyway; and work narration describes a process the reader never needed. Correct at the spot, useless to every reader after it — and the boast asserts importance instead of showing it.
+
+**Instead**: State the rule or invariant the code encodes, or the failure the change prevents. The one measurement that belongs in the change's record — commit message, journal, design note — is the justification: what was probed before building and what it showed, a property of the problem rather than of the fix. Numbers the code's own value depends on (a calibration constant, the measured reference a scaling factor derives from) stay in the code. A test count is never a justification: the tests show what they cover.
 
 ### Change-Relative Prose
 
