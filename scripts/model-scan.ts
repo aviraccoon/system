@@ -2,7 +2,7 @@
  * Model scan: discover interesting LLM models, detect config drift, find local MLX options.
  *
  * Usage:
- *   bun run scripts/model-scan.ts              # discover interesting ZDR-eligible models
+ *   bun run scripts/model-scan.ts              # discover ZDR-eligible models, priced at ZDR endpoints
  *   bun run scripts/model-scan.ts --drift       # check current pi.nix config for drift
  *   bun run scripts/model-scan.ts --local       # find trending MLX models via oMLX
  *   bun run scripts/model-scan.ts --model <repo> # estimate specific HF repo (repeatable)
@@ -10,7 +10,9 @@
  *   bun run scripts/model-scan.ts --json        # machine-readable output
  *
  * Data sources:
- *   - OpenRouter /api/v1/models (public) + /api/v1/models/user (ZDR-filtered)
+ *   - OpenRouter /api/v1/models (public) + /api/v1/endpoints/zdr (global ZDR
+ *     endpoint catalog: per-provider pricing and live status) + /api/v1/models/user
+ *     (account-filtered ZDR model list)
  *   - Artificial Analysis /api/v2/data/llms/models (benchmarks, speed)
  *   - oMLX admin API (local MLX models, HF search)
  *   - ~/.pi/agent/models.json (current pi config)
@@ -77,13 +79,27 @@ interface PiModelsFile {
   providers: Record<string, PiProvider>;
 }
 
+/** One model's price signal for the default view, $/M. */
+interface ModelPricing {
+  /** Endpoints priced on both axes (listed rates with n=0 when the catalog is down). */
+  n: number;
+  inMed: number;
+  outMed: number;
+  crMed: number;
+  youMed: number;
+  youMin: number;
+  youMax: number;
+}
+
 interface JoinedModel {
   orId: string;
   name: string;
-  promptPrice: number;
-  completionPrice: number;
-  cacheReadPrice: number;
-  cacheWritePrice: number;
+  /** Listed model-level rates from /api/v1/models — not what ZDR routing charges. */
+  listedPrompt: number;
+  listedCompletion: number;
+  listedCacheRead: number;
+  listedCacheWrite: number;
+  pricing: ModelPricing;
   context: number;
   maxOutput: number;
   inputTypes: string[];
@@ -141,7 +157,8 @@ ${BOLD}OPTIONS${RESET}
   --help, -h    Show this help message
 
 ${BOLD}DATA SOURCES${RESET}
-  OpenRouter    /api/v1/models (public) + /api/v1/models/user (ZDR-filtered)
+  OpenRouter    /api/v1/models (public) + /api/v1/endpoints/zdr (global ZDR
+                endpoint pricing) + /api/v1/models/user (account ZDR filter)
   AA            /api/v2/data/llms/models (benchmarks, speed, pricing) — full
                 evaluation suite documented at https://artificialanalysis.ai/api-reference
   oMLX          Admin API at localhost:8124 (local MLX models, HF search)
@@ -420,6 +437,59 @@ function loadSessionWorkload(): SessionWorkload | null {
   return agg;
 }
 
+/** Your 30d pi workload priced at one endpoint's listed rates. Cache read
+ * falls back to the input rate when unlisted; cache write likewise. NaN when
+ * the endpoint's input price is dynamic. */
+function youMoOf(e: OREndpoint, wl: SessionWorkload | null, scale: number): number {
+  if (!wl) return NaN;
+  const pin = parsePrice(e.pricing.prompt);
+  const pout = parsePrice(e.pricing.completion);
+  if (!Number.isFinite(pin) || !Number.isFinite(pout)) return NaN;
+  const pcr = optPrice(e.pricing.input_cache_read);
+  const pcw = optPrice(e.pricing.input_cache_write);
+  const r = Number.isFinite(pcr) ? pcr : pin;
+  const w = Number.isFinite(pcw) ? pcw : pin;
+  return ((wl.input * pin + wl.cacheRead * r + wl.cacheWrite * w + wl.output * pout) / 1e6) * scale;
+}
+
+/** ZDR price stats for one model from its up endpoints: per-axis medians over
+ * the endpoints listing both rates (Cr/M over those that also list cache-read)
+ * plus the your-mix monthly range across endpoints. Endpoints are the ones
+ * listing both rates — free/dynamic rows drop out — so n, the your-mix range,
+ * and the admission check in the caller all describe one set. Null when
+ * nothing is priced. */
+function zdrPricing(eps: OREndpoint[], wl: SessionWorkload | null, scale: number): ModelPricing | null {
+  const priced = eps.filter(
+    (e) => Number.isFinite(parsePrice(e.pricing.prompt)) && Number.isFinite(parsePrice(e.pricing.completion)),
+  );
+  if (priced.length === 0) return null;
+  const yous = priced.map((e) => youMoOf(e, wl, scale)).filter((v) => Number.isFinite(v));
+  return {
+    n: priced.length,
+    inMed: priceStats(priced.map((e) => parsePrice(e.pricing.prompt)))?.med ?? NaN,
+    outMed: priceStats(priced.map((e) => parsePrice(e.pricing.completion)))?.med ?? NaN,
+    crMed: priceStats(priced.map((e) => optPrice(e.pricing.input_cache_read)))?.med ?? NaN,
+    youMed: median(yous),
+    youMin: yous.length > 0 ? Math.min(...yous) : NaN,
+    youMax: yous.length > 0 ? Math.max(...yous) : NaN,
+  };
+}
+
+/** Catalog-down fallback: model-level listed rates in the same shape, n=0
+ * marking "no endpoint data". Null when the listed price is free/dynamic. */
+function listedPricing(m: ORModel, wl: SessionWorkload | null, scale: number): ModelPricing | null {
+  const i = parsePrice(m.pricing.prompt);
+  const o = parsePrice(m.pricing.completion);
+  if (!Number.isFinite(i) || !Number.isFinite(o)) return null;
+  const r = optPrice(m.pricing.input_cache_read);
+  const w = optPrice(m.pricing.input_cache_write);
+  const cr = Number.isFinite(r) ? r : i;
+  const cw = Number.isFinite(w) ? w : i;
+  const youMed =
+    wl != null ? ((wl.input * i + wl.cacheRead * cr + wl.cacheWrite * cw + wl.output * o) / 1e6) * scale : NaN;
+  return { n: 0, inMed: i, outMed: o, crMed: r, youMed, youMin: NaN, youMax: NaN };
+}
+
 // ── Formatting helpers ──
 
 function fmtPrice(p: number): string {
@@ -427,6 +497,16 @@ function fmtPrice(p: number): string {
   if (p < 0.001) return `$${p.toFixed(4)}`;
   if (p < 1) return `$${p.toFixed(3)}`;
   return `$${p.toFixed(2)}`;
+}
+
+/** "min–max" for the You/mo range column, whole dollars once both bounds are
+ * past $1 (a flat range renders as the single value); a sub-dollar bound keeps
+ * every bound exact so the pair cannot render inverted. */
+function fmtPriceRange(lo: number, hi: number): string {
+  if (!Number.isFinite(lo) || !Number.isFinite(hi)) return `${DIM}--${RESET}`;
+  const a = lo >= 1 && hi >= 1 ? `$${Math.round(lo)}` : fmtPrice(lo);
+  const b = lo >= 1 && hi >= 1 ? `$${Math.round(hi)}` : fmtPrice(hi);
+  return a === b ? a : `${a}–${b}`;
 }
 
 function fmtScore(v: number | undefined | null, width = 5): string {
@@ -613,39 +693,38 @@ async function discover(): Promise<void> {
   const orKey = getOpenRouterKey();
   const aaKey = getAAKey();
 
-  const [orModels, zdrIds, aaModels] = await Promise.all([
+  const [orModels, zdrIds, zdrCatalog, aaModels] = await Promise.all([
     fetchORModels(),
     fetchORUserModels(orKey),
+    fetchZdrCatalog(orKey),
     fetchAAModels(aaKey),
   ]);
 
   const aaLookup = buildAALookup(aaModels);
 
-  // Your actual pi traffic (last 30d of session logs), used by the You/mo column.
+  // Your actual pi traffic (last 30d of session logs), drives You/mo + its range.
   const wl = loadSessionWorkload();
   const wlScale = wl ? WORKLOAD_WINDOW_MS / Math.max(wl.coverMs, 1000 * 60 * 60 * 24) : 1;
-  /** Whole workload served by model m at listed $/M. Cache-read/write fall
-   * back to the input rate when a provider lists no separate price. NaN when
-   * the model's own pricing is dynamic. */
-  const youMonth = (m: JoinedModel): number => {
-    if (!wl) return NaN;
-    const i = m.promptPrice;
-    const o = m.completionPrice;
-    const r = Number.isFinite(m.cacheReadPrice) ? m.cacheReadPrice : i;
-    const w = Number.isFinite(m.cacheWritePrice) ? m.cacheWritePrice : i;
-    if (![i, o, r, w].every(Number.isFinite)) return NaN;
-    return ((wl.input * i + wl.cacheRead * r + wl.cacheWrite * w + wl.output * o) / 1e6) * wlScale;
-  };
 
-  // Filter: ZDR-eligible, has pricing, reasonable size
+  // Eligibility needs both: /models/user is the account filter (privacy
+  // settings, provider prefs, guardrails), /endpoints/zdr is global. With the
+  // catalog down, eligible models keep their listed rates.
+  const catalogOk = zdrCatalog.tags.size > 0;
+  if (!catalogOk) {
+    process.stderr.write(
+      `${YELLOW}Warning: ZDR endpoint catalog unavailable — prices fall back to listed model rates.${RESET}\n`,
+    );
+  }
+
+  // Filter: ZDR-eligible for this account, priced, text input
   const candidates: JoinedModel[] = [];
 
   for (const m of orModels) {
-    if (!zdrIds.has(m.id)) continue;
-    const prompt = parseFloat(m.pricing.prompt);
-    const completion = parseFloat(m.pricing.completion);
-    if (prompt <= 0 || completion <= 0) continue; // skip free tier
     if (!m.architecture.input_modalities.includes("text")) continue;
+    if (!zdrIds.has(m.id)) continue;
+    const routable = (zdrCatalog.byModel.get(m.id) ?? []).filter((e) => e.status === 0);
+    const pricing = catalogOk ? zdrPricing(routable, wl, wlScale) : listedPricing(m, wl, wlScale);
+    if (!pricing) continue;
 
     const aa = joinORWithAA(m, aaLookup);
     const maxOut = m.top_provider.max_completion_tokens ?? 0;
@@ -653,10 +732,11 @@ async function discover(): Promise<void> {
     candidates.push({
       orId: m.id,
       name: m.name,
-      promptPrice: parsePrice(m.pricing.prompt),
-      completionPrice: parsePrice(m.pricing.completion),
-      cacheReadPrice: optPrice(m.pricing.input_cache_read),
-      cacheWritePrice: optPrice(m.pricing.input_cache_write),
+      listedPrompt: parsePrice(m.pricing.prompt),
+      listedCompletion: parsePrice(m.pricing.completion),
+      listedCacheRead: optPrice(m.pricing.input_cache_read),
+      listedCacheWrite: optPrice(m.pricing.input_cache_write),
+      pricing,
       context: m.context_length ?? 0,
       maxOutput: maxOut,
       inputTypes: m.architecture.input_modalities,
@@ -684,7 +764,7 @@ async function discover(): Promise<void> {
   // ── Print table ──
   // Every comparable column gets heat tiers at its own terciles.
   const valueScore = (m: JoinedModel): number => {
-    const b = blend31(m.promptPrice, m.completionPrice);
+    const b = blend31(m.pricing.inMed, m.pricing.outMed);
     return m.aaCoding != null && Number.isFinite(b) ? m.aaCoding / b : NaN;
   };
   const tiers = {
@@ -692,28 +772,29 @@ async function discover(): Promise<void> {
     intel: makeTiers(candidates.map((m) => m.aaIntel ?? NaN)),
     speed: makeTiers(candidates.map((m) => m.aaSpeed ?? NaN)),
     inPrice: makeTiers(
-      candidates.map((m) => m.promptPrice),
+      candidates.map((m) => m.pricing.inMed),
       true,
     ),
     outPrice: makeTiers(
-      candidates.map((m) => m.completionPrice),
+      candidates.map((m) => m.pricing.outMed),
       true,
     ),
     cacheR: makeTiers(
-      candidates.map((m) => m.cacheReadPrice),
+      candidates.map((m) => m.pricing.crMed),
       true,
     ),
     ctx: makeTiers(candidates.map((m) => m.context)),
     value: makeTiers(candidates.map(valueScore)),
-    you: makeTiers(candidates.map(youMonth), true),
+    you: makeTiers(
+      candidates.map((m) => m.pricing.youMed),
+      true,
+    ),
   };
 
   const tableRows = candidates
     .filter((m) => (m.aaCoding ?? 0) >= 15 || verbose)
     .map((m) => {
       const v = valueScore(m);
-      const blend = blend31(m.promptPrice, m.completionPrice);
-      const cf = youMonth(m);
       return {
         Model: m.orId,
         Coding:
@@ -726,17 +807,21 @@ async function discover(): Promise<void> {
             : `${DIM}${"".padStart(5)}${RESET}`,
         Speed:
           m.aaSpeed != null ? paint(m.aaSpeed.toFixed(0).padStart(4), tiers.speed(m.aaSpeed)) : `${DIM}   --${RESET}`,
-        "In/M": Number.isFinite(m.promptPrice)
-          ? paint(fmtPrice(m.promptPrice), tiers.inPrice(m.promptPrice))
+        "In/M": Number.isFinite(m.pricing.inMed)
+          ? paint(fmtPrice(m.pricing.inMed), tiers.inPrice(m.pricing.inMed))
           : "(dynamic)",
-        "Out/M": Number.isFinite(m.completionPrice)
-          ? paint(fmtPrice(m.completionPrice), tiers.outPrice(m.completionPrice))
+        "Out/M": Number.isFinite(m.pricing.outMed)
+          ? paint(fmtPrice(m.pricing.outMed), tiers.outPrice(m.pricing.outMed))
           : "(dynamic)",
-        "CacheR/M": Number.isFinite(m.cacheReadPrice)
-          ? paint(fmtPrice(m.cacheReadPrice), tiers.cacheR(m.cacheReadPrice))
+        "Cr/M": Number.isFinite(m.pricing.crMed)
+          ? paint(fmtPrice(m.pricing.crMed), tiers.cacheR(m.pricing.crMed))
           : `${DIM}--${RESET}`,
-        "You/mo": Number.isFinite(cf) ? paint(fmtPrice(cf), tiers.you(cf)) : "(dyn)",
-        Value: Number.isFinite(blend) && m.aaCoding != null ? paint(v.toFixed(0), tiers.value(v)) : `${DIM}--${RESET}`,
+        N: m.pricing.n > 0 ? String(m.pricing.n) : `${DIM}--${RESET}`,
+        "You/mo": Number.isFinite(m.pricing.youMed)
+          ? paint(fmtPrice(m.pricing.youMed), tiers.you(m.pricing.youMed))
+          : "(dyn)",
+        "You rng": m.pricing.n > 1 ? fmtPriceRange(m.pricing.youMin, m.pricing.youMax) : `${DIM}--${RESET}`,
+        Value: Number.isFinite(v) ? paint(v.toFixed(0), tiers.value(v)) : `${DIM}--${RESET}`,
         Ctx: paint(fmtCtx(m.context), tiers.ctx(m.context)),
         "I/O": fmtInput(m.inputTypes),
         Tools: `${m.hasTools ? `${GREEN}✓${RESET}` : `${DIM}✗${RESET}`}${m.hasReasoning ? ` ${CYAN}R${RESET}` : ""}`,
@@ -761,8 +846,11 @@ async function discover(): Promise<void> {
       );
     }
   }
+  const pricingNote = catalogOk
+    ? `medians over N priced ZDR endpoints · You rng = your mix's min–max $/mo`
+    : `ZDR endpoint catalog unavailable — listed model-level rates, which zdr=true may not reach`;
   console.log(
-    `\n${BOLD}ZDR-eligible models ranked by coding quality${RESET}  ${DIM}(${tableRows.length} models; CacheR = listed cache-read $/M)${RESET}`,
+    `\n${BOLD}ZDR-eligible models ranked by coding quality${RESET}  ${DIM}(${tableRows.length} models; ${pricingNote})${RESET}`,
   );
   console.log(
     Bun.inspect.table(tableRows, [
@@ -772,8 +860,10 @@ async function discover(): Promise<void> {
       "Speed",
       "In/M",
       "Out/M",
+      "Cr/M",
+      "N",
       "You/mo",
-      "CacheR/M",
+      "You rng",
       "Value",
       "Ctx",
       "I/O",
@@ -785,11 +875,11 @@ async function discover(): Promise<void> {
   console.log(`\n${BOLD}Highlights${RESET}`);
 
   // Best coding for cheap (< $1/M input)
-  const cheap = candidates.filter((m) => m.promptPrice < 1 && m.aaCoding != null);
+  const cheap = candidates.filter((m) => m.pricing.inMed < 1 && m.aaCoding != null);
   const bestCheap = cheap[0];
   if (bestCheap) {
     console.log(
-      `  Best cheap coding: ${CYAN}${bestCheap.orId}${RESET} (coding=${bestCheap.aaCoding}, ${fmtPrice(bestCheap.promptPrice)}/M in)`,
+      `  Best cheap coding: ${CYAN}${bestCheap.orId}${RESET} (coding=${bestCheap.aaCoding}, ${fmtPrice(bestCheap.pricing.inMed)}/M in)`,
     );
   }
 
@@ -814,7 +904,7 @@ async function discover(): Promise<void> {
 
   // Best value overall: coding index per blended 3:1 dollar.
   const valuedModels = candidates
-    .map((m) => ({ m, v: m.aaCoding != null ? m.aaCoding / blend31(m.promptPrice, m.completionPrice) : NaN }))
+    .map((m) => ({ m, v: m.aaCoding != null ? m.aaCoding / blend31(m.pricing.inMed, m.pricing.outMed) : NaN }))
     .filter((x) => Number.isFinite(x.v))
     .sort((a, b) => b.v - a.v);
   const bestValue = valuedModels[0];
@@ -827,13 +917,13 @@ async function discover(): Promise<void> {
   // Best value when cache reads dominate spend — long agentic sessions run
   // most prompt tokens through the cache (e.g. ~85% fleet-wide for V4 Flash).
   const cachedValued = candidates
-    .map((m) => ({ m, v: m.aaCoding != null && m.cacheReadPrice > 0 ? m.aaCoding / m.cacheReadPrice : NaN }))
+    .map((m) => ({ m, v: m.aaCoding != null && m.pricing.crMed > 0 ? m.aaCoding / m.pricing.crMed : NaN }))
     .filter((x) => Number.isFinite(x.v))
     .sort((a, b) => b.v - a.v);
   const bestCached = cachedValued[0];
   if (bestCached) {
     console.log(
-      `  Best mostly-cached value: ${CYAN}${bestCached.m.orId}${RESET} (${bestCached.v.toFixed(0)} coding pts per cache-read-$${bestCached.m.promptPrice > bestCached.m.cacheReadPrice * 100 ? `, cache read is ${(bestCached.m.promptPrice / bestCached.m.cacheReadPrice).toFixed(0)}x cheaper than fresh input` : ""})`,
+      `  Best mostly-cached value: ${CYAN}${bestCached.m.orId}${RESET} (${bestCached.v.toFixed(0)} coding pts per cache-read-$${bestCached.m.pricing.inMed > bestCached.m.pricing.crMed * 100 ? `, cache read is ${(bestCached.m.pricing.inMed / bestCached.m.pricing.crMed).toFixed(0)}x cheaper than fresh input` : ""})`,
     );
   }
 
@@ -850,7 +940,7 @@ async function discover(): Promise<void> {
       ? (codingSorted[Math.min(codingSorted.length - 1, Math.ceil(((codingSorted.length - 1) * 2) / 3))] ?? 0)
       : 0;
   const mixRanked = candidates
-    .map((m) => ({ m, c: youMonth(m) }))
+    .map((m) => ({ m, c: m.pricing.youMed }))
     .filter((x) => Number.isFinite(x.c))
     .sort((a, b) => a.c - b.c);
   const goodCheap = mixRanked.filter((x) => (x.m.aaCoding ?? 0) >= goodBar).slice(0, 3);
@@ -863,7 +953,7 @@ async function discover(): Promise<void> {
   const cheapestMix = mixRanked[0];
   if (cheapestMix) {
     console.log(
-      `  Cheapest overall for your mix: ${CYAN}${cheapestMix.m.orId}${RESET} (~${fmtPrice(cheapestMix.c)}/mo at listed rates)`,
+      `  Cheapest overall for your mix: ${CYAN}${cheapestMix.m.orId}${RESET} (~${fmtPrice(cheapestMix.c)}/mo)`,
     );
   }
 
@@ -992,7 +1082,13 @@ interface OREndpoint {
   uptime_last_1d: number | null;
 }
 
-type ZdrInfo = Awaited<ReturnType<typeof fetchZdrEndpointKeys>>;
+interface ZdrCatalog {
+  byModel: Map<string, OREndpoint[]>;
+  zdr: Set<string>; // model_id|tag
+  tags: Set<string>; // tag-only fallback
+}
+
+type ZdrInfo = ZdrCatalog;
 
 interface EndpointFetch {
   slug: string;
@@ -1114,14 +1210,47 @@ function effLines(eff: EffPricing | null): string[] {
   return lines;
 }
 
+/** Index the catalog for ZDR checks: (model_id, tag) pairs with a tag-only
+ * fallback, plus endpoints grouped by model. */
+function buildZdrCatalog(endpoints: OREndpoint[]): ZdrCatalog {
+  const zdr = new Set<string>();
+  const tags = new Set<string>();
+  const byModel = new Map<string, OREndpoint[]>();
+  for (const e of endpoints) {
+    if (e.model_id && e.tag) zdr.add(`${e.model_id}|${e.tag}`);
+    if (e.tag) tags.add(e.tag);
+    if (e.model_id) {
+      const list = byModel.get(e.model_id);
+      if (list) list.push(e);
+      else byModel.set(e.model_id, [e]);
+    }
+  }
+  return { byModel, zdr, tags };
+}
+
 // ZDR is provider-level: each endpoint's provider data policy decides whether
 // prompts are retained. /endpoints/zdr returns every endpoint that survives
-// ZDR enforcement; we index by (model_id, tag) with a tag-only fallback.
-async function fetchZdrEndpointKeys(key: string): Promise<{ zdr: Set<string>; tags: Set<string> }> {
-  const cached = readCache<{ pairs: string[]; tags: string[] }>("or-zdr-endpoints", ENDPOINT_CACHE_TTL);
-  if (cached) {
-    if (!modeQuiet) process.stderr.write(`${DIM}Using cached ZDR endpoint list${RESET}\n`);
-    return { zdr: new Set(cached.pairs), tags: new Set(cached.tags) };
+// ZDR enforcement, pricing and live status included — the default mode prices
+// from it, the endpoints mode takes its ZDR column from it.
+
+/** Catalog row shape: a non-null object with a tag and a prompt price. */
+function catalogRowOk(row: unknown): boolean {
+  const e = row as { pricing?: { prompt?: unknown }; tag?: unknown } | null | undefined;
+  return e != null && typeof e.pricing?.prompt === "string" && typeof e.tag === "string";
+}
+
+/** Non-empty array of well-formed catalog rows (cached or fetched). */
+function isZdrPayload(rows: unknown): rows is OREndpoint[] {
+  return Array.isArray(rows) && rows.length > 0 && rows.every(catalogRowOk);
+}
+
+async function fetchZdrCatalog(key: string): Promise<ZdrCatalog> {
+  const empty = (): ZdrCatalog => buildZdrCatalog([]);
+  const cached = readCache<{ endpoints?: OREndpoint[] }>("or-zdr-endpoints", ENDPOINT_CACHE_TTL);
+  const cachedEndpoints = cached?.endpoints;
+  if (isZdrPayload(cachedEndpoints)) {
+    if (!modeQuiet) process.stderr.write(`${DIM}Using cached ZDR endpoint catalog${RESET}\n`);
+    return buildZdrCatalog(cachedEndpoints);
   }
   if (!modeQuiet) process.stderr.write(`${DIM}Fetching ZDR-compliant endpoints...${RESET}\n`);
   let res: Response;
@@ -1130,37 +1259,31 @@ async function fetchZdrEndpointKeys(key: string): Promise<{ zdr: Set<string>; ta
       headers: { Authorization: `Bearer ${key}` },
     });
   } catch {
-    process.stderr.write(`${YELLOW}Warning: could not fetch /endpoints/zdr (network) — ZDR column omitted.${RESET}\n`);
-    return { zdr: new Set(), tags: new Set() };
+    process.stderr.write(`${YELLOW}Warning: could not fetch /endpoints/zdr (network) — ZDR data omitted.${RESET}\n`);
+    return empty();
   }
   if (!res.ok) {
     process.stderr.write(
-      `${YELLOW}Warning: /endpoints/zdr failed (HTTP ${res.status}) — requires auth; using provided key. ZDR column omitted.${RESET}\n`,
+      `${YELLOW}Warning: /endpoints/zdr failed (HTTP ${res.status}) — requires auth; using provided key. ZDR data omitted.${RESET}\n`,
     );
-    return { zdr: new Set(), tags: new Set() };
+    return empty();
   }
   let data: unknown;
   try {
     data = (await res.json()) as { data?: unknown };
   } catch {
-    process.stderr.write(`${YELLOW}Warning: /endpoints/zdr returned non-JSON — ZDR column omitted.${RESET}\n`);
-    return { zdr: new Set(), tags: new Set() };
+    process.stderr.write(`${YELLOW}Warning: /endpoints/zdr returned non-JSON — ZDR data omitted.${RESET}\n`);
+    return empty();
   }
-  const arr = (data as { data?: Array<{ model_id?: string; tag?: string }> }).data;
-  if (!Array.isArray(arr) || arr.length === 0) {
+  const arr = (data as { data?: unknown }).data;
+  if (!isZdrPayload(arr)) {
     process.stderr.write(
-      `${YELLOW}Warning: /endpoints/zdr returned an empty/odd payload — ZDR column omitted.${RESET}\n`,
+      `${YELLOW}Warning: /endpoints/zdr returned an unexpected payload — ZDR data omitted.${RESET}\n`,
     );
-    return { zdr: new Set(), tags: new Set() };
+    return empty();
   }
-  const pairs: string[] = [];
-  const tags: string[] = [];
-  for (const e of arr) {
-    if (e.model_id && e.tag) pairs.push(`${e.model_id}|${e.tag}`);
-    if (e.tag) tags.push(e.tag);
-  }
-  writeCache("or-zdr-endpoints", { pairs, tags });
-  return { zdr: new Set(pairs), tags: new Set(tags) };
+  writeCache("or-zdr-endpoints", { endpoints: arr });
+  return buildZdrCatalog(arr);
 }
 
 async function fetchModelEndpoints(slug: string, key: string): Promise<EndpointFetch> {
@@ -1286,28 +1409,6 @@ function rowCols(eps: OREndpoint[]): string[] {
   return cols;
 }
 
-// Set by endpoints(): your last-30d pi traffic for endpoint-priced You/mo.
-let workload: SessionWorkload | null = null;
-let workloadScale = 1;
-
-/** Your 30d pi workload priced at one endpoint's listed rates. Cache read
- * falls back to the input rate when unlisted; cache write likewise. NaN when
- * the endpoint's input price is dynamic. */
-function youMoOf(e: OREndpoint): number {
-  if (!workload) return NaN;
-  const pin = parsePrice(e.pricing.prompt);
-  const pout = parsePrice(e.pricing.completion);
-  if (!Number.isFinite(pin) || !Number.isFinite(pout)) return NaN;
-  const pcr = optPrice(e.pricing.input_cache_read);
-  const pcw = optPrice(e.pricing.input_cache_write);
-  const r = Number.isFinite(pcr) ? pcr : pin;
-  const w = Number.isFinite(pcw) ? pcw : pin;
-  return (
-    ((workload.input * pin + workload.cacheRead * r + workload.cacheWrite * w + workload.output * pout) / 1e6) *
-    workloadScale
-  );
-}
-
 function applyQuant(eps: OREndpoint[], slugForErr: string): OREndpoint[] {
   const q = parsed.values.quant.trim();
   const quantFilter = q ? q.split(",").map((s) => s.trim().toLowerCase()) : null;
@@ -1344,7 +1445,7 @@ interface EndpointTierSet {
 }
 
 /** Tercile heat for an endpoint rowset: cheaper/faster/longer-uptime = greener. */
-function endpointTiers(eps: OREndpoint[]): EndpointTierSet {
+function endpointTiers(eps: OREndpoint[], wl: SessionWorkload | null, scale: number): EndpointTierSet {
   return {
     inP: makeTiers(
       eps.map((e) => parsePrice(e.pricing.prompt)),
@@ -1359,7 +1460,7 @@ function endpointTiers(eps: OREndpoint[]): EndpointTierSet {
       true,
     ),
     youP: makeTiers(
-      eps.map((e) => youMoOf(e)),
+      eps.map((e) => youMoOf(e, wl, scale)),
       true,
     ),
     t50: makeTiers(eps.map((e) => e.throughput_last_30m?.p50 ?? NaN)),
@@ -1378,6 +1479,8 @@ function endpointRows(
   zdrInfo: ZdrInfo,
   modelShort: (e: OREndpoint) => string,
   tiers: EndpointTierSet,
+  wl: SessionWorkload | null,
+  scale: number,
 ): EndpointRow[] {
   const zdrKnown = zdrInfo.tags.size > 0;
   const isZdr = isZdrEndpoint(zdrInfo);
@@ -1392,7 +1495,7 @@ function endpointRows(
       const pout = parsePrice(e.pricing.completion);
       const pcr = optPrice(e.pricing.input_cache_read);
       const pcw = optPrice(e.pricing.input_cache_write);
-      const ymo = youMoOf(e);
+      const ymo = youMoOf(e, wl, scale);
       const t = e.throughput_last_30m;
       const l = e.latency_last_30m;
       const statusOk = e.status === 0;
@@ -1417,7 +1520,12 @@ function endpointRows(
     });
 }
 
-function routingHintLines(filtered: OREndpoint[], zdrInfo: ZdrInfo): string[] {
+function routingHintLines(
+  filtered: OREndpoint[],
+  zdrInfo: ZdrInfo,
+  wl: SessionWorkload | null,
+  scale: number,
+): string[] {
   const zdrKnown = zdrInfo.tags.size > 0;
   const isZdr = isZdrEndpoint(zdrInfo);
   const healthyBase = filtered.filter((e) => e.status === 0 && e.throughput_last_30m != null);
@@ -1448,10 +1556,10 @@ function routingHintLines(filtered: OREndpoint[], zdrInfo: ZdrInfo): string[] {
     );
   }
   const byMix = healthy
-    .map((e) => ({ e, c: youMoOf(e) }))
+    .map((e) => ({ e, c: youMoOf(e, wl, scale) }))
     .filter((x) => Number.isFinite(x.c))
     .sort((a, b) => a.c - b.c)[0];
-  if (byMix && workload) {
+  if (byMix && wl) {
     lines.push(
       `  Cheapest for your mix: ${CYAN}${byMix.e.provider_name}/${byMix.e.tag}${RESET} ~${fmtPrice(byMix.c)}/mo`,
     );
@@ -1482,10 +1590,10 @@ function shortModelName(id: string): string {
 
 async function endpoints(): Promise<void> {
   const slugs = [...new Set(modeEndpointSlugs)];
-  workload = loadSessionWorkload();
-  workloadScale = workload ? WORKLOAD_WINDOW_MS / Math.max(workload.coverMs, 86_400_000) : 1;
+  const wl = loadSessionWorkload();
+  const wlScale = wl ? WORKLOAD_WINDOW_MS / Math.max(wl.coverMs, 86_400_000) : 1;
   const key = getOpenRouterKey();
-  const zdrInfo = await fetchZdrEndpointKeys(key);
+  const zdrInfo = await fetchZdrCatalog(key);
 
   // canonical_slug + embedded AA benchmarks come from the public models list.
   const canonBySlug = new Map<string, string>();
@@ -1538,22 +1646,22 @@ async function endpoints(): Promise<void> {
     );
     console.log(
       Bun.inspect.table(
-        endpointRows(r.eps, zdrInfo, () => "", endpointTiers(r.eps)),
+        endpointRows(r.eps, zdrInfo, () => "", endpointTiers(r.eps, wl, wlScale), wl, wlScale),
         rowCols(r.eps).filter((c) => c !== "Model"),
       ),
     );
 
-    if (workload) {
+    if (wl) {
       const ym = r.eps
-        .map((e) => ({ e, c: youMoOf(e) }))
+        .map((e) => ({ e, c: youMoOf(e, wl, wlScale) }))
         .filter((x) => Number.isFinite(x.c))
         .sort((a, b) => a.c - b.c);
       if (ym.length > 0) {
         const med = ym[Math.floor(ym.length / 2)]?.c ?? NaN;
         const worst = ym[ym.length - 1]?.c ?? NaN;
-        const rec = workload.byModel.get(r.id)?.cost ?? 0;
+        const rec = wl.byModel.get(r.id)?.cost ?? 0;
         console.log(
-          `  Your mix on these endpoints: best ${fmtPrice(ym[0]?.c ?? NaN)}/mo (${ym[0]?.e.provider_name}) · median ${fmtPrice(med)}/mo · worst ${fmtPrice(worst)}/mo · recorded on this model: $${(rec * workloadScale).toFixed(2)}/mo${RESET}`,
+          `  Your mix on these endpoints: best ${fmtPrice(ym[0]?.c ?? NaN)}/mo (${ym[0]?.e.provider_name}) · median ${fmtPrice(med)}/mo · worst ${fmtPrice(worst)}/mo · recorded on this model: $${(rec * wlScale).toFixed(2)}/mo${RESET}`,
         );
       }
     }
@@ -1566,7 +1674,7 @@ async function endpoints(): Promise<void> {
       ].filter(Boolean);
       console.log(`  Benchmarks (OpenRouter-embedded): ${parts.join(" ")}`);
     }
-    for (const l of routingHintLines(r.eps, zdrInfo)) console.log(l);
+    for (const l of routingHintLines(r.eps, zdrInfo, wl, wlScale)) console.log(l);
     return;
   }
 
@@ -1582,7 +1690,7 @@ async function endpoints(): Promise<void> {
         stIn: priceStats(routable.map((e) => parsePrice(e.pricing.prompt))),
         stOut: priceStats(routable.map((e) => parsePrice(e.pricing.completion))),
         stCr: priceStats(routable.map((e) => optPrice(e.pricing.input_cache_read))),
-        youMed: median(routable.map((e) => youMoOf(e)).filter((v) => Number.isFinite(v))),
+        youMed: median(routable.map((e) => youMoOf(e, wl, wlScale)).filter((v) => Number.isFinite(v))),
         p50med: median(routable.map((e) => e.throughput_last_30m?.p50).filter((v): v is number => v != null)),
         eff: await fetchEffPricing(canon ?? r.slug),
         bench: benchById.get(r.slug),
@@ -1626,7 +1734,14 @@ async function endpoints(): Promise<void> {
   const allEps = results.flatMap((r) => r.eps);
   console.log(
     Bun.inspect.table(
-      endpointRows(allEps, zdrInfo, (e) => shortModelName(e.model_id ?? e.name), endpointTiers(allEps)),
+      endpointRows(
+        allEps,
+        zdrInfo,
+        (e) => shortModelName(e.model_id ?? e.name),
+        endpointTiers(allEps, wl, wlScale),
+        wl,
+        wlScale,
+      ),
       rowCols(allEps),
     ),
   );
