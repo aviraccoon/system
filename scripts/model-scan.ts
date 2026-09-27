@@ -72,7 +72,10 @@ interface AAModel {
 
 interface PiProvider {
   baseUrl?: string;
-  models: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number }>;
+  /** Omitted when the provider keeps its built-in model list. */
+  models?: Array<{ id: string; name?: string; contextWindow?: number; maxTokens?: number }>;
+  /** Per-model routing/cost tweaks; the keys are model ids. */
+  modelOverrides?: Record<string, unknown>;
 }
 
 interface PiModelsFile {
@@ -319,6 +322,76 @@ function joinORWithAA(orModel: ORModel, aaLookup: Map<string, AAModel>): AAModel
     aaLookup.get(normalized) ??
     aaLookup.get(parts.length > 1 ? `${creatorPart}/${normalized}` : normalized)
   );
+}
+
+/** OR model for an AA entry. The bare creator/slug lookup can land on the
+ * family's older OR id (AA keeps the newest release under the bare slug), so
+ * prefer an OR model whose embedded coding index matches — same namespace
+ * first, then a unique match anywhere, since AA and OR disagree on some
+ * namespaces (meta vs meta-llama, xai vs x-ai). Direct lookup is the fallback. */
+function findORModel(bm: AAModel, orLookup: Map<string, ORModel>): ORModel | undefined {
+  const direct = orLookup.get(`${bm.model_creator.slug}/${bm.slug}`) ?? orLookup.get(bm.slug) ?? orLookup.get(bm.name);
+  const coding = bm.evaluations?.artificial_analysis_coding_index;
+  if (coding == null || direct?.benchmarks?.artificial_analysis?.coding_index === coding) return direct;
+  let unique: ORModel | undefined;
+  let ambiguous = false;
+  for (const m of orLookup.values()) {
+    if (m.benchmarks?.artificial_analysis?.coding_index !== coding) continue;
+    if (m.id.split("/")[0] === bm.model_creator.slug) return m;
+    if (unique && unique.id !== m.id) ambiguous = true;
+    else unique ??= m;
+  }
+  return ambiguous ? direct : (unique ?? direct);
+}
+
+/** AA entry describing the release OR pins: the slug join when its coding index
+ * matches OR's embedded one, else the same-creator entry carrying that index
+ * (the join is the family's newest release). */
+function findAARelease(orModel: ORModel, aaModels: AAModel[], aaLookup: Map<string, AAModel>): AAModel | undefined {
+  const direct = joinORWithAA(orModel, aaLookup);
+  const coding = orModel.benchmarks?.artificial_analysis?.coding_index;
+  if (coding == null || direct?.evaluations?.artificial_analysis_coding_index === coding) return direct;
+  for (const m of aaModels) {
+    if (
+      m.model_creator?.slug === direct?.model_creator?.slug &&
+      m.evaluations?.artificial_analysis_coding_index === coding
+    ) {
+      return m;
+    }
+  }
+  return direct;
+}
+
+/** Benchmarks for one model. OR embeds AA's index for the exact release, while
+ * the AA API keeps a family's newest release under the bare slug. So the
+ * embedded value wins; the slug join is the fallback and the only source of
+ * speed/latency and the extra evaluations — and when the bare slug has moved
+ * to a newer release, the join's numbers describe that release, so they are
+ * dropped rather than shown on a row scored for the pinned one. */
+function benchmarksFor(
+  m: ORModel,
+  aaLookup: Map<string, AAModel>,
+): {
+  coding?: number;
+  intel?: number;
+  speed?: number;
+  latency?: number;
+  mmluPro?: number;
+  liveCodeBench?: number;
+} {
+  const embedded = m.benchmarks?.artificial_analysis;
+  const aa = joinORWithAA(m, aaLookup);
+  const joinedCoding = aa?.evaluations?.artificial_analysis_coding_index;
+  const moved = embedded?.coding_index != null && joinedCoding != null && joinedCoding !== embedded.coding_index;
+  const joined = moved ? undefined : aa;
+  return {
+    coding: embedded?.coding_index ?? joined?.evaluations?.artificial_analysis_coding_index ?? undefined,
+    intel: embedded?.intelligence_index ?? joined?.evaluations?.artificial_analysis_intelligence_index ?? undefined,
+    speed: joined?.median_output_tokens_per_second ?? undefined,
+    latency: joined?.median_time_to_first_token_seconds ?? undefined,
+    mmluPro: joined?.evaluations?.mmlu_pro ?? undefined,
+    liveCodeBench: joined?.evaluations?.livecodebench ?? undefined,
+  };
 }
 
 function parsePrice(p: string): number {
@@ -726,7 +799,7 @@ async function discover(): Promise<void> {
     const pricing = catalogOk ? zdrPricing(routable, wl, wlScale) : listedPricing(m, wl, wlScale);
     if (!pricing) continue;
 
-    const aa = joinORWithAA(m, aaLookup);
+    const b = benchmarksFor(m, aaLookup);
     const maxOut = m.top_provider.max_completion_tokens ?? 0;
 
     candidates.push({
@@ -743,18 +816,22 @@ async function discover(): Promise<void> {
       hasReasoning:
         m.supported_parameters.includes("reasoning") || m.supported_parameters.includes("include_reasoning"),
       hasTools: m.supported_parameters.includes("tools"),
-      aaCoding: aa?.evaluations?.artificial_analysis_coding_index ?? undefined,
-      aaIntel: aa?.evaluations?.artificial_analysis_intelligence_index ?? undefined,
-      aaSpeed: aa?.median_output_tokens_per_second ?? undefined,
-      aaLatency: aa?.median_time_to_first_token_seconds ?? undefined,
-      aaMmluPro: aa?.evaluations?.mmlu_pro ?? undefined,
-      aaLiveCodeBench: aa?.evaluations?.livecodebench ?? undefined,
+      aaCoding: b.coding,
+      aaIntel: b.intel,
+      aaSpeed: b.speed,
+      aaLatency: b.latency,
+      aaMmluPro: b.mmluPro,
+      aaLiveCodeBench: b.liveCodeBench,
       creator: m.id.split("/")[0] ?? "",
     });
   }
 
-  // Sort by coding index descending (models without benchmarks go last)
-  candidates.sort((a, b) => (b.aaCoding ?? -1) - (a.aaCoding ?? -1));
+  /** Ranking/visibility key: the coding index when AA has published one, else
+   * the intelligence index (newest releases are often intel-only at first). */
+  const quality = (m: JoinedModel): number => m.aaCoding ?? m.aaIntel ?? -1;
+
+  // Sort by ranking quality descending (models without any index go last)
+  candidates.sort((a, b) => quality(b) - quality(a));
 
   if (modeJson) {
     console.log(JSON.stringify(candidates, null, 2));
@@ -792,7 +869,7 @@ async function discover(): Promise<void> {
   };
 
   const tableRows = candidates
-    .filter((m) => (m.aaCoding ?? 0) >= 15 || verbose)
+    .filter((m) => quality(m) >= 15 || verbose)
     .map((m) => {
       const v = valueScore(m);
       return {
@@ -850,7 +927,7 @@ async function discover(): Promise<void> {
     ? `medians over N priced ZDR endpoints · You rng = your mix's min–max $/mo`
     : `ZDR endpoint catalog unavailable — listed model-level rates, which zdr=true may not reach`;
   console.log(
-    `\n${BOLD}ZDR-eligible models ranked by coding quality${RESET}  ${DIM}(${tableRows.length} models; ${pricingNote})${RESET}`,
+    `\n${BOLD}ZDR-eligible models ranked by coding quality${RESET}  ${DIM}(${tableRows.length} models; rows with no Coding index rank by Intel; ${pricingNote})${RESET}`,
   );
   console.log(
     Bun.inspect.table(tableRows, [
@@ -987,9 +1064,12 @@ async function drift(): Promise<void> {
   console.log(`\n${BOLD}Config drift check${RESET}\n`);
 
   for (const [providerName, provider] of Object.entries(piConfig.providers)) {
-    for (const model of provider.models) {
-      const isOpenRouter = providerName.startsWith("openrouter");
-      const orId = model.id; // OR model IDs are like "deepseek/deepseek-v3.2", not "openrouter-main/deepseek/..."
+    const isOpenRouter = providerName.startsWith("openrouter");
+    // Overridden models are configured even when the provider lists no models.
+    const modelIds = [
+      ...new Set([...(provider.models ?? []).map((m) => m.id), ...Object.keys(provider.modelOverrides ?? {})]),
+    ];
+    for (const orId of modelIds) {
       const orModel = isOpenRouter ? orLookup.get(orId) : undefined;
 
       if (isOpenRouter) {
@@ -1010,25 +1090,20 @@ async function drift(): Promise<void> {
         );
 
         // AA benchmarks if available
-        const aa = joinORWithAA(orModel, aaLookup);
-        if (aa?.evaluations) {
-          const e = aa.evaluations;
-          const parts: string[] = [];
-          if (e.artificial_analysis_coding_index != null) parts.push(`coding=${e.artificial_analysis_coding_index}`);
-          if (e.artificial_analysis_intelligence_index != null)
-            parts.push(`intel=${e.artificial_analysis_intelligence_index}`);
-          if (aa.median_output_tokens_per_second != null)
-            parts.push(`speed=${aa.median_output_tokens_per_second.toFixed(0)}tok/s`);
-          if (parts.length > 0) {
-            console.log(`    Benchmarks: ${parts.join("  ")}`);
-          }
+        const b = benchmarksFor(orModel, aaLookup);
+        const parts: string[] = [];
+        if (b.coding != null) parts.push(`coding=${b.coding}`);
+        if (b.intel != null) parts.push(`intel=${b.intel}`);
+        if (b.speed != null) parts.push(`speed=${b.speed.toFixed(0)}tok/s`);
+        if (parts.length > 0) {
+          console.log(`    Benchmarks: ${parts.join("  ")}`);
         }
 
         // Check for newer/better models from same creator
-        const currentAa = joinORWithAA(orModel, aaLookup);
-        if (currentAa?.model_creator && currentAa?.evaluations) {
+        const currentAa = findAARelease(orModel, aaModels, aaLookup);
+        if (currentAa?.model_creator) {
           const currentCreator = currentAa.model_creator.slug;
-          const currentCoding = currentAa.evaluations.artificial_analysis_coding_index ?? 0;
+          const currentCoding = b.coding ?? 0;
           const currentDate = currentAa.release_date;
 
           const betterModels = aaModels
@@ -1046,7 +1121,7 @@ async function drift(): Promise<void> {
             .slice(0, 3);
 
           for (const bm of betterModels) {
-            const orMatch = orLookup.get(bm.slug) ?? orLookup.get(bm.name);
+            const orMatch = findORModel(bm, orLookup);
             const price = orMatch
               ? fmtPrice(parsePrice(orMatch.pricing.prompt))
               : fmtPrice(bm.pricing.price_1m_input_tokens);
@@ -2144,11 +2219,9 @@ async function local(): Promise<void> {
       if (repoLower.includes(hfName.replace(/-/g, "")) || repoLower.includes(hfName)) {
         const orModel = orModels.find((o) => o.id === orId);
         if (orModel) {
-          const aa = joinORWithAA(orModel, aaLookup);
-          if (aa?.evaluations) {
-            aaCoding = aa.evaluations.artificial_analysis_coding_index ?? null;
-            aaIntel = aa.evaluations.artificial_analysis_intelligence_index ?? null;
-          }
+          const b = benchmarksFor(orModel, aaLookup);
+          aaCoding = b.coding ?? null;
+          aaIntel = b.intel ?? null;
         }
         break;
       }
@@ -2313,11 +2386,9 @@ async function modelQuery(): Promise<void> {
           if (repoLower.includes(hfName.replace(/-/g, "")) || repoLower.includes(hfName)) {
             const orModel = orModels.find((o) => o.id === orId);
             if (orModel) {
-              const aa = joinORWithAA(orModel, aaLookup);
-              if (aa?.evaluations) {
-                result.aaCoding = aa.evaluations.artificial_analysis_coding_index ?? null;
-                result.aaIntel = aa.evaluations.artificial_analysis_intelligence_index ?? null;
-              }
+              const b = benchmarksFor(orModel, aaLookup);
+              result.aaCoding = b.coding ?? null;
+              result.aaIntel = b.intel ?? null;
             }
             break;
           }
