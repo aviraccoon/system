@@ -142,7 +142,7 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 **The problem**: Prose that re-walks the document's table, re-transcribes a tool's `--help` output, or repeats one fact across sections. The copies drift until they contradict each other.
 
-**Instead**: One fact, one home. A table (or the tool's own help) is the command reference; prose carries only what the table cannot — runtime gotchas and non-obvious defaults. A useless detail is not improved by moving it; delete it.
+**Instead**: One fact, one home. A table (or the tool's own help) is the command reference; prose carries only what the table cannot — runtime gotchas and non-obvious defaults. A value maintained elsewhere — a manifest, a config, a registry — stays there; point at it instead of restating it. A useless detail is not improved by moving it; delete it.
 
 ### Status Prose
 
@@ -165,6 +165,14 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 **The problem**: Docs and comments describe the code as it is. A reader with only the current tree cannot place "before", and the comparison turns a fact into a diff. Old and new belong in the change's own record — the commit message, the journal, a design note — and only as the failure the change prevents.
 
 **Instead**: State the current behavior on its own terms. If the earlier behavior explains why the code is shaped the way it is, it belongs in the commit message, the journal, or a design note.
+
+### Timeless Text
+
+**Patterns to avoid**: time anchors — *currently*, *new*, *latest*, *now*, *soon*, *as of this writing*, *presently*, *does not yet*, *existing*. A document is assumed to describe the current state.
+
+**The problem**: *Currently* and *latest* tie the claim to an unstated moment, so a later reader cannot tell whether it still holds, and *does not yet* reads as a promise the text cannot keep. *New* assumes the reader knows the prior state. Each of these reads wrong once the thing described moves.
+
+**Instead**: State present behavior plainly: "the parser accepts trailing commas", not "the parser now accepts trailing commas". Describing what exists now is the point; the anchor is what to cut. Keep time words for dated text — release notes, journals, minutes — or a step whose effect follows later ("the VM goes offline soon after shutdown"). To mark a change, name the reference point (a release, a version, a date) rather than calling it *new*.
 
 ### Mechanism Shorthand
 
