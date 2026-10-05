@@ -123,6 +123,10 @@ Use git for version-control operations. Check recent history (`git log --oneline
 
 **Machine-local changes** (keep working locally, never push): permanent overrides of *tracked* files → `git update-index --skip-worktree <path>` — invisible to status/staging (even `git add -A`); a checkout that would overwrite the file refuses rather than clobbers; revert with `--no-skip-worktree`, list with `git ls-files -v | grep '^S'`, and document it in the repo's `AGENTS.local.md` (it's invisible). In-progress work → a branch; maybe-dead local tooling → `git stash`; brand-new local files → `.git/info/exclude`.
 
+## Pushing
+
+**Never push unless stated otherwise.** `git push`, force-pushes, tag pushes — any remote-mutating git operation — only when Avi explicitly allows or asks for it. Silence, a finished change, a green test run, an approved review, and a session wrap-up are not permission. Commit locally, report the hash, and say the commit is unpushed.
+
 ## Wrapping Up Sessions
 
 When Avi says "wrap up": finalize the journal (what was done, decisions, commit hashes), update TODO.md, and note unfinished work.
