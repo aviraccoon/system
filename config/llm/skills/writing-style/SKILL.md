@@ -190,6 +190,12 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 **Instead**: Output only the final content. No meta-commentary about the writing process.
 
+### Wall of Text
+
+**The problem**: A paragraph that stacks unrelated facts, or a list item that runs past about two rendered lines and carries more than its one claim, gets skipped rather than read — the reader cannot find the one fact they came for. LLM output defaults to this shape: a whole answer as one block, an explanation packed into the bullet that states the claim.
+
+**Instead**: One thought per paragraph; split when the topic changes or when a reader would act on the parts separately. Keep a list item to its claim: delete detail that earns nothing, and move what remains into a sub-list or a paragraph beneath it. Length itself is not the fault — a reference entry or a decision document's argument can run long and stay readable (see *Who Is It For*) — and the fix is separating topics, not breaking every thought into a separate sentence (see *Staccato Overcorrection*).
+
 ### Staccato Overcorrection
 
 **The problem**: When fixing verbosity or em dash overuse, the instinct is to break everything into short sentences. This creates robotic, choppy prose that sounds like a PowerPoint deck.
