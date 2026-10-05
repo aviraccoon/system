@@ -5,10 +5,16 @@ import { join } from "node:path";
 import {
   dispatchRan,
   dispatchTasks,
+  type JournalRecord,
+  type JournalTarget,
+  journalBlockNeeded,
   journalDirFor,
+  journalFreshnessBlockReason,
   journalIsCurrent,
   journalLinkBlockReason,
   journalLinked,
+  journalParam,
+  journalRecord,
   newestMtime,
 } from "./journal-fresh";
 
@@ -175,11 +181,168 @@ describe("dispatchTasks", () => {
   });
 });
 
+describe("journalParam", () => {
+  /** A tmp notes tree holding one project dir. */
+  function notesTree(): { home: string; notes: string; project: string } {
+    const home = mkdtempSync(join(tmpdir(), "edit-guard-home-"));
+    const notes = join(home, "notes", "journal");
+    const project = join(notes, "bar-project");
+    mkdirSync(project, { recursive: true });
+    return { home, notes, project };
+  }
+
+  test("accepts an existing journal dir directly under the notes dir, absolute or ~-prefixed", () => {
+    const { home, notes, project } = notesTree();
+    expect(journalParam(project, notes)).toEqual({ kind: "dir", dir: project });
+    expect(journalParam("~/notes/journal/bar-project", notes, home)).toEqual({ kind: "dir", dir: project });
+  });
+
+  test("treats absent, none, empty, and non-strings", () => {
+    expect(journalParam(undefined, "/notes")).toEqual({ kind: "absent" });
+    expect(journalParam("none", "/notes")).toEqual({ kind: "none" });
+    expect(journalParam(" none ", "/notes")).toEqual({ kind: "none" });
+    expect(journalParam("  ", "/notes").kind).toBe("invalid");
+    expect(journalParam(7, "/notes").kind).toBe("invalid");
+  });
+
+  test("rejects relative, outside-notes, notes-dir, and missing paths", () => {
+    const { home, notes } = notesTree();
+    expect(journalParam("notes/journal/bar-project", notes).kind).toBe("invalid");
+    expect(journalParam(join(home, "elsewhere"), notes).kind).toBe("invalid");
+    expect(journalParam(notes, notes).kind).toBe("invalid");
+    expect(journalParam(join(notes, "no-such-project"), notes).kind).toBe("invalid");
+  });
+
+  test("rejects a loose file directly under the notes dir", () => {
+    const { notes } = notesTree();
+    const file = write(notes, "release-notes.md", 1_000);
+    const param = journalParam(file, notes);
+    expect(param.kind).toBe("invalid");
+    expect(param.kind === "invalid" ? param.reason : "").toContain("not a journal dir");
+  });
+
+  test("accepts an existing entry file", () => {
+    const { notes, project } = notesTree();
+    const entry = write(project, "2026-01-01-01-entry.md", 1_000);
+    expect(journalParam(entry, notes)).toEqual({ kind: "entry", file: entry });
+  });
+
+  test("rejects missing, non-entry, and nested files", () => {
+    const { notes, project } = notesTree();
+    write(project, "2026-01-01-01-entry.md", 1_000);
+    expect(journalParam(write(project, "TODO.md", 1_000), notes).kind).toBe("invalid");
+    expect(journalParam(join(project, "2026-01-02-01-missing.md"), notes).kind).toBe("invalid");
+    expect(journalParam(join(project, "sub", "2026-01-01-01-entry.md"), notes).kind).toBe("invalid");
+  });
+
+  test("rejects a directory named like an entry", () => {
+    const { notes, project } = notesTree();
+    const fake = join(project, "2026-01-01-01-fake.md");
+    mkdirSync(fake);
+    expect(journalParam(fake, notes).kind).toBe("invalid");
+  });
+});
+
+describe("journalRecord", () => {
+  test("a dir target is current when its newest entry is at or after the threshold", () => {
+    const notes = mkdtempSync(join(tmpdir(), "edit-guard-notes-"));
+    const project = join(notes, "bar-project");
+    write(project, "2026-01-01-01-entry.md", 5_000);
+    const record = journalRecord({ kind: "dir", dir: project }, "/session", 5_000);
+    expect(record).toEqual({
+      key: project,
+      current: true,
+      subject: `the journal (${project})`,
+      update: "Update the journal to the current state",
+    });
+    expect(journalRecord({ kind: "dir", dir: project }, "/session", 5_001)?.current).toBe(false);
+  });
+
+  test("an entry target is checked by its own mtime, not the dir's", () => {
+    const notes = mkdtempSync(join(tmpdir(), "edit-guard-notes-"));
+    const project = join(notes, "bar-project");
+    const old = write(project, "2026-01-01-01-old.md", 1_000);
+    const fresh = write(project, "2026-01-01-02-new.md", 9_000);
+    const record = journalRecord({ kind: "entry", file: old }, "/session", 5_000);
+    expect(record).toEqual({
+      key: old,
+      current: false,
+      subject: `the entry (${old})`,
+      update: "Write the named entry with the current state (or pass a fresh entry)",
+    });
+    expect(journalRecord({ kind: "entry", file: fresh }, "/session", 5_000)?.current).toBe(true);
+  });
+
+  test("a missing entry file is not current", () => {
+    const notes = mkdtempSync(join(tmpdir(), "edit-guard-notes-"));
+    const missing = join(notes, "bar-project", "2026-01-01-01-gone.md");
+    expect(journalRecord({ kind: "entry", file: missing }, "/session", 0)?.current).toBe(false);
+  });
+
+  test("absent falls back to the session journal", () => {
+    const notes = mkdtempSync(join(tmpdir(), "edit-guard-notes-"));
+    const session = join(notes, "session-project");
+    write(session, "2026-01-01-01-entry.md", 5_000);
+    expect(journalRecord({ kind: "absent" }, session, 5_000)).toEqual({
+      key: session,
+      current: true,
+      subject: `the journal (${session})`,
+      update: "Update the journal to the current state",
+    });
+    expect(journalRecord({ kind: "absent" }, session, 9_000)?.current).toBe(false);
+  });
+
+  test("the none opt-out has no record to guard", () => {
+    expect(journalRecord({ kind: "none" }, "/session", 0)).toBeNull();
+  });
+});
+
+describe("journalBlockNeeded", () => {
+  const stale: JournalRecord = {
+    key: "/record",
+    current: false,
+    subject: "the journal (/record)",
+    update: "Update the journal to the current state",
+  };
+
+  test("blocks a stale record no previous block covered", () => {
+    expect(journalBlockNeeded(stale, null)).toBe(true);
+    expect(journalBlockNeeded(stale, "/other-record")).toBe(true);
+  });
+
+  test("passes a current record or one a previous block covered", () => {
+    expect(journalBlockNeeded({ ...stale, current: true }, null)).toBe(false);
+    expect(journalBlockNeeded(stale, "/record")).toBe(false);
+  });
+});
+
+describe("journalFreshnessBlockReason", () => {
+  test("names the record and the remedy", () => {
+    const entry = journalFreshnessBlockReason({
+      key: "/e",
+      current: false,
+      subject: "the entry (/e)",
+      update: "Write the named entry with the current state (or pass a fresh entry)",
+    });
+    expect(entry).toContain("the entry (/e)");
+    expect(entry).toContain("Write the named entry");
+    const dir = journalFreshnessBlockReason({
+      key: "/d",
+      current: false,
+      subject: "the journal (/d)",
+      update: "Update the journal to the current state",
+    });
+    expect(dir).toContain("Update the journal");
+    expect(dir).toContain("no write newer");
+  });
+});
+
 describe("journalLinkBlockReason", () => {
   const dir = "/Users/foo/notes/journal/bar-project";
+  const absent: JournalTarget = { kind: "absent" };
 
   test("returns null when every task links the journal", () => {
-    expect(journalLinkBlockReason({ task: `Read ${dir} first, then review` }, dir)).toBeNull();
+    expect(journalLinkBlockReason({ task: `Read ${dir} first, then review` }, dir, absent)).toBeNull();
     expect(
       journalLinkBlockReason(
         {
@@ -189,12 +352,20 @@ describe("journalLinkBlockReason", () => {
           ],
         },
         dir,
+        absent,
       ),
     ).toBeNull();
   });
 
-  test("returns null when the dispatch opts out via the param", () => {
-    expect(journalLinkBlockReason({ task: "blind review", journal: "none" }, dir)).toBeNull();
+  test("returns null for the param forms", () => {
+    expect(journalLinkBlockReason({ task: "blind review" }, dir, { kind: "none" })).toBeNull();
+    expect(journalLinkBlockReason({ task: "blind review" }, dir, { kind: "dir", dir })).toBeNull();
+    expect(
+      journalLinkBlockReason({ task: "blind review" }, dir, {
+        kind: "entry",
+        file: `${dir}/2026-01-01-01-entry.md`,
+      }),
+    ).toBeNull();
   });
 
   test("names the unlinked tasks", () => {
@@ -206,6 +377,7 @@ describe("journalLinkBlockReason", () => {
         ],
       },
       dir,
+      absent,
     );
     expect(reason).toContain("a task does not link");
     expect(reason).toContain("tasks[1] (fixer)");

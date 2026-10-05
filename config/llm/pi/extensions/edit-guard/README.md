@@ -23,13 +23,19 @@ losing to the model's habits is mirrored here as line patterns.
   so a lineage that already read it does not block. A blocked `write` stashes its
   content — re-issue with the guide's corrections, or `cp` the stash only if it
   is fine as-is. Not covered: `bash`-written files, code comments, subagents.
-- **Journal gate:** a `subagent` dispatch is blocked until the project journal
-  has a top-level entry written after the last real user message or completed
-  dispatch, and until the dispatch links the journal path (or passes
-  `journal: "none"` on the subagent call, for children that deliberately run
-  without context). The dir resolves through a `.worktrees` ancestor to the
-  main project. Any fresh entry write clears freshness; a re-issued dispatch
-  also proceeds, for sessions where the user said to skip journaling.
+- **Journal gate:** a `subagent` dispatch must link a journal and the record
+  it reads must be current. Pass `journal: "<path>"` on the call to name any
+  journal under the notes tree — a project dir or a single entry file; the
+  tool then prepends the read instruction to every task. Otherwise each task
+  must carry the session journal's path (its dir resolves through a
+  `.worktrees` ancestor to the main project). Freshness: a dir or the session
+  journal needs a top-level entry written after the last real user message or
+  completed dispatch; a named entry is checked by its own mtime.
+  `journal: "none"` runs the dispatch with no journal guard at all — no link,
+  no freshness — for children that deliberately run without context. A
+  dispatch that links a journal must read a current record; a re-issued
+  dispatch against the same record also proceeds, for sessions where the user
+  said to skip journaling.
 - Silent when clean — no "0 violations" noise.
 - Files the edit did not change are never scanned. A file written through
   `bash` is never read — only the command line is checked.

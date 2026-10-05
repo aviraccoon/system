@@ -23,7 +23,15 @@ import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { loadJournalConfig } from "../shared/journal-context";
 import { isShellTool } from "../shared/shell-tools";
 import { proseGateBlock, rewriteBlock } from "./blocks";
-import { dispatchRan, journalDirFor, journalIsCurrent, journalLinkBlockReason } from "./journal-fresh";
+import {
+  dispatchRan,
+  journalBlockNeeded,
+  journalDirFor,
+  journalFreshnessBlockReason,
+  journalLinkBlockReason,
+  journalParam,
+  journalRecord,
+} from "./journal-fresh";
 import { isGatedProsePath, mentionsWritingStyleSkill, skillLoadedThisSession } from "./prose-gate";
 import {
   type CompiledPathRule,
@@ -115,16 +123,17 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   // Set at session start; re-armed by every real user message and every
   // concluded dispatch where a child ran.
   let journalThreshold = 0;
-  // Set when a journal-freshness block is issued; covers one re-issue after
-  // a freshness block (the user explicitly skipping journaling for that
-  // dispatch). Every cycle reset below re-opens the check.
-  let journalGateOpened = false;
+  // The record a journal-freshness block covered; covers one re-issue after a
+  // freshness block (the user explicitly skipping journaling for that
+  // dispatch). Keyed by record so a later dispatch naming another journal is
+  // checked on its own. Every cycle reset below re-opens the check.
+  let journalGateOpened: string | null = null;
 
   function startSession(ctx: ExtensionContext) {
     writingStyleLoaded = false;
     proseGateHistoryScanned = false;
     journalThreshold = Date.now();
-    journalGateOpened = false;
+    journalGateOpened = null;
     const { config, loadErrors } = loadRuleConfig();
     for (const error of loadErrors) ctx.ui.notify(error, "warning");
     const result = compileRules(config);
@@ -143,7 +152,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   pi.on("input", async (event) => {
     if (event.source === "extension") return;
     journalThreshold = Date.now();
-    journalGateOpened = false;
+    journalGateOpened = null;
   });
 
   // ── Write-guard: write is for new files, not wholesale replacement ──
@@ -151,23 +160,25 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   pi.on("tool_call", async (event, ctx) => {
     // ── Journal gate: the journal must be current, and the dispatch must link it ──
     if (event.toolName === "subagent") {
-      const journalDir = journalDirFor(journalNotesDir(), ctx.cwd);
-      if (!journalGateOpened && !journalIsCurrent(journalDir, journalThreshold)) {
-        journalGateOpened = true;
-        return {
-          block: true,
-          reason:
-            `edit-guard: dispatch blocked — the project journal (${journalDir}) has no write newer than ` +
-            "the last user message or completed dispatch. Update the journal to the current state first — " +
-            "findings, decisions, unfinished work so far — then re-dispatch; a subagent must never read " +
-            "a stale record. If the user explicitly said to skip journaling, re-issue the identical dispatch.",
-        };
-      }
       const input = event.input as Record<string, unknown>;
+      const notesDir = journalNotesDir();
+      const sessionDir = journalDirFor(notesDir, ctx.cwd);
+      const param = journalParam(input.journal, notesDir);
+      if (param.kind === "invalid") {
+        return { block: true, reason: `edit-guard: dispatch blocked — ${param.reason}.` };
+      }
+      // The record the dispatch reads is the one that must be current: the
+      // param's target, or the session's journal when it links by task text.
+      // The "none" opt-out reads no record, so it has nothing to guard.
+      const record = journalRecord(param, sessionDir, journalThreshold);
+      if (record && journalBlockNeeded(record, journalGateOpened)) {
+        journalGateOpened = record.key;
+        return { block: true, reason: journalFreshnessBlockReason(record) };
+      }
       // Stateless by design: the opt-out is the journal param, not a
       // re-issue escape — a block-once flag would let a second concurrent
       // dispatch in the same turn sail through after the first was blocked.
-      const linkBlock = journalLinkBlockReason(input, journalDir);
+      const linkBlock = journalLinkBlockReason(input, sessionDir, param);
       if (linkBlock) {
         return { block: true, reason: linkBlock };
       }
@@ -226,7 +237,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
     if (event.toolName === "subagent") {
       if (dispatchRan(event.details)) {
         journalThreshold = Date.now();
-        journalGateOpened = false;
+        journalGateOpened = null;
       }
       return;
     }

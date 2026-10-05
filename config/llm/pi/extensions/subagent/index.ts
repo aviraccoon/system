@@ -26,6 +26,7 @@ import {
   findNearestProjectAgentsDir,
   loadAgentsFromDir,
 } from "./agents";
+import { journalPath, taskForChild } from "./journal-task";
 import { resolveMode } from "./mode";
 import { renderCall as renderCallFn, renderResult as renderResultFn, withSessionPaths } from "./render";
 import {
@@ -114,9 +115,9 @@ const SubagentParams = Type.Object({
     }),
   ),
   journal: Type.Optional(
-    Type.Literal("none", {
+    Type.String({
       description:
-        "Skip the journal-link requirement for this dispatch: the child runs without journal context (blind review, throwaway lookup). Default: the dispatch must link the project journal path.",
+        'Journal to hand the child: a journal dir or a specific entry file under the notes tree (absolute or ~-prefixed), e.g. "~/notes/llm/system" or "~/notes/llm/system/2026-10-05-01-entry.md". Any journal can be named, not just the session\'s. Every task then starts with a read-the-journal instruction, and the named record must have been written since the last user message or completed dispatch. Pass "none" for a deliberately blind dispatch (blind review, throwaway lookup): no journal is injected and no link or freshness check applies. Default: link the journal path in each task yourself.',
     }),
   ),
 });
@@ -139,7 +140,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
       description: buildToolDescription(allAgents),
       parameters: SubagentParams,
       promptGuidelines: [
-        'Link the project journal (its path plus a read instruction) in every dispatch task so the child starts from the current record — edit-guard blocks unlinked dispatches. Pass journal: "none" only when the child deliberately runs without journal context (blind review, throwaway lookup).',
+        'Give the dispatch a journal: pass journal: "<journal dir or entry path>" and the tool prepends a read instruction to every task — any journal under the notes tree, not just the session\'s — or write the journal path into each task; edit-guard blocks a dispatch with neither. Pass journal: "none" only when the child deliberately runs without journal context (blind review, throwaway lookup).',
       ],
 
       async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -153,6 +154,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
         }
 
         const agentScope: "user" | "project" | "both" = params.agentScope ?? "user";
+        const journal = journalPath(params.journal);
         const discovery = discoverAgents(ctx.cwd, agentScope);
         const agents = discovery.agents;
 
@@ -217,6 +219,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
           for (let i = 0; i < params.chain.length; i++) {
             const step = params.chain[i];
             const taskWithContext = step.task.replace(/\{previous\}/g, previousOutput);
+            const childTask = taskForChild(taskWithContext, journal);
 
             const chainUpdate = onUpdate
               ? (partial: { content: unknown[]; details?: SubagentDetails }) => {
@@ -238,7 +241,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
               ctx.cwd,
               agents,
               step.agent,
-              taskWithContext,
+              childTask,
               step.cwd,
               i + 1,
               signal,
@@ -307,7 +310,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
             allResults[i] = {
               agent: parallelTasks[i].agent,
               agentSource: "unknown",
-              task: parallelTasks[i].task,
+              task: taskForChild(parallelTasks[i].task, journal),
               exitCode: -1,
               messages: [],
               stderr: "",
@@ -332,11 +335,12 @@ export default function subagentExtension(pi: ExtensionAPI) {
             MAX_CONCURRENCY,
             async (t: { agent: string; task: string; cwd?: string }, index) => {
               let handleId = 0;
+              const childTask = taskForChild(t.task, journal);
               const result = await runSingleAgent(
                 ctx.cwd,
                 agents,
                 t.agent,
-                t.task,
+                childTask,
                 t.cwd,
                 undefined,
                 signal,
@@ -384,11 +388,12 @@ export default function subagentExtension(pi: ExtensionAPI) {
         // Single mode
         if (singleAgent && singleTask) {
           let handleId = 0;
+          const childTask = taskForChild(singleTask, journal);
           const result = await runSingleAgent(
             ctx.cwd,
             agents,
             singleAgent,
-            singleTask,
+            childTask,
             singleCwd,
             undefined,
             signal,

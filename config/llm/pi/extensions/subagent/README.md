@@ -14,6 +14,7 @@ Delegate tasks to specialized agents with isolated context windows. Spawns a sep
 8. **Turn budget** — `maxTurns` (default 30) is stated in the task; three turns before the cap the child is steered once to write its report; the run is aborted at the cap
 9. **Retries** — a provider failure gets up to 3 attempts across the agent's model chain
 10. **Project-local agent gating** — prompts for confirmation before running agents from `.pi/agents/` in the project repo
+11. **Journal context** — `journal: "<path>"` prepends a read-the-journal line to every task: a journal dir (TODO.md plus the newest entries) or a specific entry file, any project under the notes tree. `journal: "none"` marks a deliberately blind dispatch; omit it to link the journal path in each task yourself (edit-guard enforces one of the three)
 
 ## Commands
 
