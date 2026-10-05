@@ -43,7 +43,7 @@ Override `vault`, `item`, or the field names if your 1Password item differs. `ho
 | `harvest alias -r acme` | remove an alias |
 | `harvest whoami` | auth check: user, timer mode, cache state |
 
-Project and task matches are fuzzy (name, code, or client; a number is an id), and ambiguous or missing matches print candidates with ids. Entry lists lead each line with the entry id, so `edit`/`delete` take it directly. An alias without a task leaves the task to each `start`/`log`; a project with only one task needs no task argument.
+Project and task matches are fuzzy (name, code, or client; a number is an id), and ambiguous or missing matches print candidates with ids. The `client / project` form `harvest projects` prints is accepted as-is. Entry lists lead each line with the entry id, so `edit`/`delete` take it directly. An alias without a task leaves the task to each `start`/`log`; a project with only one task needs no task argument.
 
 - `edit --project P [--task T]` moves an entry. The project resolves by alias, id, or name (an alias's stored task is not used); without `--task`, the entry's task carries over when the target project has it, or the target has only one task — otherwise the command fails with the target's task list.
 - `audit` flags missing notes, notes without a link, zero/whole-hour durations, and duplicate entries; running entries skip the duration checks. A flagged locked entry needs its timesheet reopened first. It only reports — fix with `harvest edit <id>`.

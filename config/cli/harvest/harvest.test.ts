@@ -186,7 +186,7 @@ describe("matchOne", () => {
     const r = matchOne("acme", items);
     if (r.kind !== "ambiguous") throw new Error(`expected ambiguous, got ${r.kind}`);
     expect(r.candidates).toHaveLength(2);
-    expect(formatCandidates(r.candidates)).toContain("  1  Acme Website (AW)");
+    expect(formatCandidates(r.candidates)).toContain("  1  Acme Corp / Acme Website (AW)");
   });
 
   test("numeric query matches by id only, no name fallback", () => {
@@ -198,6 +198,43 @@ describe("matchOne", () => {
 
   test("separator-insensitive", () => {
     expect(matchOne("acme_website", items)).toEqual({ kind: "match", item: acme });
+  });
+
+  test("client-qualified name from the projects list resolves", () => {
+    // Both projects share a client; the project part decides.
+    expect(matchOne("acme corp / acme website", items)).toEqual({ kind: "match", item: acme });
+    expect(matchOne("Acme Corp/Acme_Redesign", items)).toEqual({ kind: "match", item: redesign });
+  });
+
+  test("names may contain slashes; spacing around them is ignored", () => {
+    const slashed: Candidate[] = [
+      { id: 5, name: "Pro/ject Name", code: null, client: "Acme Corp" },
+      { id: 6, name: "B / C", code: null, client: "A / B" },
+    ];
+    expect(matchOne("Pro/ject Name", slashed)).toEqual({ kind: "match", item: slashed[0] });
+    expect(matchOne("Pro/ject/Name", slashed).kind).toBe("none");
+    expect(matchOne("B/C", slashed)).toEqual({ kind: "match", item: slashed[1] });
+    expect(matchOne("Acme Corp / Pro/ject Name", slashed)).toEqual({ kind: "match", item: slashed[0] });
+    expect(matchOne("A / B / B / C", slashed)).toEqual({ kind: "match", item: slashed[1] });
+  });
+
+  test("a slashless query keeps plain-name precedence", () => {
+    const collision: Candidate[] = [
+      { id: 7, name: "Website", code: null, client: "Acme" },
+      { id: 8, name: "Acme Website Redesign", code: null, client: null },
+    ];
+    expect(matchOne("Acme Website", collision)).toEqual({ kind: "match", item: collision[1] });
+    expect(matchOne("Acme / Website", collision)).toEqual({ kind: "match", item: collision[0] });
+  });
+
+  test("a separator at the client's edge normalizes like the query", () => {
+    const dotted: Candidate[] = [{ id: 9, name: "Website", code: null, client: "Acme Inc." }];
+    expect(matchOne("Acme Inc. / Website", dotted)).toEqual({ kind: "match", item: dotted[0] });
+    const nearDuplicate: Candidate[] = [
+      { id: 9, name: "Website", code: null, client: "Acme Inc." },
+      { id: 10, name: "Website", code: null, client: "Acme Inc" },
+    ];
+    expect(matchOne("Acme Inc. / Website", nearDuplicate).kind).toBe("ambiguous");
   });
 
   test("miss", () => {
@@ -838,6 +875,21 @@ describe("cmdTasks", () => {
     expect(json.project.id).toBe(10);
     expect(json.project.code).toBe("WEB");
   });
+
+  test("client-qualified project arg resolves", async () => {
+    const api = apiStub({
+      me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
+      projectAssignments: [
+        [assignment({ id: 10, name: "Website", code: "WEB" }, "Acme Corp", [{ id: 20, name: "Development" }])],
+      ],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdTasks(deps, "Acme Corp / Website");
+    expect(r.text).toContain("20  Development");
+    const json = r.json as { project: { id: number } };
+    expect(json.project.id).toBe(10);
+  });
+
   test("numeric project arg matches by id", async () => {
     const api = apiStub({
       me: [{ id: 7, first_name: "A", last_name: "B", email: "a@b.c" }],
