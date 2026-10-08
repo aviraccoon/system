@@ -155,10 +155,6 @@
         greedy = true;
       }
       {
-        name = "cursor"; # IDE
-        greedy = true;
-      }
-      {
         name = "steamre/tools/depotdownloader"; # Steam DepotDownloader
         greedy = true;
       }
@@ -208,10 +204,6 @@
       }
       {
         name = "iterm2"; # Terminal
-        greedy = true;
-      }
-      {
-        name = "jordanbaird-ice@beta"; # Menu bar hiding (macOS 26 Tahoe support)
         greedy = true;
       }
       {
@@ -272,10 +264,6 @@
       }
       {
         name = "steam"; # Game launcher
-        greedy = true;
-      }
-      {
-        name = "steelseries-gg"; # SteelSeries device manager
         greedy = true;
       }
       {
