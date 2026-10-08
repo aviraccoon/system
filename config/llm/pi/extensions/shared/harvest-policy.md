@@ -1,10 +1,10 @@
 Time tracking: the `harvest` CLI.
 - Start the timer before the first task action, without asking: `harvest start <alias>`. Pick the alias the work belongs to; if that only becomes clear later, start the project's generic alias and switch once the right alias is clear.
-- Log entries only when the user asks.
+- Timer flow — start, switch, stop — never needs permission. Logging happens only when the user asks: `harvest log` backfills past time; `harvest edit` and `harvest delete` change entries.
 - Run `harvest --help` before any command not listed here, and take the name from its output rather than guessing.
 - `harvest status` — running timer + today's total
 - `harvest start <alias> [-n note] [--offset 25m]` — stops any running timer first
-- `harvest stop` — stopping the timer auto-creates an entry carrying the start note; never `harvest log` on top of a stopped timer — `harvest edit <id>` that entry with the sized hours, final note and links
+- `harvest stop` — stopping the timer auto-creates an entry carrying the start note; never `harvest log` on top of a stopped timer — when the user asks, `harvest edit <id>` that entry with the sized hours, final note and links
 - `harvest log <hours> <alias> [-n note] [--date YYYY-MM-DD]` — hours: `1.5` | `1:30` | `90m`
 - `harvest edit <id> [--hours H] [-n note] [--date D] [--project P] [--task T]` — fix hours, note, date, or move to another project/task
 - `harvest delete <id> [--force]` — confirms on a TTY, `--force` skips
