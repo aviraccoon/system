@@ -3,7 +3,7 @@
  *
  * Opt-in — these spawn actual servers and can take a minute:
  *   LSP_E2E=1 bun test extensions/lsp/e2e.test.ts
- * Skipped in the normal `mise pi-check` run and for any server binary not on
+ * Skipped in the normal `mise tree-check config/llm/pi` run and for any server binary not on
  * PATH (add it via nix/homebrew or `nix shell nixpkgs#<pkg>` to include it).
  *
  * Host TS: this repo's root resolves its classic typescript install (classic

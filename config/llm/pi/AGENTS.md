@@ -5,8 +5,8 @@ Pi coding agent extensions and configuration, deployed via Nix (`modules/home-ma
 ## Quick Reference
 
 ```bash
-mise pi-check    # biome lint + bun test
-mise pi-fmt      # biome auto-fix
+mise tree-check config/llm/pi   # this tree's tsc + tests
+mise biome-fmt                  # biome auto-fix all trees
 mise nix-diff    # verify Nix build after changes
 ```
 
@@ -96,7 +96,7 @@ The benchmark's `shared.ts` replicates this merge logic (reads models.json + pi-
 - **Overriding a built-in tool: use the `createXToolDefinition` factory, not `createXTool`.** `createBashTool` and friends wrap the definition through `wrapToolDefinition`, which copies only name/label/description/parameters/execute — `renderCall`, `renderResult`, `promptSnippet` and `promptGuidelines` are dropped (pi re-attaches the last two by hand). The symptom is a tool whose calls show output with no command above them.
 - **File-mutating tools** (e.g. `patch`): add the tool name to `EDIT_LIKE_TOOLS` in `shared/edit-tools.ts`. Extensions that react to edits (LSP diagnostics, permission-gate path checks, agents-file discovery) read from there, so a new edit tool is wired everywhere with one change instead of being silently skipped (LSP not firing after edits is the symptom of a miss). Use `collectToolPaths(toolName, input)` for path extraction — it handles patch's per-edit multi-file paths and dedupes.
 - **Design for agent imprecision.** Agents are bad at exact byte reproduction (whitespace, indentation, Unicode) and counting (line numbers, edit indices). Extensions and tools should: (a) normalize inputs before matching — don't require the agent to get invisible bytes right; (b) include surrounding context when reporting locations — bare line numbers are ambiguous to agents, use `>>` + context lines; (c) include the closest match when a lookup fails — “not found” alone wastes a retry; (d) prefer `anchor` (a unique nearby string the agent can verify) over line numbers for disambiguation; (e) make every error message self-contained — assume the agent will not remember why things are designed the way they are (atomicity, normalization stages, etc.).
-- Run `mise pi-check` before committing. `mise check` includes it.
+- Run `mise tree-check config/llm/pi` before committing. `mise check` covers every tree.
 
 ### Runtime: Node, not Bun
 

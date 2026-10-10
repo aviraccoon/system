@@ -24,4 +24,4 @@ CLI. Personal sessions never see it.
 
 ## Testing
 
-`pill.test.ts` covers the pure formatting. Run `mise pi-check`.
+`pill.test.ts` covers the pure formatting. Run `mise tree-check config/llm/pi`.

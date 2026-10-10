@@ -29,7 +29,7 @@ function deniedOutput(script: string): string {
  * These tests spawn `sandbox-exec`, so the darwin sandbox has to be available to
  * *this* process. It is not when the suite runs inside the confined shell — a
  * nested `sandbox_apply` is refused — so the suite skips there instead of failing.
- * That keeps `mise pi-check` usable from `bash_readonly`.
+ * That keeps `mise tree-check config/llm/pi` usable from `bash_readonly`.
  */
 function nestable(): boolean {
   if (process.platform !== "darwin" || !existsSync(SANDBOX_EXEC)) return false;

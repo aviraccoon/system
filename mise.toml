@@ -42,52 +42,34 @@ run = "fd -e nix -X nixfmt --check"
 
 [tasks.check]
 description = "Run checks"
-depends = ["fmt-check", "pi-check", "mcp-check", "harvest-check"]
+depends = ["fmt-check", "biome-check", "tree-check"]
 
-[tasks.pi-check]
-description = "Biome config/llm, then type-check and test the pi extensions"
+[tasks.biome-check]
+description = "Lint and format-check the TypeScript trees (biome.json includes)"
+run = "biome check"
+
+[tasks.biome-fmt]
+description = "Biome-format the TypeScript trees"
+run = "biome check --write"
+
+[tasks.tree-check]
+description = "Type-check and test the TypeScript trees (optional arg: one directory)"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-echo "==> biome check"
-biome check config/llm
-cd config/llm/pi
-echo "==> tsc --noEmit"
-tsc --noEmit
-echo "==> bun test"
-bun test
-"""
-
-[tasks.pi-fmt]
-description = "Biome-format the config/llm tree"
-run = "biome check --write config/llm"
-
-[tasks.mcp-check]
-description = "Lint and test MCP servers"
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-cd config/llm/mcp/web-search
-echo "==> biome check"
-biome check .
-echo "==> tsc --noEmit"
-tsc --noEmit
-echo "==> bun test"
-bun test
-"""
-
-[tasks.harvest-check]
-description = "Lint and test harvest CLI"
-run = """
-#!/usr/bin/env bash
-set -euo pipefail
-cd config/cli/harvest
-echo "==> biome check"
-biome check .
-echo "==> tsc --noEmit"
-tsc --noEmit
-echo "==> bun test"
-bun test
+if [ -n "${1:-}" ]; then
+  trees="$1"
+else
+  # Every tree with a tsconfig gets its own tsc scope; bun-types resolves from the root.
+  trees=$(fd -t f -g 'tsconfig.json' config | xargs -n1 dirname | sort)
+fi
+[ -n "$trees" ] || { echo "no TypeScript trees found under config/" >&2; exit 1; }
+for dir in $trees; do
+  echo "==> $dir: tsc --noEmit"
+  (cd "$dir" && tsc --noEmit)
+  echo "==> $dir: bun test"
+  (cd "$dir" && bun test)
+done
 """
 
 [tasks.nix-diff]
