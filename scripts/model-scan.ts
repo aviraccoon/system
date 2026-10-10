@@ -13,7 +13,8 @@
  *   - OpenRouter /api/v1/models (public) + /api/v1/endpoints/zdr (global ZDR
  *     endpoint catalog: per-provider pricing and live status) + /api/v1/models/user
  *     (account-filtered ZDR model list)
- *   - Artificial Analysis /api/v2/data/llms/models (benchmarks, speed)
+ *   - Artificial Analysis /api/v2/language/models/free (benchmarks, speed; the
+ *     free shape, which serves every key tier — the Pro list 403s a free key)
  *   - oMLX admin API (local MLX models, HF search)
  *   - ~/.pi/agent/models.json (current pi config)
  *
@@ -58,16 +59,18 @@ interface ORModel {
   };
 }
 
+/** Free-shape Artificial Analysis model (`/api/v2/language/models/free`). */
 interface AAModel {
-  id: string;
   name: string;
   slug: string;
   release_date: string | null;
-  model_creator: { id: string; name: string; slug: string };
+  model_creator: { id: string; name: string } | null;
   evaluations: Record<string, number | null>;
-  pricing: { price_1m_blended_3_to_1: number; price_1m_input_tokens: number; price_1m_output_tokens: number };
-  median_output_tokens_per_second: number | null;
-  median_time_to_first_token_seconds: number | null;
+  pricing: { price_1m_input_tokens: number | null };
+  performance: {
+    median_output_tokens_per_second: number | null;
+    median_time_to_first_token_seconds: number | null;
+  };
 }
 
 interface PiProvider {
@@ -112,8 +115,6 @@ interface JoinedModel {
   aaIntel?: number;
   aaSpeed?: number;
   aaLatency?: number;
-  aaMmluPro?: number;
-  aaLiveCodeBench?: number;
   creator: string;
 }
 
@@ -162,8 +163,8 @@ ${BOLD}OPTIONS${RESET}
 ${BOLD}DATA SOURCES${RESET}
   OpenRouter    /api/v1/models (public) + /api/v1/endpoints/zdr (global ZDR
                 endpoint pricing) + /api/v1/models/user (account ZDR filter)
-  AA            /api/v2/data/llms/models (benchmarks, speed, pricing) — full
-                evaluation suite documented at https://artificialanalysis.ai/api-reference
+  AA            /api/v2/language/models/free (benchmarks, speed, pricing) —
+                free-tier shape, documented at https://artificialanalysis.ai/data-api/docs
   oMLX          Admin API at localhost:8124 (local MLX models, HF search)
   pi.nix        ~/.pi/agent/models.json (current config for drift check)
 `.trim(),
@@ -275,19 +276,42 @@ async function fetchORUserModels(key: string): Promise<Set<string>> {
   return new Set(ids);
 }
 
+/** Free-shape list: headline indices, medians, and input pricing — all this script
+ * reads. The Pro list endpoint 403s a free key, and `/free` serves the same free
+ * shape to every tier; results page 200 at a time. */
 async function fetchAAModels(key: string): Promise<AAModel[]> {
-  const cached = readCache<AAModel[]>("aa-models");
+  const cached = readCache<AAModel[]>("aa-models-free");
   if (cached) {
     if (!modeQuiet) process.stderr.write(`${DIM}Using cached Artificial Analysis benchmarks${RESET}\n`);
     return cached;
   }
   if (!modeQuiet) process.stderr.write(`${DIM}Fetching Artificial Analysis benchmarks...${RESET}\n`);
-  const res = await fetch("https://artificialanalysis.ai/api/v2/data/llms/models", {
-    headers: { "x-api-key": key },
-  });
-  const data = (await res.json()) as { data: AAModel[] };
-  writeCache("aa-models", data.data);
-  return data.data;
+  const models: AAModel[] = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const res = await fetch(`https://artificialanalysis.ai/api/v2/language/models/free?page=${page}`, {
+      headers: { "x-api-key": key },
+    });
+    if (!res.ok) {
+      // The error body is JSON when the API answers, but a proxy page is not.
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(`Artificial Analysis API ${res.status}${err.error ? `: ${err.error}` : ""}`);
+    }
+    const body = (await res.json()) as { data?: AAModel[]; pagination?: { total_pages: number } };
+    // A malformed 200 must not be cached as a short or empty list.
+    if (!Array.isArray(body.data) || body.data.length === 0) {
+      throw new Error(`Artificial Analysis API: no models on page ${page}`);
+    }
+    const pages = body.pagination?.total_pages;
+    if (typeof pages !== "number" || !Number.isInteger(pages) || pages < 1) {
+      throw new Error(`Artificial Analysis API: bad pagination on page ${page}`);
+    }
+    models.push(...body.data);
+    totalPages = pages;
+  } while (page++ < totalPages);
+  writeCache("aa-models-free", models);
+  return models;
 }
 
 function loadPiConfig(): PiModelsFile | null {
@@ -298,15 +322,22 @@ function loadPiConfig(): PiModelsFile | null {
 
 // ── Join logic ──
 
+/** OR-style namespace guessed from an AA creator name ("Z AI" -> "z-ai"), for
+ * findORModel's exact-id lookup. The V2 free shape dropped the creator slug,
+ * and OR namespaces disagree with creator names anyway (meta vs meta-llama), so
+ * it is only a preference — the coding-index match carries the misses. */
+function creatorNamespace(name: string | undefined): string {
+  return (name ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
+}
+
 function buildAALookup(aaModels: AAModel[]): Map<string, AAModel> {
   const lookup = new Map<string, AAModel>();
   for (const m of aaModels) {
     // Index by slug (e.g. "deepseek-v4-flash")
     lookup.set(m.slug, m);
-    // Also index by "creator/slug" pattern
-    if (m.model_creator?.slug) {
-      lookup.set(`${m.model_creator.slug}/${m.slug}`, m);
-    }
   }
   return lookup;
 }
@@ -314,14 +345,7 @@ function buildAALookup(aaModels: AAModel[]): Map<string, AAModel> {
 function joinORWithAA(orModel: ORModel, aaLookup: Map<string, AAModel>): AAModel | undefined {
   const parts = orModel.id.split("/");
   const slug = (parts.length > 1 ? parts[parts.length - 1] : orModel.id) ?? orModel.id;
-  const normalized = slug.replace(/\./g, "-");
-  const creatorPart = parts[0] ?? "";
-  return (
-    aaLookup.get(slug) ??
-    aaLookup.get(orModel.id) ??
-    aaLookup.get(normalized) ??
-    aaLookup.get(parts.length > 1 ? `${creatorPart}/${normalized}` : normalized)
-  );
+  return aaLookup.get(slug) ?? aaLookup.get(slug.replace(/\./g, "-"));
 }
 
 /** OR model for an AA entry. The bare creator/slug lookup can land on the
@@ -330,14 +354,15 @@ function joinORWithAA(orModel: ORModel, aaLookup: Map<string, AAModel>): AAModel
  * first, then a unique match anywhere, since AA and OR disagree on some
  * namespaces (meta vs meta-llama, xai vs x-ai). Direct lookup is the fallback. */
 function findORModel(bm: AAModel, orLookup: Map<string, ORModel>): ORModel | undefined {
-  const direct = orLookup.get(`${bm.model_creator.slug}/${bm.slug}`) ?? orLookup.get(bm.slug) ?? orLookup.get(bm.name);
+  const creator = creatorNamespace(bm.model_creator?.name);
+  const direct = orLookup.get(`${creator}/${bm.slug}`) ?? orLookup.get(bm.slug) ?? orLookup.get(bm.name);
   const coding = bm.evaluations?.artificial_analysis_coding_index;
   if (coding == null || direct?.benchmarks?.artificial_analysis?.coding_index === coding) return direct;
   let unique: ORModel | undefined;
   let ambiguous = false;
   for (const m of orLookup.values()) {
     if (m.benchmarks?.artificial_analysis?.coding_index !== coding) continue;
-    if (m.id.split("/")[0] === bm.model_creator.slug) return m;
+    if (creator && m.id.split("/")[0] === creator) return m;
     if (unique && unique.id !== m.id) ambiguous = true;
     else unique ??= m;
   }
@@ -350,12 +375,12 @@ function findORModel(bm: AAModel, orLookup: Map<string, ORModel>): ORModel | und
 function findAARelease(orModel: ORModel, aaModels: AAModel[], aaLookup: Map<string, AAModel>): AAModel | undefined {
   const direct = joinORWithAA(orModel, aaLookup);
   const coding = orModel.benchmarks?.artificial_analysis?.coding_index;
-  if (coding == null || direct?.evaluations?.artificial_analysis_coding_index === coding) return direct;
+  const creatorId = direct?.model_creator?.id;
+  if (coding == null || creatorId == null || direct?.evaluations?.artificial_analysis_coding_index === coding) {
+    return direct;
+  }
   for (const m of aaModels) {
-    if (
-      m.model_creator?.slug === direct?.model_creator?.slug &&
-      m.evaluations?.artificial_analysis_coding_index === coding
-    ) {
+    if (m.model_creator?.id === creatorId && m.evaluations?.artificial_analysis_coding_index === coding) {
       return m;
     }
   }
@@ -365,9 +390,9 @@ function findAARelease(orModel: ORModel, aaModels: AAModel[], aaLookup: Map<stri
 /** Benchmarks for one model. OR embeds AA's index for the exact release, while
  * the AA API keeps a family's newest release under the bare slug. So the
  * embedded value wins; the slug join is the fallback and the only source of
- * speed/latency and the extra evaluations — and when the bare slug has moved
- * to a newer release, the join's numbers describe that release, so they are
- * dropped rather than shown on a row scored for the pinned one. */
+ * speed/latency — and when the bare slug has moved to a newer release, the
+ * join's numbers describe that release, so they are dropped rather than shown
+ * on a row scored for the pinned one. */
 function benchmarksFor(
   m: ORModel,
   aaLookup: Map<string, AAModel>,
@@ -376,8 +401,6 @@ function benchmarksFor(
   intel?: number;
   speed?: number;
   latency?: number;
-  mmluPro?: number;
-  liveCodeBench?: number;
 } {
   const embedded = m.benchmarks?.artificial_analysis;
   const aa = joinORWithAA(m, aaLookup);
@@ -387,10 +410,8 @@ function benchmarksFor(
   return {
     coding: embedded?.coding_index ?? joined?.evaluations?.artificial_analysis_coding_index ?? undefined,
     intel: embedded?.intelligence_index ?? joined?.evaluations?.artificial_analysis_intelligence_index ?? undefined,
-    speed: joined?.median_output_tokens_per_second ?? undefined,
-    latency: joined?.median_time_to_first_token_seconds ?? undefined,
-    mmluPro: joined?.evaluations?.mmlu_pro ?? undefined,
-    liveCodeBench: joined?.evaluations?.livecodebench ?? undefined,
+    speed: joined?.performance?.median_output_tokens_per_second ?? undefined,
+    latency: joined?.performance?.median_time_to_first_token_seconds ?? undefined,
   };
 }
 
@@ -820,8 +841,6 @@ async function discover(): Promise<void> {
       aaIntel: b.intel,
       aaSpeed: b.speed,
       aaLatency: b.latency,
-      aaMmluPro: b.mmluPro,
-      aaLiveCodeBench: b.liveCodeBench,
       creator: m.id.split("/")[0] ?? "",
     });
   }
@@ -1102,14 +1121,14 @@ async function drift(): Promise<void> {
         // Check for newer/better models from same creator
         const currentAa = findAARelease(orModel, aaModels, aaLookup);
         if (currentAa?.model_creator) {
-          const currentCreator = currentAa.model_creator.slug;
+          const currentCreator = currentAa.model_creator.id;
           const currentCoding = b.coding ?? 0;
           const currentDate = currentAa.release_date;
 
           const betterModels = aaModels
             .filter(
               (m) =>
-                m.model_creator.slug === currentCreator &&
+                m.model_creator?.id === currentCreator &&
                 (m.evaluations.artificial_analysis_coding_index ?? 0) > currentCoding &&
                 (m.release_date ?? "") > (currentDate ?? ""),
             )
@@ -1122,9 +1141,13 @@ async function drift(): Promise<void> {
 
           for (const bm of betterModels) {
             const orMatch = findORModel(bm, orLookup);
-            const price = orMatch
-              ? fmtPrice(parsePrice(orMatch.pricing.prompt))
-              : fmtPrice(bm.pricing.price_1m_input_tokens);
+            const aaPrice = bm.pricing.price_1m_input_tokens;
+            let price = `${DIM}--${RESET}`;
+            if (orMatch) {
+              price = fmtPrice(parsePrice(orMatch.pricing.prompt));
+            } else if (aaPrice != null) {
+              price = fmtPrice(aaPrice);
+            }
             console.log(
               `    ${YELLOW}Better?${RESET} ${bm.name} (coding=${bm.evaluations.artificial_analysis_coding_index}, ${price}/M in)`,
             );
