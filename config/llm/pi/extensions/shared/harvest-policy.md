@@ -11,3 +11,4 @@ Time tracking: the `harvest` CLI.
 - `harvest audit [YYYY-MM]` — month scan: missing/URL-less notes, whole-hour durations
 - `harvest projects` · `harvest tasks <project>` · `harvest alias list`
 - `harvest --help` for more (reports: today, week, month)
+- Session sizing (wrap-up): `session-span --project <session-dir fragment> [--date today]` — pi session span, idle gaps, and active time as sizing input.

@@ -300,6 +300,10 @@ in
     ".local/bin/harvest".source =
       config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/system/config/cli/harvest/harvest.ts";
 
+    # session-span CLI (pi session measurement for harvest sizing; bun-run TS source)
+    ".local/bin/session-span".source =
+      config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/system/config/cli/session-span/session-span.ts";
+
     # npm: disable postinstall/preinstall scripts by default.
     # Prevents malicious or noisy lifecycle scripts from running during `npm install`.
     # Packages that genuinely need their scripts (e.g. Prisma, native modules) should
