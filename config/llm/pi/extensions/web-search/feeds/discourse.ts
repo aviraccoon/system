@@ -28,14 +28,15 @@
  * (slug-only URLs resolve via site.json), /search?q=... (Discourse search filters:
  * #category, @user, in:title, order:latest, status:...), /latest /new /unread /top
  * site-wide listings, /categories index, /raw/<topic_id>[/<post_number>] (post
- * source as typed, text/plain). Renders carry /t/ paths + a search hint so an
- * agent can chain fetches without knowing the API.
+ * source as typed, text/plain), /uploads/... files (downloaded to a temp path).
+ * Renders carry /t/ paths + a search hint so an agent can chain fetches without
+ * knowing the API.
  */
 
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { extname, join } from "node:path";
 import type { FeedContext, FeedProvider, FeedResult } from "./types";
 
 // ── URL handling ──
@@ -63,6 +64,14 @@ const SITELIST_RE = /^https?:\/\/[^/]+\/(?:latest|new|unread|top)(?:\/[a-z0-9-]+
  * the server caps one page at 100 posts and emits no "more" marker. */
 const RAW_RE = /^https?:\/\/[^/]+\/raw\/\d+(?:\/\d+)?\/?$/i;
 
+/** Uploaded-file URLs: /uploads/short-url/<base62>[.ext], /secure-uploads/<...>,
+ * /secure-media-uploads/<...>, typed dirs /uploads/<site>/(test_<n>/)?(original|_optimized)/<...>,
+ * and the legacy /uploads/<site>/[<id>/]<sha> forms (sha = 16-40 hex, so a plain
+ * /uploads/photo.jpg page stays a page). Cooked HTML links at these; a browser
+ * fetch hits the login wall on gated forums, so the provider downloads them. */
+const UPLOAD_RE =
+  /^https?:\/\/[^/]+\/(?:uploads\/(?:short-url\/|[^/?]+\/(?:test_\d+\/)?(?:original|_?optimized)\/|[^/?]+\/(?:\d+\/)?[0-9a-f]{16,40}(?:[./?#]|$))|secure-uploads\/|secure-media-uploads\/)/i;
+
 export function matches(url: string): boolean {
   const noQuery = url.split(/[?#]/)[0];
   return (
@@ -71,11 +80,12 @@ export function matches(url: string): boolean {
     SEARCH_RE.test(noQuery) ||
     CATEGORIES_RE.test(noQuery) ||
     SITELIST_RE.test(noQuery) ||
-    RAW_RE.test(noQuery)
+    RAW_RE.test(noQuery) ||
+    UPLOAD_RE.test(noQuery)
   );
 }
 
-export type DiscourseKind = "topic" | "category" | "search" | "sitelist" | "categories" | "raw";
+export type DiscourseKind = "topic" | "category" | "search" | "sitelist" | "categories" | "raw" | "upload";
 
 /** Which Discourse view a URL points at. */
 export function classify(url: string): DiscourseKind {
@@ -84,6 +94,7 @@ export function classify(url: string): DiscourseKind {
   if (CATEGORIES_RE.test(noQuery)) return "categories";
   if (SITELIST_RE.test(noQuery)) return "sitelist";
   if (RAW_RE.test(noQuery)) return "raw";
+  if (UPLOAD_RE.test(noQuery)) return "upload";
   return CATEGORY_RE.test(noQuery) ? "category" : "topic";
 }
 
@@ -324,9 +335,12 @@ function mediaMarkdown(kind: "video" | "audio", block: string, origin: string | 
     attrValue(block, "data-orig-src"),
     anchorHref(block),
   );
+  // The file comes first and says so: when the poster led, agents grabbed its
+  // URL for the video and swapped the extension (Discourse serves by sha1, so a
+  // thumbnail hash renamed .mp4 returns a valid PNG and the mistake goes unseen).
   const lines: string[] = [];
-  if (thumbnail) lines.push(`![${kind} thumbnail](${absoluteUrl(thumbnail, origin)})`);
-  if (src) lines.push(`[${kind}: ${urlName(src)}](${absoluteUrl(src, origin)})`);
+  if (src) lines.push(`[${kind} file: ${urlName(src)}](${absoluteUrl(src, origin)})`);
+  if (thumbnail) lines.push(`![${kind} poster (still image)](${absoluteUrl(thumbnail, origin)})`);
   return `\n${lines.join("\n")}\n`;
 }
 
@@ -685,11 +699,14 @@ export const discourseProvider: FeedProvider = {
     "ALWAYS use web_fetch for forum/Discourse URLs, never curl or scrape. " +
     "Discourse forums (any host): /t/<slug>/<id> topics, /c/<slugs>[/<id>][/l/<filter>] boards, " +
     "/categories index, /latest|/new|/unread|/top listings, /search?q=... (filters: #category, @user, " +
-    "in:title, order:latest, status:...), /raw/<id>[/<post>] post source — all render as markdown.",
+    "in:title, order:latest, status:...), /raw/<id>[/<post>] post source — all render as structured " +
+    "markdown; upload files (/uploads/..., /secure-uploads/...) download to a temp path.",
   async fetch(url, ctx: FeedContext): Promise<FeedResult> {
+    const kind = classify(url);
+    if (kind === "upload") return fetchUpload(url, ctx);
     const http = ctx.httpFetch;
     if (!http) throw new Error("discourse: no httpFetch transport");
-    switch (classify(url)) {
+    switch (kind) {
       case "category":
         return fetchCategory(url, http);
       case "search":
@@ -782,6 +799,43 @@ async function fetchRaw(url: string, http: HttpFetch): Promise<FeedResult> {
     title: m[2] ? `Raw post #${m[2]} (topic ${m[1]})` : `Raw topic ${m[1]}`,
     content: parts.join("\n\n"),
   };
+}
+
+/** The URL's short basename, with the saved file's extension when the host
+ * corrected it — a `.mp4` URL that served a PNG reports `….png`. */
+function savedDisplayName(url: string, path: string | null): string {
+  const name = urlName(new URL(url).pathname);
+  const ext = path ? extname(path) : "";
+  if (!ext) return name;
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? `${name.slice(0, dot)}${ext}` : `${name}${ext}`;
+}
+
+/** Uploaded-file shape: download with the same auth the topic fetch uses and
+ * hand the agent a temp path. The browser fallback can't fetch these — a gated
+ * upload comes back as a login wall or an error page; gating stays an
+ * implementation detail, so the output never mentions sessions, keys, or logins. */
+async function fetchUpload(url: string, ctx: FeedContext): Promise<FeedResult> {
+  const save = ctx.saveUrl;
+  if (!save) throw new Error("discourse: no saveUrl transport");
+  const saved = await save(url, { headers: authHeadersFor(url) });
+  if (saved.status >= 400) throw new Error(`discourse: upload returned HTTP ${saved.status}`);
+
+  const name = savedDisplayName(url, saved.path);
+  const size = saved.size > 0 ? `, ${formatSize(saved.size)}` : "";
+  const type = saved.contentType || "unknown type";
+  if (!saved.path) {
+    const why = saved.reason === "too-large" ? "over the download cap" : "could not be saved";
+    return { url, title: name, content: `${name} — ${type}${size}, ${why}.` };
+  }
+  return { url, title: name, content: `File saved: ${saved.path} (${type}${size})` };
+}
+
+/** Human byte size: 486 KB, 1.2 MB, 940 B. */
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const kb = bytes / 1024;
+  return kb < 1024 ? `${Math.round(kb)} KB` : `${(kb / 1024).toFixed(1)} MB`;
 }
 
 async function fetchCategory(url: string, http: HttpFetch): Promise<FeedResult> {

@@ -210,14 +210,15 @@ export default function (pi: ExtensionAPI) {
     name: "web_fetch",
     label: "Web Fetch",
     description:
-      "Fetch a web page and extract its text content. Uses a headless browser that handles JavaScript rendering and bot detection. Use after web_search to read a specific result page." +
+      "Fetch a web page or a file. Pages return markdown; file URLs (video, image, PDF, attachment) download to a temp path for other tools (read, ffmpeg, image analysis). Uses a headless browser that handles JavaScript rendering and bot detection. Use after web_search to read a specific result page." +
       (isSubagent
         ? ""
         : " For complex interactions (clicking, filling forms, screenshots), use bash with `agent-browser` CLI directly.") +
       `\n\nStructured feeds (fetched as clean markdown, no page chrome):\n${feedHints()}`,
-    promptSnippet: "web_fetch: Fetch a web page and extract its text content. Parameters: url (string, required)",
+    promptSnippet: "web_fetch: Fetch a page or file by URL. Parameters: url (string, required)",
     promptGuidelines: [
       "Use web_fetch to read pages found via web_search. It handles JS-rendered pages and bot detection.",
+      "To get a file behind a link — a video, screenshot, PDF, or attachment — call web_fetch on the file URL itself rather than downloading it with bash.",
       ...(isSubagent
         ? []
         : [

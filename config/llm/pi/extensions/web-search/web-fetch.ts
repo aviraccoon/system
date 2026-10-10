@@ -8,12 +8,15 @@
 
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, extname, join } from "node:path";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { USER_AGENT } from "./feeds/http";
 import { tryFeed } from "./feeds/registry";
-import type { FeedContext, HttpFetchOptions } from "./feeds/types";
+import type { FeedContext, HttpFetchOptions, SavedFile } from "./feeds/types";
 
 export interface FetchResult {
   url: string;
@@ -255,6 +258,7 @@ function buildFeedContext(baseArgs: string[], signal?: AbortSignal): FeedContext
   return {
     httpFetch: (target, opts) => httpFetch(target, { ...opts, signal: opts?.signal ?? signal }),
     browserFetch: async (target, s) => browserFetch(baseArgs, target, s ?? signal),
+    saveUrl: (target, opts) => saveAttachmentToTmp(target, { ...opts, signal: opts?.signal ?? signal }),
   };
 }
 
@@ -459,5 +463,170 @@ export async function spillToTmp(url: string, content: string): Promise<string |
     return path;
   } catch {
     return null;
+  }
+}
+
+// ── Attachment download ──
+
+/** Largest response saveUrl writes; bigger ones report their size instead. */
+const MAX_ATTACHMENT_BYTES = 100 * 1024 * 1024;
+
+/** Download deadline; a hung transfer would otherwise hold the fetch queue. */
+const ATTACHMENT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Sentinel the counting transform rejects with when the cap is exceeded. */
+const CAP_EXCEEDED = "attachment over cap";
+
+/** Content-type → extension, for the kinds uploads carry. */
+const EXTENSIONS_BY_CONTENT_TYPE: Record<string, string> = {
+  "image/png": ".png",
+  "image/jpeg": ".jpg",
+  "image/gif": ".gif",
+  "image/webp": ".webp",
+  "video/mp4": ".mp4",
+  "video/quicktime": ".mov",
+  "video/webm": ".webm",
+  "audio/mpeg": ".mp3",
+  "audio/mp4": ".m4a",
+  "audio/ogg": ".ogg",
+  "application/pdf": ".pdf",
+  "application/zip": ".zip",
+  "application/json": ".json",
+  "text/plain": ".txt",
+  "text/markdown": ".md",
+  "text/csv": ".csv",
+  "text/html": ".html",
+};
+
+/** Broad extension families: a URL extension survives when it matches the
+ * content type's family (a `.jpeg` served as image/jpeg stays `.jpeg`) and is
+ * replaced when it contradicts it (a `.mp4` served as image/png becomes .png),
+ * so a saved name never claims a kind its bytes don't have. */
+const EXTENSION_FAMILIES: Record<string, string> = {
+  png: "image",
+  jpg: "image",
+  jpeg: "image",
+  gif: "image",
+  webp: "image",
+  heic: "image",
+  mp4: "video",
+  mov: "video",
+  webm: "video",
+  m4v: "video",
+  mp3: "audio",
+  m4a: "audio",
+  ogg: "audio",
+  wav: "audio",
+  pdf: "doc",
+  zip: "doc",
+  json: "text",
+  txt: "text",
+  md: "text",
+  csv: "text",
+  html: "text",
+};
+
+/** Deterministic temp filename for a downloaded attachment: same URL → same
+ * path (re-fetch overwrites), extension taken from the URL path unless the
+ * response content type contradicts it. */
+export function attachmentFilenameForUrl(url: string, contentType?: string): string {
+  let ext = "";
+  let base = url;
+  try {
+    const parsed = new URL(url);
+    const raw = extname(parsed.pathname);
+    if (raw) {
+      parsed.pathname = parsed.pathname.slice(0, -raw.length);
+      base = parsed.toString();
+      ext = raw.replace(/[^a-zA-Z0-9.]/g, "").slice(0, 12);
+    }
+  } catch {
+    // unparseable URL — fall back to no extension
+  }
+  const typed = EXTENSIONS_BY_CONTENT_TYPE[(contentType ?? "").split(";")[0].trim().toLowerCase()];
+  if (typed) {
+    const urlFamily = EXTENSION_FAMILIES[ext.replace(/^\./, "").toLowerCase()];
+    const typedFamily = EXTENSION_FAMILIES[typed.slice(1)];
+    if (!ext || (urlFamily && typedFamily && urlFamily !== typedFamily)) ext = typed;
+  }
+  return `${filenameForUrl(base).replace(/\.md$/, "")}${ext || ".bin"}`;
+}
+
+/** Download a URL and write its body under the temp dir (see FeedContext.saveUrl).
+ * One GET carries type, size, and bytes. The cap is enforced from
+ * content-length when the server sends one, and from the byte count while
+ * streaming otherwise; the server's Content-Disposition name is ignored so the
+ * path stays deterministic from the URL alone. `timeoutMs` is a test seam over
+ * the download deadline. */
+export async function saveAttachmentToTmp(
+  url: string,
+  opts?: HttpFetchOptions,
+  maxBytes: number = MAX_ATTACHMENT_BYTES,
+  timeoutMs: number = ATTACHMENT_TIMEOUT_MS,
+): Promise<SavedFile> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  opts?.signal?.addEventListener("abort", onAbort, { once: true });
+  // A cancel that landed while the caller was queued has already fired its event.
+  if (opts?.signal?.aborted) onAbort();
+  try {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        headers: { "User-Agent": USER_AGENT, "Accept-Language": "en-US,en;q=0.9", ...opts?.headers },
+        signal: controller.signal,
+      });
+    } catch (err) {
+      // A deadline that fires before the response headers reports as a declined
+      // save; a caller cancel propagates.
+      if (controller.signal.aborted && !opts?.signal?.aborted) {
+        return { status: 0, path: null, reason: "write-failed", contentType: "", size: 0 };
+      }
+      throw err;
+    }
+    const contentType = res.headers.get("content-type") ?? "";
+    const declared = Number(res.headers.get("content-length") ?? "");
+    const size = Number.isFinite(declared) && declared > 0 ? declared : 0;
+
+    if (res.status >= 400) {
+      await res.body?.cancel();
+      return { status: res.status, path: null, contentType, size };
+    }
+    if (size > maxBytes) {
+      await res.body?.cancel();
+      return { status: res.status, path: null, reason: "too-large", contentType, size };
+    }
+
+    const path = join(SPILL_DIR, attachmentFilenameForUrl(url, contentType));
+    let read = 0;
+    const capped = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        read += chunk.length;
+        callback(read > maxBytes ? new Error(CAP_EXCEEDED) : null, chunk);
+      },
+    });
+    try {
+      await mkdir(SPILL_DIR, { recursive: true });
+      await pipeline(Readable.fromWeb(res.body as never), capped, createWriteStream(path));
+    } catch (err) {
+      await rm(path, { force: true, recursive: true });
+      if (opts?.signal?.aborted) throw err;
+      if (err instanceof Error && err.message === CAP_EXCEEDED) {
+        return { status: res.status, path: null, reason: "too-large", contentType, size: read };
+      }
+      return { status: res.status, path: null, reason: "write-failed", contentType, size: read || size };
+    }
+    // An aborted body can end the stream cleanly instead of erroring (Bun ends it
+    // that way), so the partial file would otherwise report as a complete download.
+    if (controller.signal.aborted) {
+      await rm(path, { force: true, recursive: true });
+      if (opts?.signal?.aborted) throw new DOMException("The operation was aborted.", "AbortError");
+      return { status: res.status, path: null, reason: "write-failed", contentType, size: read || size };
+    }
+    return { status: res.status, path, contentType, size: read };
+  } finally {
+    clearTimeout(timer);
+    opts?.signal?.removeEventListener("abort", onAbort);
   }
 }

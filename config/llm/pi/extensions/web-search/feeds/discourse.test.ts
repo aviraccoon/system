@@ -58,6 +58,18 @@ describe("matches", () => {
     expect(matches("https://forum.example.com/raw/5484/1")).toBe(true);
   });
 
+  test("accepts upload URLs and rejects generic /uploads paths", () => {
+    expect(matches("https://forum.example.com/uploads/default/original/2X/4/abc.mp4")).toBe(true);
+    expect(matches("https://forum.example.com/uploads/default/optimized/2X/4/abc.png")).toBe(true);
+    expect(matches("https://forum.example.com/uploads/short-url/98kPJYQAOwRTtZY2uGtzSRXn2T8.mp4")).toBe(true);
+    expect(matches("https://forum.example.com/secure-uploads/original/3X/c/b/test.mp4")).toBe(true);
+    expect(matches("https://forum.example.com/uploads/default/_optimized/2X/4/abc.png")).toBe(true);
+    expect(matches("https://forum.example.com/uploads/default/40b610b0aa90cfcf.png")).toBe(true);
+    expect(matches("https://forum.example.com/uploads/default/368/40b610b0aa90cfcf.txt")).toBe(true);
+    expect(matches("https://forum.example.com/uploads/photo.jpg")).toBe(false);
+    expect(matches("https://forum.example.com/uploads/default/abc")).toBe(false);
+  });
+
   test("accepts category URLs", () => {
     expect(matches("https://forum.example.org/c/7/l/latest?board=default")).toBe(true);
     expect(matches("https://forum.example.org/c/project-x/21?ascending=false&order=posts")).toBe(true);
@@ -101,6 +113,7 @@ describe("classify / categoryPath / json URLs", () => {
     expect(classify("https://f.io/latest")).toBe("sitelist");
     expect(classify("https://f.io/top/weekly")).toBe("sitelist");
     expect(classify("https://f.io/raw/5484/1")).toBe("raw");
+    expect(classify("https://f.io/uploads/short-url/x.pdf")).toBe("upload");
   });
 
   test("categoryPath keeps filter, strips query", () => {
@@ -227,30 +240,30 @@ describe("cookedToText", () => {
     );
   });
 
-  test("video upload placeholders become a thumbnail plus a video link", () => {
+  test("video upload placeholders become a file link plus a poster image", () => {
     const cooked =
       '<p>nav demo</p><p></p><div class="video-placeholder-container" ' +
       'data-video-src="/uploads/default/original/2X/4/clip.mp4" ' +
       'data-thumbnail-src="https://f.io/uploads/default/original/2X/4/poster.png" ' +
       'data-video-base62-sha1="abc.mp4">\n  </div><p></p>';
     expect(cookedToText(cooked, "https://f.io")).toBe(
-      "nav demo\n\n![video thumbnail](https://f.io/uploads/default/original/2X/4/poster.png)\n" +
-        "[video: clip.mp4](https://f.io/uploads/default/original/2X/4/clip.mp4)",
+      "nav demo\n\n[video file: clip.mp4](https://f.io/uploads/default/original/2X/4/clip.mp4)\n" +
+        "![video poster (still image)](https://f.io/uploads/default/original/2X/4/poster.png)",
     );
   });
 
   test("unresolved uploads fall back past the /404 sentinel", () => {
     const cooked =
       '<div class="video-placeholder-container" data-video-src="/404" data-orig-src="upload://abc123.mp4"></div>';
-    expect(cookedToText(cooked, "https://f.io")).toBe("[video: abc123.mp4](upload://abc123.mp4)");
+    expect(cookedToText(cooked, "https://f.io")).toBe("[video file: abc123.mp4](upload://abc123.mp4)");
   });
 
-  test("inline video keeps its poster and a single link", () => {
+  test("inline video keeps a single file link and its poster", () => {
     const cooked =
       '<div class="video-container"><video width="100%" preload="metadata" controls poster="/uploads/poster.jpg">' +
       '<source src="/uploads/clip.mp4"><a href="/uploads/clip.mp4">/uploads/clip.mp4</a></video></div>';
     expect(cookedToText(cooked, "https://f.io")).toBe(
-      "![video thumbnail](https://f.io/uploads/poster.jpg)\n[video: clip.mp4](https://f.io/uploads/clip.mp4)",
+      "[video file: clip.mp4](https://f.io/uploads/clip.mp4)\n![video poster (still image)](https://f.io/uploads/poster.jpg)",
     );
   });
 
@@ -259,7 +272,7 @@ describe("cookedToText", () => {
       '<p><audio preload="metadata" controls><source src="/secure-uploads/original/3X/c/b/test.mp3">' +
       '<a href="/secure-uploads/original/3X/c/b/test.mp3">/secure-uploads/original/3X/c/b/test.mp3</a></audio></p>';
     expect(cookedToText(cooked, "https://f.io")).toBe(
-      "[audio: test.mp3](https://f.io/secure-uploads/original/3X/c/b/test.mp3)",
+      "[audio file: test.mp3](https://f.io/secure-uploads/original/3X/c/b/test.mp3)",
     );
   });
 
@@ -311,7 +324,7 @@ describe("cookedToText", () => {
         '<video controls><source data-blocked-hotlinked-src="https://cdn.example.com/clip.mp4"></video>',
         "https://f.io",
       ),
-    ).toBe("[video: clip.mp4](https://cdn.example.com/clip.mp4)");
+    ).toBe("[video file: clip.mp4](https://cdn.example.com/clip.mp4)");
   });
 
   test("emoji images collapse to their alt glyph, avatars to nothing", () => {
@@ -1005,5 +1018,84 @@ describe("discourseProvider.fetch (raw source)", () => {
     const { ctx } = ctxWith({ "https://f.io/raw/9/1": { status: 403, text: "" } });
     const res = await discourseProvider.fetch("https://f.io/raw/9/1", ctx);
     expect(res.title).toBe("Login-gated Discourse");
+  });
+});
+
+describe("discourseProvider.fetch (uploads)", () => {
+  function ctxWith(saved: {
+    status: number;
+    path: string | null;
+    reason?: "too-large" | "write-failed";
+    contentType: string;
+    size: number;
+  }) {
+    const calls: { url: string; opts?: { headers?: Record<string, string> } }[] = [];
+    const ctx = {
+      saveUrl: async (url: string, opts?: { headers?: Record<string, string> }) => {
+        calls.push({ url, opts });
+        return saved;
+      },
+    } as never as Parameters<typeof discourseProvider.fetch>[1];
+    return { calls, ctx };
+  }
+
+  test("downloads the file and reports its temp path", async () => {
+    const { calls, ctx } = ctxWith({
+      status: 200,
+      path: "/tmp/pi-web-fetch/f.io-uploads-default-original-2X-4-clip-abcd1234.mp4",
+      contentType: "video/mp4",
+      size: 497376,
+    });
+    const res = await discourseProvider.fetch("https://f.io/uploads/default/original/2X/4/clip.mp4", ctx);
+    expect(res.title).toBe("clip.mp4");
+    expect(res.content).toBe(
+      "File saved: /tmp/pi-web-fetch/f.io-uploads-default-original-2X-4-clip-abcd1234.mp4 (video/mp4, 486 KB)",
+    );
+    // The host passes the resolved auth headers through; f.io has no key entry, so the
+    // set is empty — dropping the second argument entirely fails this assertion.
+    expect(calls).toEqual([{ url: "https://f.io/uploads/default/original/2X/4/clip.mp4", opts: { headers: {} } }]);
+  });
+
+  test("a failed fetch rejects so the browser fallback runs", async () => {
+    const { ctx } = ctxWith({ status: 404, path: null, contentType: "", size: 0 });
+    expect(discourseProvider.fetch("https://f.io/uploads/short-url/abc.pdf", ctx)).rejects.toThrow("HTTP 404");
+  });
+
+  test("a corrected extension follows into the report", async () => {
+    const { ctx } = ctxWith({
+      status: 200,
+      path: "/tmp/pi-web-fetch/f.io-uploads-short-url-clip-abcd1234.png",
+      contentType: "image/png",
+      size: 441225,
+    });
+    const res = await discourseProvider.fetch("https://f.io/uploads/short-url/clip.mp4", ctx);
+    expect(res.title).toBe("clip.png");
+    expect(res.content).toBe(
+      "File saved: /tmp/pi-web-fetch/f.io-uploads-short-url-clip-abcd1234.png (image/png, 431 KB)",
+    );
+  });
+
+  test("a write failure reports a neutral line", async () => {
+    const { ctx } = ctxWith({
+      status: 200,
+      path: null,
+      reason: "write-failed",
+      contentType: "application/pdf",
+      size: 1024,
+    });
+    const res = await discourseProvider.fetch("https://f.io/uploads/short-url/abc.pdf", ctx);
+    expect(res.content).toBe("abc.pdf — application/pdf, 1 KB, could not be saved.");
+  });
+
+  test("an oversized file reports instead of saving", async () => {
+    const { ctx } = ctxWith({
+      status: 200,
+      path: null,
+      reason: "too-large",
+      contentType: "video/mp4",
+      size: 209715200,
+    });
+    const res = await discourseProvider.fetch("https://f.io/uploads/default/original/2X/4/clip.mp4", ctx);
+    expect(res.content).toBe("clip.mp4 — video/mp4, 200.0 MB, over the download cap.");
   });
 });

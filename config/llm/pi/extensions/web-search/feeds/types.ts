@@ -21,6 +21,19 @@ export interface HttpFetchOptions {
   headers?: Record<string, string>;
 }
 
+/** Result of a host-side file download (FeedContext.saveUrl). */
+export interface SavedFile {
+  status: number;
+  /** Absolute path under the host's temp dir, or null when nothing was written. */
+  path: string | null;
+  /** Why nothing was written; absent when path is set. */
+  reason?: "too-large" | "write-failed";
+  /** Response content-type, "" when absent. */
+  contentType: string;
+  /** Bytes written on success; declared or read size otherwise; 0 when unknown. */
+  size: number;
+}
+
 export interface BrowserFetchResult {
   /** Final URL after redirects. */
   url: string;
@@ -41,6 +54,14 @@ export interface FeedContext {
    * feeds that answer without a browser session. Returns raw status + body text.
    */
   httpFetch?: (url: string, opts?: HttpFetchOptions) => Promise<{ status: number; text: string }>;
+  /**
+   * Download a file URL (media, attachments) into the host's temp dir and
+   * return its path. Host-injected so providers carry no fs or size policy;
+   * absent on browser-less hosts. For feed links whose target is a file the
+   * browser path can't fetch — a gated upload comes back as a login wall or a
+   * 404 page.
+   */
+  saveUrl?: (url: string, opts?: HttpFetchOptions) => Promise<SavedFile>;
 }
 
 export interface FeedProvider {
