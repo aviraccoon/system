@@ -50,6 +50,12 @@ describe("matches", () => {
     expect(matches("https://forum.example.com/u/someone")).toBe(false);
     expect(matches("https://forum.example.com/latest-posts")).toBe(false);
     expect(matches("https://forum.example.com/searching")).toBe(false);
+    expect(matches("https://forum.example.com/raw")).toBe(false);
+  });
+
+  test("accepts raw source URLs", () => {
+    expect(matches("https://forum.example.com/raw/5484")).toBe(true);
+    expect(matches("https://forum.example.com/raw/5484/1")).toBe(true);
   });
 
   test("accepts category URLs", () => {
@@ -94,6 +100,7 @@ describe("classify / categoryPath / json URLs", () => {
     expect(classify("https://f.io/categories")).toBe("categories");
     expect(classify("https://f.io/latest")).toBe("sitelist");
     expect(classify("https://f.io/top/weekly")).toBe("sitelist");
+    expect(classify("https://f.io/raw/5484/1")).toBe("raw");
   });
 
   test("categoryPath keeps filter, strips query", () => {
@@ -220,6 +227,93 @@ describe("cookedToText", () => {
     );
   });
 
+  test("video upload placeholders become a thumbnail plus a video link", () => {
+    const cooked =
+      '<p>nav demo</p><p></p><div class="video-placeholder-container" ' +
+      'data-video-src="/uploads/default/original/2X/4/clip.mp4" ' +
+      'data-thumbnail-src="https://f.io/uploads/default/original/2X/4/poster.png" ' +
+      'data-video-base62-sha1="abc.mp4">\n  </div><p></p>';
+    expect(cookedToText(cooked, "https://f.io")).toBe(
+      "nav demo\n\n![video thumbnail](https://f.io/uploads/default/original/2X/4/poster.png)\n" +
+        "[video: clip.mp4](https://f.io/uploads/default/original/2X/4/clip.mp4)",
+    );
+  });
+
+  test("unresolved uploads fall back past the /404 sentinel", () => {
+    const cooked =
+      '<div class="video-placeholder-container" data-video-src="/404" data-orig-src="upload://abc123.mp4"></div>';
+    expect(cookedToText(cooked, "https://f.io")).toBe("[video: abc123.mp4](upload://abc123.mp4)");
+  });
+
+  test("inline video keeps its poster and a single link", () => {
+    const cooked =
+      '<div class="video-container"><video width="100%" preload="metadata" controls poster="/uploads/poster.jpg">' +
+      '<source src="/uploads/clip.mp4"><a href="/uploads/clip.mp4">/uploads/clip.mp4</a></video></div>';
+    expect(cookedToText(cooked, "https://f.io")).toBe(
+      "![video thumbnail](https://f.io/uploads/poster.jpg)\n[video: clip.mp4](https://f.io/uploads/clip.mp4)",
+    );
+  });
+
+  test("audio uploads become a labeled link", () => {
+    const cooked =
+      '<p><audio preload="metadata" controls><source src="/secure-uploads/original/3X/c/b/test.mp3">' +
+      '<a href="/secure-uploads/original/3X/c/b/test.mp3">/secure-uploads/original/3X/c/b/test.mp3</a></audio></p>';
+    expect(cookedToText(cooked, "https://f.io")).toBe(
+      "[audio: test.mp3](https://f.io/secure-uploads/original/3X/c/b/test.mp3)",
+    );
+  });
+
+  test("attachment links and relative hrefs are absolutized", () => {
+    expect(
+      cookedToText('<p><a class="attachment" href="/uploads/short-url/x.pdf">test.pdf</a></p>', "https://f.io"),
+    ).toBe("[test.pdf](https://f.io/uploads/short-url/x.pdf)");
+    expect(cookedToText('<p>tagged <a href="/tag/est-s/37">est-s</a></p>', "https://f.io")).toBe(
+      "tagged [est-s](https://f.io/tag/est-s/37)",
+    );
+  });
+
+  test("relative image srcs are absolutized", () => {
+    expect(
+      cookedToText('<p><img src="/uploads/thumb.png" alt="shot" width="10" height="20"></p>', "https://f.io"),
+    ).toBe("![shot|10x20](https://f.io/uploads/thumb.png)");
+  });
+
+  test("image srcs skip unresolved-upload markers for the original ref", () => {
+    expect(
+      cookedToText('<p><img data-orig-src="upload://abc.png" src="/uploads/real.png" alt="shot"></p>', "https://f.io"),
+    ).toBe("![shot](https://f.io/uploads/real.png)");
+    expect(
+      cookedToText(
+        '<p><img src="/images/transparent.png" data-orig-src="upload://abc.png" alt="cat" width="690" height="313"></p>',
+        "https://f.io",
+      ),
+    ).toBe("![cat|690x313](upload://abc.png)");
+    expect(cookedToText('<p><img src="/404" data-orig-src="upload://abc.png" alt="shot"></p>', "https://f.io")).toBe(
+      "![shot](upload://abc.png)",
+    );
+  });
+
+  test("unresolved attachment anchors keep their original ref", () => {
+    expect(
+      cookedToText(
+        '<p><a class="attachment" href="/404" data-orig-href="upload://o8iobpLcW3WSFvVH7YQmyGlKmGM.pdf">test.pdf</a></p>',
+        "https://f.io",
+      ),
+    ).toBe("[test.pdf](upload://o8iobpLcW3WSFvVH7YQmyGlKmGM.pdf)");
+  });
+
+  test("blocked hotlinked media falls back to the blocked src", () => {
+    expect(
+      cookedToText('<p><img data-blocked-hotlinked-src="https://ext.example/x.png" alt="ext"></p>', "https://f.io"),
+    ).toBe("![ext](https://ext.example/x.png)");
+    expect(
+      cookedToText(
+        '<video controls><source data-blocked-hotlinked-src="https://cdn.example.com/clip.mp4"></video>',
+        "https://f.io",
+      ),
+    ).toBe("[video: clip.mp4](https://cdn.example.com/clip.mp4)");
+  });
+
   test("emoji images collapse to their alt glyph, avatars to nothing", () => {
     expect(
       cookedToText(
@@ -308,6 +402,22 @@ describe("renderDiscourse", () => {
   test("notes unfetched posts when rendered < total", () => {
     const md = renderDiscourse(topic, "forum.example.com", 2);
     expect(md).toContain("2 more posts not fetched");
+  });
+
+  test("absolutizes relative links in post bodies", () => {
+    const md = renderDiscourse(
+      {
+        title: "Links",
+        posts_count: 1,
+        post_stream: {
+          stream: [1],
+          posts: [{ post_number: 1, username: "zed", cooked: '<p>see <a href="/t/x/9">the thread</a></p>' }],
+        },
+      },
+      "forum.example.com",
+      1,
+    );
+    expect(md).toContain("[the thread](https://forum.example.com/t/x/9)");
   });
 
   test("shows post date, edit date, and accepted-answer marker", () => {
@@ -511,6 +621,10 @@ describe("blurbText", () => {
     expect(blurbText("<b>bold</b> &amp; <i>text</i>\nmore   spaces")).toBe("bold & text more spaces");
     expect(blurbText(undefined)).toBe("");
     expect(blurbText("x".repeat(250)).length).toBe(200);
+  });
+
+  test("absolutizes links when given the forum origin", () => {
+    expect(blurbText('<p>see <a href="/x">x</a></p>', "https://f.io")).toBe("see [x](https://f.io/x)");
   });
 });
 
@@ -816,5 +930,80 @@ describe("discourseProvider.fetch (topics)", () => {
     const res = await discourseProvider.fetch("https://f.example/t/s/1", ctx);
     expect(res.content).toContain("two");
     expect(res.content).toContain("1 more posts not fetched");
+  });
+});
+
+describe("discourseProvider.fetch (raw source)", () => {
+  function ctxWith(pages: Record<string, { status: number; text: string }>) {
+    const calls: string[] = [];
+    const http = async (url: string) => {
+      calls.push(url);
+      return pages[url] ?? { status: 404, text: "" };
+    };
+    return { calls, ctx: { httpFetch: http } as never as Parameters<typeof discourseProvider.fetch>[1] };
+  }
+
+  test("returns the raw markdown verbatim, titled by post", async () => {
+    const { ctx, calls } = ctxWith({
+      "https://f.io/raw/5484/1": { status: 200, text: "hello\n\n![clip|video](upload://abc.mp4)\n" },
+    });
+    const res = await discourseProvider.fetch("https://f.io/raw/5484/1", ctx);
+    expect(res.title).toBe("Raw post #1 (topic 5484)");
+    expect(res.content).toBe("hello\n\n![clip|video](upload://abc.mp4)");
+    expect(calls).toEqual(["https://f.io/raw/5484/1"]);
+  });
+
+  test("whole-topic raw keeps the server's post headers", async () => {
+    const { ctx } = ctxWith({
+      "https://f.io/raw/5484": { status: 200, text: "u1 | 2026-10-08 19:50:40 UTC | #1\n\nbody\n" },
+    });
+    const res = await discourseProvider.fetch("https://f.io/raw/5484", ctx);
+    expect(res.title).toBe("Raw topic 5484");
+    expect(res.content).toContain("#1");
+  });
+
+  test("walks server pages and stops on an empty page", async () => {
+    const { ctx, calls } = ctxWith({
+      "https://f.io/raw/5484": { status: 200, text: "u1 | t | #1\n\nfirst\n" },
+      "https://f.io/raw/5484?page=2": { status: 200, text: "u2 | t | #2\n\nsecond\n" },
+      "https://f.io/raw/5484?page=3": { status: 200, text: "" },
+    });
+    const res = await discourseProvider.fetch("https://f.io/raw/5484", ctx);
+    expect(res.content).toBe("u1 | t | #1\n\nfirst\n\nu2 | t | #2\n\nsecond");
+    expect(calls).toEqual(["https://f.io/raw/5484", "https://f.io/raw/5484?page=2", "https://f.io/raw/5484?page=3"]);
+  });
+
+  test("a repeated page stops the walk (instances that ignore ?page)", async () => {
+    const { ctx, calls } = ctxWith({
+      "https://f.io/raw/5484": { status: 200, text: "same body" },
+      "https://f.io/raw/5484?page=2": { status: 200, text: "same body" },
+    });
+    const res = await discourseProvider.fetch("https://f.io/raw/5484", ctx);
+    expect(res.content).toBe("same body");
+    expect(calls).toEqual(["https://f.io/raw/5484", "https://f.io/raw/5484?page=2"]);
+  });
+
+  test("a failing page keeps the pages already collected", async () => {
+    const ctx = {
+      httpFetch: async (url: string) => {
+        if (url.endsWith("page=2")) throw new Error("network down");
+        return { status: 200, text: "first page" };
+      },
+    } as never as Parameters<typeof discourseProvider.fetch>[1];
+    const res = await discourseProvider.fetch("https://f.io/raw/5484", ctx);
+    expect(res.content).toBe("first page");
+  });
+
+  test("a caller-pinned page is forwarded and not walked", async () => {
+    const { ctx, calls } = ctxWith({ "https://f.io/raw/5484?page=2": { status: 200, text: "page two" } });
+    const res = await discourseProvider.fetch("https://f.io/raw/5484?page=2", ctx);
+    expect(res.content).toBe("page two");
+    expect(calls).toEqual(["https://f.io/raw/5484?page=2"]);
+  });
+
+  test("403 returns the gated note", async () => {
+    const { ctx } = ctxWith({ "https://f.io/raw/9/1": { status: 403, text: "" } });
+    const res = await discourseProvider.fetch("https://f.io/raw/9/1", ctx);
+    expect(res.title).toBe("Login-gated Discourse");
   });
 });

@@ -27,8 +27,9 @@
  * Shapes: /t/<slug>/<id> topics, /c/<slugs>[/<id>][/l/<filter>] category listings
  * (slug-only URLs resolve via site.json), /search?q=... (Discourse search filters:
  * #category, @user, in:title, order:latest, status:...), /latest /new /unread /top
- * site-wide listings, /categories index. Renders carry /t/ paths + a search hint
- * so an agent can chain fetches without knowing the API.
+ * site-wide listings, /categories index, /raw/<topic_id>[/<post_number>] (post
+ * source as typed, text/plain). Renders carry /t/ paths + a search hint so an
+ * agent can chain fetches without knowing the API.
  */
 
 import { execSync } from "node:child_process";
@@ -57,6 +58,11 @@ const CATEGORIES_RE = /^https?:\/\/[^/]+\/categories\/?$/i;
 /** Site-wide topic listings: /latest, /new, /unread, /top[/period]. */
 const SITELIST_RE = /^https?:\/\/[^/]+\/(?:latest|new|unread|top)(?:\/[a-z0-9-]+)?\/?$/i;
 
+/** Raw source: /raw/<topic_id>[/<post_number>] — markdown as typed (upload refs
+ * stay "upload://..."), text/plain. A bare topic URL is gathered page by page;
+ * the server caps one page at 100 posts and emits no "more" marker. */
+const RAW_RE = /^https?:\/\/[^/]+\/raw\/\d+(?:\/\d+)?\/?$/i;
+
 export function matches(url: string): boolean {
   const noQuery = url.split(/[?#]/)[0];
   return (
@@ -64,11 +70,12 @@ export function matches(url: string): boolean {
     CATEGORY_RE.test(noQuery) ||
     SEARCH_RE.test(noQuery) ||
     CATEGORIES_RE.test(noQuery) ||
-    SITELIST_RE.test(noQuery)
+    SITELIST_RE.test(noQuery) ||
+    RAW_RE.test(noQuery)
   );
 }
 
-export type DiscourseKind = "topic" | "category" | "search" | "sitelist" | "categories";
+export type DiscourseKind = "topic" | "category" | "search" | "sitelist" | "categories" | "raw";
 
 /** Which Discourse view a URL points at. */
 export function classify(url: string): DiscourseKind {
@@ -76,6 +83,7 @@ export function classify(url: string): DiscourseKind {
   if (SEARCH_RE.test(noQuery)) return "search";
   if (CATEGORIES_RE.test(noQuery)) return "categories";
   if (SITELIST_RE.test(noQuery)) return "sitelist";
+  if (RAW_RE.test(noQuery)) return "raw";
   return CATEGORY_RE.test(noQuery) ? "category" : "topic";
 }
 
@@ -267,8 +275,64 @@ export interface SiteInfo {
 
 // ── Pure rendering ──
 
-/** Convert Discourse cooked HTML to plain text (code blocks kept as fences). */
-export function cookedToText(cooked: string): string {
+/** Attribute value from a cooked-HTML tag or element block. The name is
+ * whitespace-anchored so "src" cannot match inside "data-orig-src". */
+function attrValue(block: string, name: string): string | undefined {
+  return block.match(new RegExp(`\\s${name}="([^"]*)"`, "i"))?.[1];
+}
+
+/** First href on an anchor inside an element block (media fallback link). */
+function anchorHref(block: string): string | undefined {
+  return block.match(/<a\s[^>]*\bhref="([^"]*)"/i)?.[1];
+}
+
+/** Markers Discourse cooks in for an upload URL it could not resolve. */
+const UNRESOLVED_UPLOADS = new Set(["/404", "/images/transparent.png"]);
+
+/** First non-empty URL that isn't an unresolved-upload marker. */
+function firstUrl(...urls: (string | undefined)[]): string | undefined {
+  return urls.find((url) => url && !UNRESOLVED_UPLOADS.has(url));
+}
+
+/** Make a cooked-HTML URL absolute against the forum origin ("/x", "//x"). */
+function absoluteUrl(url: string, origin?: string): string {
+  if (!origin) return url;
+  if (url.startsWith("//")) return `https:${url}`;
+  return url.startsWith("/") ? `${origin}${url}` : url;
+}
+
+/** Last path segment of a URL (decoded) — a media element's display name. */
+function urlName(url: string): string {
+  const clean = url.split(/[?#]/)[0].replace(/\/+$/, "");
+  const last = clean.split("/").pop() || clean;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+/** Markdown for a video/audio element or placeholder: thumbnail image plus a
+ * labeled link. The URL priority covers every shape Discourse ships — the lazy
+ * video placeholder (data-video-src / blocked hotlink / unresolved upload) and
+ * an inline <video>/<audio> (source src / fallback anchor). */
+function mediaMarkdown(kind: "video" | "audio", block: string, origin: string | undefined, thumbnail?: string): string {
+  const src = firstUrl(
+    attrValue(block, "data-video-src"),
+    attrValue(block, "src"),
+    attrValue(block, "data-blocked-hotlinked-src"),
+    attrValue(block, "data-orig-src"),
+    anchorHref(block),
+  );
+  const lines: string[] = [];
+  if (thumbnail) lines.push(`![${kind} thumbnail](${absoluteUrl(thumbnail, origin)})`);
+  if (src) lines.push(`[${kind}: ${urlName(src)}](${absoluteUrl(src, origin)})`);
+  return `\n${lines.join("\n")}\n`;
+}
+
+/** Convert Discourse cooked HTML to plain text (code blocks kept as fences).
+ * Pass the forum origin to make relative hrefs and media srcs absolute. */
+export function cookedToText(cooked: string, origin?: string): string {
   const text = cooked
     // Onebox link-preview cards → single "[title](url)" line (their div soup
     // otherwise renders as whitespace noise).
@@ -278,10 +342,22 @@ export function cookedToText(cooked: string): string {
         inner.match(/<a[^>]*href="([^"]*)"[^>]*>([\s\S]*?)<\/a>/i);
       if (!link) return "";
       const label = link[2].replace(/<[^>]+>/g, "").trim() || "link";
-      return `<p>[${label}](${link[1]})</p>`;
+      return `<p>[${label}](${absoluteUrl(link[1], origin)})</p>`;
     })
     // Lightbox meta ("image650×454 8.19 KB") is display chrome, not content.
     .replace(/<div[^>]*class="[^"]*\bmeta\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, "")
+    // Video uploads are a lazy placeholder div server-side; the only URL is in
+    // its data attributes (the <video> element is built client-side).
+    .replace(/<div[^>]*class="[^"]*\bvideo-placeholder-container\b[^"]*"[^>]*>[\s\S]*?<\/div>/gi, (block) =>
+      mediaMarkdown("video", block, origin, attrValue(block, "data-thumbnail-src")),
+    )
+    // Inline <video>/<audio> (onebox previews, chat, older posts) carry the URL
+    // on <source> (or a fallback <a>). Consume the whole element so the anchor
+    // rule below can't emit the fallback link a second time.
+    .replace(/<video\b[^>]*>[\s\S]*?<\/video>/gi, (block) =>
+      mediaMarkdown("video", block, origin, attrValue(block, "poster")),
+    )
+    .replace(/<audio\b[^>]*>[\s\S]*?<\/audio>/gi, (block) => mediaMarkdown("audio", block, origin))
     // Lightbox anchors wrap content images; keep the image, drop the wrapper
     // (its href is the full-size version of the img src). Stray </a> is
     // removed by the generic tag strip below.
@@ -291,22 +367,31 @@ export function cookedToText(cooked: string): string {
     .replace(/<img[^>]*>/gi, (img) => {
       if (/class="[^"]*\bavatar/.test(img)) return "";
       if (/class="[^"]*\bemoji\b/.test(img)) return img.match(/\balt="([^"]*)"/)?.[1] ?? "";
-      const src = img.match(/\bsrc="([^"]*)"/)?.[1];
+      const src = firstUrl(
+        img.match(/\ssrc="([^"]*)"/)?.[1],
+        img.match(/\sdata-blocked-hotlinked-src="([^"]*)"/)?.[1],
+        img.match(/\sdata-orig-src="([^"]*)"/)?.[1],
+      );
       if (!src) return "";
       const alt = img.match(/\balt="([^"]*)"/)?.[1]?.replace(/&quot;/g, '"') || "image";
       const w = img.match(/\bwidth="(\d+)"/)?.[1];
       const h = img.match(/\bheight="(\d+)"/)?.[1];
       const dims = w && h ? `|${w}x${h}` : "";
-      return `\n![${alt}${dims}](${src})\n`;
+      return `\n![${alt}${dims}](${absoluteUrl(src, origin)})\n`;
     })
     // Inline links → markdown, so hrefs survive the tag strip (oneboxes are
     // handled above; this covers normal links). Fragment-only hrefs are
     // heading anchors (Discourse <a name href="#...">) — keep just the text.
-    .replace(/<a\s[^>]*?\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi, (_m: string, href: string, inner: string) => {
-      if (href.startsWith("#")) return inner;
-      const label = inner.replace(/<[^>]+>/g, "").trim() || href;
-      return `[${label}](${href})`;
-    })
+    .replace(
+      /<a\s([^>]*?\bhref="([^"]*)"[^>]*)>([\s\S]*?)<\/a>/gi,
+      (_m: string, tag: string, href: string, inner: string) => {
+        if (href.startsWith("#")) return inner;
+        const label = inner.replace(/<[^>]+>/g, "").trim() || href;
+        // Unresolved attachment uploads keep their original ref in data-orig-href.
+        const target = firstUrl(href, attrValue(tag, "data-orig-href")) ?? href;
+        return `[${label}](${absoluteUrl(target, origin)})`;
+      },
+    )
     .replace(/<pre[^>]*>\s*<code[^>]*>/gi, "\n```\n")
     .replace(/<\/code>\s*<\/pre>/gi, "\n```\n")
     .replace(/<br\s*\/?>/gi, "\n")
@@ -352,6 +437,7 @@ export function mergePosts(posts: DiscoursePost[]): DiscoursePost[] {
  * posts mid-document). */
 export function renderDiscourse(topic: DiscourseTopic, host: string, renderedCount: number): string {
   const posts = mergePosts(topic.post_stream.posts).sort((a, b) => a.post_number - b.post_number);
+  const origin = `https://${host}`;
 
   const lines: string[] = [`# ${topic.title}`, ""];
   const meta = [host, `${topic.posts_count} posts`, `${renderedCount} rendered`];
@@ -367,7 +453,7 @@ export function renderDiscourse(topic: DiscourseTopic, host: string, renderedCou
     const edited = postEdited(p.created_at, p.updated_at);
     const accepted = p.accepted_answer ? ", ✓ accepted" : "";
     lines.push(
-      `- **${p.username}** (#${p.post_number}${date}${edited}, ${score} pts${reply}${accepted}): ${cookedToText(p.cooked)}`,
+      `- **${p.username}** (#${p.post_number}${date}${edited}, ${score} pts${reply}${accepted}): ${cookedToText(p.cooked, origin)}`,
     );
   }
 
@@ -426,7 +512,7 @@ export function renderCategoryList(
     if (t.last_posted_at) parts.push(`last ${t.last_posted_at.slice(0, 10)}`);
     lines.push(`- **${t.title}** (${parts.join(", ")}) — /t/${t.slug}/${t.id}`);
     if (t.excerpt) {
-      const excerpt = cookedToText(t.excerpt).replace(/\n+/g, " ").slice(0, 280);
+      const excerpt = cookedToText(t.excerpt, `https://${host}`).replace(/\n+/g, " ").slice(0, 280);
       if (excerpt) lines.push(`  ${excerpt}${t.excerpt.length > 280 ? "…" : ""}`);
     }
   }
@@ -469,9 +555,9 @@ export interface SearchResponse {
 const MAX_SEARCH_POSTS = 50;
 
 /** Search blurbs to plain one-line text (occasional HTML/entities stripped). */
-export function blurbText(blurb: string | undefined): string {
+export function blurbText(blurb: string | undefined, origin?: string): string {
   if (!blurb) return "";
-  const t = cookedToText(blurb);
+  const t = cookedToText(blurb, origin);
   return t.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
@@ -512,7 +598,7 @@ export function renderSearch(res: SearchResponse, host: string, query: string): 
       if (shown >= MAX_SEARCH_POSTS) break;
       shown++;
       const date = p.created_at ? `, ${p.created_at.slice(0, 10)}` : "";
-      const blurb = blurbText(p.blurb);
+      const blurb = blurbText(p.blurb, `https://${host}`);
       lines.push(`  - **${p.username}** (#${p.post_number ?? "?"}${date}): ${blurb || "(no excerpt)"}`);
     }
   }
@@ -599,7 +685,7 @@ export const discourseProvider: FeedProvider = {
     "ALWAYS use web_fetch for forum/Discourse URLs, never curl or scrape. " +
     "Discourse forums (any host): /t/<slug>/<id> topics, /c/<slugs>[/<id>][/l/<filter>] boards, " +
     "/categories index, /latest|/new|/unread|/top listings, /search?q=... (filters: #category, @user, " +
-    "in:title, order:latest, status:...) — all render as structured markdown.",
+    "in:title, order:latest, status:...), /raw/<id>[/<post>] post source — all render as markdown.",
   async fetch(url, ctx: FeedContext): Promise<FeedResult> {
     const http = ctx.httpFetch;
     if (!http) throw new Error("discourse: no httpFetch transport");
@@ -612,6 +698,8 @@ export const discourseProvider: FeedProvider = {
         return fetchSitelist(url, http);
       case "categories":
         return fetchCategories(url, http);
+      case "raw":
+        return fetchRaw(url, http);
       default:
         return fetchTopic(url, http);
     }
@@ -652,6 +740,47 @@ async function fetchTopic(url: string, http: HttpFetch): Promise<FeedResult> {
     url,
     title: topic.title,
     content: renderDiscourse(topic, new URL(url).hostname, posts.length),
+  };
+}
+
+/** Raw source: /raw/<topic_id>[/<post_number>] returns the post markdown as
+ * typed (text/plain); upload refs stay "upload://...". The cooked render is the
+ * path that resolves those refs, so this shape is for the source text itself.
+ * A bare topic URL walks the server's 100-post pages; any caller query (page,
+ * revision) is forwarded untouched instead. */
+async function fetchRaw(url: string, http: HttpFetch): Promise<FeedResult> {
+  const headers = authHeadersFor(url);
+  const u = new URL(url);
+  const m = u.pathname.match(/^\/raw\/(\d+)(?:\/(\d+))?/);
+  if (!m) throw new Error("discourse: unparseable raw path");
+  const base = `https://${u.hostname}${u.pathname.replace(/\/+$/, "")}`;
+
+  const first = await http(`${base}${u.search}`, { headers });
+  const denied = gatedNote(url, first.status);
+  if (denied) return denied;
+  if (first.status !== 200) throw new Error(`discourse: raw source returned HTTP ${first.status}`);
+
+  const parts = [first.text.trim()];
+  // A page carries no "more" marker, so stop when one comes back empty — or
+  // unchanged, which is how instances that ignore ?page answer.
+  if (!m[2] && !u.search) {
+    for (let page = 2; page <= MAX_PAGES; page++) {
+      try {
+        const next = await http(`${base}?page=${page}`, { headers });
+        if (next.status !== 200) break;
+        const chunk = next.text.trim();
+        if (!chunk || chunk === parts[parts.length - 1]) break;
+        parts.push(chunk);
+      } catch {
+        break;
+      }
+    }
+  }
+
+  return {
+    url,
+    title: m[2] ? `Raw post #${m[2]} (topic ${m[1]})` : `Raw topic ${m[1]}`,
+    content: parts.join("\n\n"),
   };
 }
 
