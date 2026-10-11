@@ -97,11 +97,7 @@ function editCount(n: number): string {
  * preview gets no summary and a plain header, which is all that path has to
  * offer.
  */
-export function describeToolCall(
-  toolName: string,
-  input: Record<string, unknown>,
-  options: DescribeOptions = {},
-): string {
+function describeToolText(toolName: string, input: Record<string, unknown>, options: DescribeOptions = {}): string {
   const budget = options.excerptChars ?? MAX_EXCERPT_CHARS;
   const head = options.summary ? ` (${options.summary})` : "";
   if (toolName === "bash") {
@@ -134,7 +130,10 @@ export function describeToolCall(
       const replaced = blockLines(input.oldText);
       const count = replaced > 0 ? ` (replaces ${pluralLines(replaced)})` : "";
       const nw = typeof input.newText === "string" ? input.newText : "";
-      return `${toolName} ${input.path}${head}${count}: ${frameContent(`writes "${clipExcerpt(nw, budget)}"`, options.frameToken)}`;
+      const body = `writes "${clipExcerpt(nw, budget)}"`;
+      return options.frameToken
+        ? `${toolName} ${input.path}${head}${count}:\n${frameContent(body, options.frameToken)}`
+        : `${toolName} ${input.path}${head}${count}: ${body}`;
     }
     if (input.edits && Array.isArray(input.edits)) {
       const edits = input.edits as Array<{ oldText?: string; newText?: string; path?: string }>;
@@ -150,9 +149,76 @@ export function describeToolCall(
     }
     const old = typeof input.oldText === "string" ? input.oldText : "";
     const nw = typeof input.newText === "string" ? input.newText : "";
-    return `${toolName} ${input.path}${head}: ${frameContent(`"${old}" -> "${nw}"`, options.frameToken)}`;
+    const body = `"${old}" -> "${nw}"`;
+    return options.frameToken
+      ? `${toolName} ${input.path}${head}:\n${frameContent(body, options.frameToken)}`
+      : `${toolName} ${input.path}${head}: ${body}`;
+  }
+  if (toolName === "subagent") {
+    // A parallel or chained dispatch carries no top-level agent/task; list each
+    // step so the classifier reads the same thing a single dispatch gives it. An
+    // empty array is not a dispatch, so it must not shadow a populated one.
+    const list =
+      Array.isArray(input.tasks) && input.tasks.length > 0
+        ? input.tasks
+        : Array.isArray(input.chain) && input.chain.length > 0
+          ? input.chain
+          : null;
+    if (list) {
+      const lines = list
+        .map((entry) => {
+          const spec = (entry ?? {}) as Record<string, unknown>;
+          const agent = typeof spec.agent === "string" ? spec.agent : "unknown";
+          const task = typeof spec.task === "string" ? spec.task : JSON.stringify(spec);
+          // Each step keeps its own extras (a cwd), as the top-level options line does.
+          const extra = Object.fromEntries(Object.entries(spec).filter(([key]) => key !== "agent" && key !== "task"));
+          const suffix = Object.keys(extra).length > 0 ? ` ${JSON.stringify(extra)}` : "";
+          return `${agent}: ${task}${suffix}`;
+        })
+        .join("\n");
+      return `subagent:\n${clipExcerpt(lines, budget)}`;
+    }
+    const agent = typeof input.agent === "string" ? input.agent : "unknown";
+    const task = typeof input.task === "string" ? input.task : JSON.stringify(input);
+    return `subagent ${agent}:\n${clipExcerpt(task, budget)}`;
   }
   return `${toolName}: ${JSON.stringify(input).slice(0, 500)}`;
+}
+
+/**
+ * Input fields each branch's text already shows. Every other field is appended as
+ * JSON, so a new option is visible without touching this map; a field is listed
+ * only because the branch renders it. A tool absent from the map keeps the
+ * fallback, which is the input JSON itself.
+ */
+const RENDERED_FIELDS: Record<string, string[]> = {
+  bash: ["command"],
+  write: ["path", "content"],
+  edit: ["path", "edits", "oldText", "newText"],
+  patch: ["path", "edits", "oldText", "newText"],
+  subagent: ["agent", "task", "tasks", "chain"],
+};
+
+/** The state a classifier and the dialog read for a tool call; see `describeToolText`. */
+export function describeToolCall(
+  toolName: string,
+  input: Record<string, unknown>,
+  options: DescribeOptions = {},
+): string {
+  const text = describeToolText(toolName, input, options);
+  const rendered = RENDERED_FIELDS[toolName];
+  if (!rendered) return text;
+  const rest = Object.fromEntries(Object.entries(input).filter(([key]) => !rendered.includes(key)));
+  if (Object.keys(rest).length === 0) return text;
+  const budget = options.excerptChars ?? MAX_EXCERPT_CHARS;
+  const line = `options: ${clipExcerpt(JSON.stringify(rest), budget)}`;
+  // After the header and before the excerpt, so options read first and never drift
+  // onto the end of a long task or command. The command's own line breaks are its
+  // text — a heredoc must not be split — so bash keeps the line at the end.
+  const firstBreak = toolName === "bash" ? -1 : text.indexOf("\n");
+  return firstBreak === -1
+    ? `${text}\n${line}`
+    : `${text.slice(0, firstBreak + 1)}${line}\n${text.slice(firstBreak + 1)}`;
 }
 
 /**

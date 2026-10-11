@@ -58,9 +58,12 @@ factor list against the thresholds plus the longer explanation.
 The state a classifier reads is a header plus an excerpt of what the call writes. The
 header names the tool and path and, for edit-like calls, the shape of the change
 (`creates a new file: 4 lines`, `overwrites the existing file: removes 40 lines, adds
-2 lines`); it is never truncated. For `bash`, `write`, `edit` and `patch` the excerpt
-is clipped at 100K characters and never quotes removed target text: removals reach
-the classifier as a count, taken from the preview summary or counted from the edit
+2 lines`); it is never truncated. For `bash` the excerpt is the command, and for
+`subagent` the task text (one `agent: task` line per step); both are preceded by the
+call's remaining options as a JSON line after the header, as are `write`, `edit` and
+`patch`. Excerpt and options are clipped at 100K characters. For `write`, `edit` and `patch` it is
+the added lines, also clipped, and removed target text never reaches the classifier:
+removals arrive as a count, taken from the preview summary or counted from the edit
 itself when there is no preview. Any other tool is described by its input JSON,
 clipped to 500 characters. Each classified call appends a `classified` session entry
 (verdict, factor scores, detail) for threshold tuning.
