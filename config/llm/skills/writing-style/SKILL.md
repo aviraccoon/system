@@ -152,11 +152,12 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 - Verification and test results: *verified by ...*, *confirmed by running X*, *all checks pass*, *53 tests green*, pass counts, check transcripts, CI status, coverage percentages.
 - Work narration: what was run and in what order, attempts and review rounds, elapsed time (*took three rounds*, *first try*, *after some back-and-forth*).
 - Change numbers and effect sizes: deltas (*p95 dropped from 420 ms to 180 ms*), counts of things added, fixed or removed (*now covers 26 more providers*, *coverage rose from 71% to 89%*, *7 findings fixed*), diff size (*+233/−118*).
+- Unobservable context: an audit, a session, a conversation, a ticket, an incident — *as discussed*, *found during the migration*, *the review flagged*, *after the audit*. The reader has only the artifact; a claim resting on something they cannot see cannot be checked and describes a world they are not in.
 - Restating the diff, the boast built from any of it (*now handles every case*), and progress labels (*WIP*, *90% done*, *ready to merge*).
 
 **The problem**: A later reader sees the current tree, never the version it replaced, so a delta is unreadable there; re-running the measurement moves the numbers, so an effect size goes stale; a verification claim or a test count cannot be checked from the file it sits in and has to be re-run anyway; and work narration describes a process the reader never needed. Correct at the spot, useless to every reader after it — and the boast asserts importance instead of showing it.
 
-**Instead**: State the rule or invariant the code encodes, or the failure the change prevents. The one measurement that belongs in the change's record — commit message, journal, design note — is the justification: what was probed before building and what it showed, a property of the problem rather than of the fix. Numbers the code's own value depends on (a calibration constant, the measured reference a scaling factor derives from) stay in the code. A test count is never a justification: the tests show what they cover.
+**Instead**: State the rule or invariant the code encodes, or the failure the change prevents. The one measurement that belongs in the change's record — commit message, journal, design note — is the justification: what was probed before building and what it showed, a property of the problem rather than of the fix. Name what was measured so it can be re-run (a command, a file, a test), never the occasion that produced it. Numbers the code's own value depends on (a calibration constant, the measured reference a scaling factor derives from) stay in the code. A test count is never a justification: the tests show what they cover.
 
 ### Change-Relative Prose
 
