@@ -15,7 +15,7 @@ import { computePatchPreview } from "../patch/preview";
 import { DEFAULT_DECISIONS_MODEL, decisionsComplete } from "../shared/decisions";
 import { EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { extractText, getSidecarStats, hasRole, resolveProviderAuth, sidecarComplete } from "../shared/model-roles";
-import { factorProbabilities, hasAllFactors, RISK_FACTORS, verdictFromFactors } from "../shared/risk-factors";
+import { decisionFromAnswers, RISK_FACTORS, SEVERITY_QUESTION } from "../shared/risk-factors";
 import { isConfinedBash } from "../shared/sandbox";
 import { computeEditPreview, computeWritePreview } from "./edit-preview";
 
@@ -202,10 +202,10 @@ export default function permissionGate(pi: ExtensionAPI) {
   }
 
   /**
-   * Ask the decisions model the factor battery. Null when disabled, when the
-   * provider has no credential, when any factor is missing (a partial answer
-   * set must not read as "nothing fired"), or when the call fails — the verdict
-   * then comes from the explain role alone.
+   * Ask the decisions model the factor battery and the severity score. Null when
+   * disabled, when the provider has no credential, when any factor or the score
+   * is missing (a partial answer set must not read as "nothing fired"), or when
+   * the call fails — the verdict then comes from the explain role alone.
    */
   async function classifyWithFactors(
     ctx: ExtensionContext,
@@ -218,11 +218,12 @@ export default function permissionGate(pi: ExtensionAPI) {
       const auth = await resolveProviderAuth(DECISIONS_PROVIDER, ctx.modelRegistry);
       if (!auth?.apiKey) return null;
       const result = await decisionsComplete(
-        { model: DECISIONS_MODEL, state: description, questions: RISK_FACTORS },
+        { model: DECISIONS_MODEL, state: description, questions: { ...RISK_FACTORS, severity: SEVERITY_QUESTION } },
         { apiKey: auth.apiKey, headers: auth.headers, timeoutMs, signal },
       );
-      if (!hasAllFactors(result.answers)) return null;
-      return factorsToExplanation(verdictFromFactors(factorProbabilities(result.answers)));
+      const decision = decisionFromAnswers(result.answers);
+      if (!decision) return null;
+      return factorsToExplanation(decision);
     } catch {
       return null;
     }

@@ -48,7 +48,9 @@ parse never auto-allows, and a dead sidecar just means the user confirms.
 The confirm dialog and auto-classify share one classifier. A decisions model
 answers a battery of independent yes/no risk factors and the verdict comes from
 thresholds in code — the factors and policy live in `shared/risk-factors.ts`,
-shared with the benchmarks that measure them. The `explain` role still writes
+shared with the benchmarks that measure them. A severity `score` rides the same
+request: a call scored above 2.5 (past serious harm) is dangerous even when no
+dangerous factor fired. The `explain` role still writes
 the human sentence; both run in parallel, so the dialog shows the sentence and
 the fired factors with their probabilities on one line, and `Ctrl+E` adds the
 factor list against the thresholds plus the longer explanation.
@@ -63,9 +65,9 @@ itself when there is no preview. Any other tool is described by its input JSON,
 clipped to 500 characters. Each classified call appends a `classified` session entry
 (verdict, factor scores, detail) for threshold tuning.
 
-When the decisions call fails, the provider has no credential, or any factor is
-missing, the verdict comes from the `explain` role alone — the display degrades,
-never the fail-closed behavior. The model is pinned in
+When the decisions call fails, the provider has no credential, or any factor or
+the severity score is missing, the verdict comes from the `explain` role alone —
+the display degrades, never the fail-closed behavior. The model is pinned in
 `shared/decisions.ts` because the thresholds are tuned per version; re-run the
 factor benchmark before bumping the pin. `PI_JEV=off` disables the decisions
 path; `PI_JEV_MODEL` and `PI_JEV_PROVIDER` point it elsewhere.

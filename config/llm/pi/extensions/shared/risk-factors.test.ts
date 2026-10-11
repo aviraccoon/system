@@ -2,10 +2,12 @@ import { describe, expect, test } from "bun:test";
 import {
   buildFactorsPrompt,
   DEFAULT_THRESHOLDS,
+  decisionFromAnswers,
   FACTOR_NAMES,
   factorProbabilities,
   hasAllFactors,
   parseFactorAnswers,
+  severityFromAnswers,
   verdictFromFactors,
 } from "./risk-factors";
 
@@ -33,6 +35,11 @@ describe("verdictFromFactors", () => {
   test("a full credential dump is dangerous; one secret is not", () => {
     expect(verdictFromFactors(p({ exposes_all_credentials: 0.9 })).verdict).toBe("dangerous");
     expect(verdictFromFactors(p({ exposes_all_credentials: 0.4, touches_credentials: 0.9 })).verdict).toBe("risky");
+  });
+
+  test("a credential sent somewhere it does not belong is dangerous", () => {
+    expect(verdictFromFactors(p({ credential_exfiltration: 0.8 })).verdict).toBe("dangerous");
+    expect(verdictFromFactors(p({ credential_exfiltration: 0.4, touches_credentials: 0.9 })).verdict).toBe("risky");
   });
 
   test("local code that destroys data is dangerous, not just risky", () => {
@@ -87,6 +94,26 @@ describe("verdictFromFactors", () => {
     expect(verdictFromFactors(p({ mutates_state: 0.35 }), DEFAULT_THRESHOLDS).verdict).toBe("safe");
     expect(verdictFromFactors(p({ mutates_state: 0.35 }), strict).verdict).toBe("risky");
   });
+
+  test("a severity score above the threshold makes a risky call dangerous", () => {
+    const promoted = verdictFromFactors(p({ mutates_state: 0.9 }), undefined, 2.6);
+    expect(promoted.verdict).toBe("dangerous");
+    expect(promoted.reasons).toEqual(["severity 2.6"] as string[]);
+    expect(promoted.severity).toBe(2.6);
+  });
+
+  test("a severity score at or below the threshold leaves the factor verdict alone", () => {
+    expect(verdictFromFactors(p({ mutates_state: 0.9 }), undefined, 1.4).verdict).toBe("risky");
+    expect(verdictFromFactors(p({ mutates_state: 0.9 }), undefined, 2.5).verdict).toBe("risky");
+    expect(verdictFromFactors(p({ mutates_state: 0.02 }), undefined, 0.2).verdict).toBe("safe");
+    expect(verdictFromFactors(p({ mutates_state: 0.9 })).verdict).toBe("risky");
+  });
+
+  test("a fired dangerous factor keeps its own reasons", () => {
+    const decision = verdictFromFactors(p({ runs_remote_code: 0.95 }), undefined, 3);
+    expect(decision.verdict).toBe("dangerous");
+    expect(decision.reasons).toEqual(["runs_remote_code"] as string[]);
+  });
 });
 
 describe("factorProbabilities", () => {
@@ -97,7 +124,7 @@ describe("factorProbabilities", () => {
     });
     expect(probs.mutates_state).toBe(0.8);
     expect(probs.runs_remote_code).toBe(0);
-    expect(Object.keys(probs)).toHaveLength(20);
+    expect(Object.keys(probs)).toHaveLength(FACTOR_NAMES.length);
   });
 });
 
@@ -112,11 +139,42 @@ describe("hasAllFactors", () => {
   });
 });
 
+describe("decisionFromAnswers", () => {
+  const factors = Object.fromEntries(FACTOR_NAMES.map((name) => [name, { type: "noul", noul: 0.1 } as const]));
+  const score = { type: "score", score: 2.6, probabilities: {} } as const;
+
+  test("assembles the decision when every factor and the score are present", () => {
+    expect(decisionFromAnswers({ ...factors, severity: score })?.verdict).toBe("dangerous");
+  });
+
+  test("returns null when the score is missing", () => {
+    expect(decisionFromAnswers(factors)).toBeNull();
+  });
+
+  test("returns null when a factor is missing", () => {
+    const { [FACTOR_NAMES[0]]: _missing, ...partial } = factors;
+    expect(decisionFromAnswers({ ...partial, severity: score })).toBeNull();
+  });
+});
+
+describe("severityFromAnswers", () => {
+  test("reads a score answer", () => {
+    const score = { type: "score", score: 1.4, probabilities: {} } as const;
+    expect(severityFromAnswers({ severity: score })).toBe(1.4);
+  });
+
+  test("returns null when the answer is missing or not a score", () => {
+    expect(severityFromAnswers({})).toBeNull();
+    expect(severityFromAnswers({ severity: { type: "noul", noul: 0.5 } as const })).toBeNull();
+  });
+});
+
 describe("buildFactorsPrompt", () => {
   test("renders every factor name and asks for a JSON object", () => {
     const prompt = buildFactorsPrompt();
     for (const name of FACTOR_NAMES) expect(prompt).toContain(name);
     expect(prompt).toContain("one JSON object");
+    expect(prompt).toContain("Nothing irreplaceable is lost");
   });
 });
 
