@@ -1,10 +1,20 @@
 /**
  * Pure decision logic for the permission gate.
  * No pi imports — testable independently.
+ *
+ * Safety here is floors and tirith, never a new enumeration. The shell-text
+ * heuristics in this file (stripShellPreamble, hasShellEscalation, allPipesSafe)
+ * are the whole inventory: do not extend them or add more like them — read-only
+ * command sets, redirect or tee targets, wrapper stripping, "safe" subcommand
+ * lists. Quoting, heredocs, wrappers and variable expansion defeat every list,
+ * and a missed form fails open. Semantic judgment belongs to the classifier (jev
+ * factors and severity); when a shape needs coverage, add a benchmark fixture,
+ * not a parser.
  */
 
 import { execSync } from "node:child_process";
-import { isAbsolute, relative, resolve } from "node:path";
+import { readlinkSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 
 // ── Types ──
@@ -124,10 +134,66 @@ export function isInsideDir(filePath: string, dir: string): boolean {
   return !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-export function isSensitivePath(filePath: string): boolean {
+/**
+ * The location a path resolves to, following symlinks even when the final target
+ * does not exist yet; the path itself when nothing can be resolved. A relative
+ * input resolves against `base`, not the process cwd.
+ */
+function realPath(filePath: string, base: string = process.cwd()): string {
+  let target = isAbsolute(filePath) ? filePath : resolve(base, filePath);
+  // Follow a chain of links, including links whose targets do not exist yet; the
+  // visited set ends a cycle.
+  const seen = new Set<string>();
+  while (!seen.has(target)) {
+    seen.add(target);
+    try {
+      const link = readlinkSync(target);
+      target = isAbsolute(link) ? link : resolve(dirname(target), link);
+    } catch {
+      break;
+    }
+  }
+  // Resolve the nearest existing ancestor and re-append what does not exist yet,
+  // so a linked or missing parent directory cannot hide the final location.
+  const missing: string[] = [];
+  let current = target;
+  while (true) {
+    try {
+      const real = realpathSync(current);
+      return missing.length > 0 ? join(real, ...missing.reverse()) : real;
+    } catch {
+      const parent = dirname(current);
+      if (parent === current) return target;
+      missing.push(basename(current));
+      current = parent;
+    }
+  }
+}
+
+function matchesSensitive(filePath: string): boolean {
   const parts = filePath.split("/");
-  const basename = parts[parts.length - 1];
+  const basename = parts[parts.length - 1] ?? "";
   return SENSITIVE_PATTERNS.some((p) => p.test(basename) || p.test(filePath));
+}
+
+/**
+ * The caller's naming of a path plus where it actually resolves. Both sides are
+ * canonical: the base itself may be reached through an alias (`/tmp` and
+ * `/private/tmp` on macOS), which would otherwise leak into the form.
+ */
+function callerForm(filePath: string, base: string): string {
+  const real = realPath(filePath, base);
+  return isAbsolute(filePath) ? real : relative(realPath(base, base), real);
+}
+
+/** Whether either the requested name or the resolved location is sensitive. */
+function matchesSensitiveForm(filePath: string, form: string): boolean {
+  return matchesSensitive(filePath) || (form !== filePath && matchesSensitive(form));
+}
+
+export function isSensitivePath(filePath: string, base: string = process.cwd()): boolean {
+  // A symlink into a credential path is that path, whatever its own name says.
+  return matchesSensitiveForm(filePath, callerForm(filePath, base));
 }
 
 /** Tools that return file *contents* into the agent's context. `ls` and `find`
@@ -145,11 +211,13 @@ export function contentReadTarget(toolName: string, input: Record<string, unknow
 /** Sensitive, for a *read*. `.env` is exempt: those files hold 1Password `op://`
  *  references, the shell profile allows them, and blocking the read tool would add
  *  a prompt for a file the shell hands over anyway. Writes still confirm. */
-export function isReadSensitivePath(filePath: string): boolean {
-  const parts = filePath.split("/");
-  const basename = parts[parts.length - 1] ?? "";
+export function isReadSensitivePath(filePath: string, base: string = process.cwd()): boolean {
+  // The exemption is for a file *named* `.env`, so it is decided on the resolved
+  // location: a link named `.env` pointing elsewhere is not that file.
+  const form = callerForm(filePath, base);
+  const basename = form.split("/").pop() ?? "";
   if (/^\.env(\..+)?$/.test(basename)) return false;
-  return isSensitivePath(filePath);
+  return matchesSensitiveForm(filePath, form);
 }
 
 /** Confirmation a content read needs, or null when it needs none. `read` and `grep`
@@ -164,7 +232,7 @@ export function sensitiveReadDecision(
   const raw = contentReadTarget(toolName, input);
   if (raw === null) return null;
   const target = resolveFilePath(raw, cwd);
-  if (!isReadSensitivePath(target) || isPathAllowed(target, cwd, state)) return null;
+  if (!isReadSensitivePath(target, cwd) || isPathAllowed(target, cwd, state)) return null;
   return {
     action: "confirm",
     confirmType: "sensitive",
@@ -606,7 +674,7 @@ export function decide(toolName: string, input: Record<string, unknown>, cwd: st
       const projectRoot = state.gitRoot ?? cwd;
       for (const filePath of collectTargetPaths(toolName, input, cwd)) {
         const rel = relative(projectRoot, filePath);
-        if (isSensitivePath(rel)) {
+        if (isSensitivePath(rel, projectRoot)) {
           return {
             action: "confirm",
             confirmType: "sensitive",
@@ -631,7 +699,7 @@ export function decide(toolName: string, input: Record<string, unknown>, cwd: st
     // Sensitive files: confirm unless that specific path is explicitly allowed.
     for (const filePath of paths) {
       const rel = relative(projectRoot, filePath);
-      if (isSensitivePath(rel) && !isPathAllowed(filePath, cwd, state)) {
+      if (isSensitivePath(rel, projectRoot) && !isPathAllowed(filePath, cwd, state)) {
         return {
           action: "confirm",
           confirmType: "sensitive",

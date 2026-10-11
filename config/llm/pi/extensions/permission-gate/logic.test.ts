@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   autoResolve,
   BREAKER_CONSECUTIVE_DENIALS,
@@ -294,6 +297,122 @@ describe("isSensitivePath", () => {
 
   test("environment.ts is not sensitive (no dot prefix)", () => {
     expect(isSensitivePath("src/environment.ts")).toBe(false);
+  });
+});
+
+// ── symlink resolution ──
+
+describe("symlink resolution", () => {
+  test("a link whose target is sensitive is sensitive itself", () => {
+    const root = mkdtempSync(join(tmpdir(), "gate-symlink-"));
+    try {
+      const secrets = join(root, "secrets");
+      mkdirSync(secrets);
+      const target = join(secrets, "data.bin");
+      writeFileSync(target, "x");
+      const link = join(root, "notes.txt");
+      symlinkSync(target, link);
+
+      expect(isSensitivePath(link, root)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a link whose target does not exist yet still names it", () => {
+    const root = mkdtempSync(join(tmpdir(), "gate-symlink-"));
+    try {
+      const link = join(root, "notes.txt");
+      symlinkSync(join(root, "secrets", "missing.bin"), link);
+
+      expect(isSensitivePath(link, root)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a chain of dangling links still names the final target", () => {
+    const root = mkdtempSync(join(tmpdir(), "gate-symlink-"));
+    try {
+      symlinkSync(join(root, "secrets", "created.bin"), join(root, "lnk2"));
+      symlinkSync(join(root, "lnk2"), join(root, "notes.txt"));
+
+      expect(isSensitivePath(join(root, "notes.txt"), root)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a cycle of links terminates", () => {
+    const root = mkdtempSync(join(tmpdir(), "gate-symlink-"));
+    try {
+      symlinkSync(join(root, "b"), join(root, "a"));
+      symlinkSync(join(root, "a"), join(root, "b"));
+
+      expect(isSensitivePath(join(root, "a"), root)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a link on an ancestor directory does not hide a new file's location", () => {
+    const root = mkdtempSync(join(tmpdir(), "gate-symlink-"));
+    try {
+      const secrets = join(root, "secrets");
+      mkdirSync(secrets);
+      const linkDir = join(root, "linkdir");
+      symlinkSync(secrets, linkDir);
+
+      expect(isSensitivePath(join(linkDir, "new.bin"), root)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a project path that contains a sensitive word does not mark its files", () => {
+    const root = mkdtempSync(join(tmpdir(), "gate-secret-"));
+    try {
+      expect(isSensitivePath("src/main.ts", root)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a link named .env pointing at a credential file is not exempt", () => {
+    const root = mkdtempSync(join(tmpdir(), "gate-symlink-"));
+    try {
+      const secrets = join(root, "secrets");
+      mkdirSync(secrets);
+      const target = join(secrets, "data.bin");
+      writeFileSync(target, "x");
+      const link = join(root, ".env");
+      symlinkSync(target, link);
+
+      expect(isReadSensitivePath(link, root)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a write through a link is sensitive when the project root is above the cwd", () => {
+    const root = mkdtempSync(join(tmpdir(), "gate-symlink-"));
+    try {
+      const sub = join(root, "sub");
+      const secrets = join(root, "secrets");
+      mkdirSync(sub);
+      mkdirSync(secrets);
+      const target = join(secrets, "data.bin");
+      writeFileSync(target, "x");
+      const link = join(sub, "notes.txt");
+      symlinkSync(target, link);
+
+      const state = createInitialState();
+      state.mode = "trust-project";
+      state.gitRoot = root;
+      expect(decide("write", { path: link, content: "x" }, sub, state).confirmType).toBe("sensitive");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
