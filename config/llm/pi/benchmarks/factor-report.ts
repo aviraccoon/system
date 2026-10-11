@@ -23,6 +23,10 @@ export interface FactorRow {
   agrees: boolean;
   ms: number;
   cost: number;
+  /** Severity score (0-3) the decisions runner asked for; the policy promotes above SEVERITY_DANGEROUS. */
+  severity?: number | null;
+  /** Factor probabilities, for offline threshold sweeps. */
+  probabilities?: Record<string, number>;
   error?: string;
 }
 
@@ -47,8 +51,9 @@ export function printFactorRun(run: FactorRun): void {
     const dIcon = row.derivedPass ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
     const mIcon = row.modelPass ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;
     const reasons = row.derivedReasons.length > 0 ? `[${row.derivedReasons.join(",")}]` : "[]";
+    const severity = row.severity === undefined || row.severity === null ? "-" : row.severity.toFixed(2);
     console.log(
-      `  ${dIcon}${mIcon} ${valueColor(row.derived)}${row.derived.padEnd(9)}${RESET} model ${valueColor(row.modelChoice)}${row.modelChoice.padEnd(9)}${RESET} want ${row.expected.padEnd(15)} ${DIM}${row.ms}ms${RESET} ${reasons.padEnd(24)} ${row.input}`,
+      `  ${dIcon}${mIcon} ${valueColor(row.derived)}${row.derived.padEnd(9)}${RESET} model ${valueColor(row.modelChoice)}${row.modelChoice.padEnd(9)}${RESET} want ${row.expected.padEnd(15)} ${DIM}sev ${severity.padEnd(5)} ${row.ms}ms${RESET} ${reasons.padEnd(24)} ${row.input}`,
     );
     if (row.error) console.log(`      ${DIM}${row.error}${RESET}`);
   }

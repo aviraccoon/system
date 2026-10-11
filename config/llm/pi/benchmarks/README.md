@@ -31,6 +31,8 @@ Cases and per-run fixtures come from `explain-cases.ts`. Set `BENCH_SEED` to mak
 BENCH_SEED=run-a bun run benchmarks/explain.ts
 ```
 
+`BENCH_DUMP=/tmp/run.jsonl` makes `jev.ts` write one JSON row per case (factor probabilities, severity score, verdicts) for offline threshold sweeps without re-running the model.
+
 ## Speed
 
 Cases are independent requests, so they run concurrently — `BENCH_CONCURRENCY` (default 6) sets the cap. Lower it for a local endpoint that should not be hit in parallel; raise it for a hosted provider.
@@ -44,7 +46,7 @@ Cases are independent requests, so they run concurrently — `BENCH_CONCURRENCY`
 
 ## Factor benchmarks
 
-`jev.ts` and `factors.ts` ask the same battery of yes/no questions — what a call touches, changes, exposes or spends — all defined once in `../extensions/shared/risk-factors.ts`, the same module the permission gate uses. Both turn the answers into a verdict with the same threshold policy. A wrong verdict names the factor that caused it.
+`jev.ts` and `factors.ts` ask the same battery of yes/no questions — what a call touches, changes, exposes or spends — all defined once in `../extensions/shared/risk-factors.ts`, the same module the permission gate uses. Both turn the answers into a verdict with the same threshold policy. A wrong verdict names the factor that caused it. The chat runner asks the factors but not the severity score, so a promotion only the score would trigger is decisions-only. `jev.ts` also asks a single-question `risk` choice, which the gate does not; it feeds the model-choice column, not the derived verdict.
 
 | Runner | Backend | Notes |
 |--------|---------|-------|

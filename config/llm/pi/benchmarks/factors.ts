@@ -5,17 +5,20 @@
  *
  * Asks a chat model the same factor battery Jev gets — risk-factors.ts renders
  * the questions and applies the same threshold policy to both — so the two
- * runners differ only in backend. Without --model it uses the first model of the
- * explain role.
+ * runners differ only in backend, except that the chat prompt carries the
+ * factors and not the severity score, so a promotion only the score would
+ * trigger never appears in its column. Without --model it uses the first model
+ * of the explain role.
  */
 
+import { applyEditFloor } from "../extensions/permission-gate/explain";
 import {
   buildFactorsPrompt,
   DEFAULT_THRESHOLDS,
   parseFactorAnswers,
   verdictFromFactors,
 } from "../extensions/shared/risk-factors";
-import { buildTests, makeFixture, type Verdict } from "./explain-cases";
+import { buildTests, isEditLikeState, makeFixture, type Verdict } from "./explain-cases";
 import { type FactorRow, printFactorRun } from "./factor-report";
 import {
   fmt,
@@ -94,15 +97,22 @@ async function runCase(model: ResolvedModel, test: TestCase<Verdict>): Promise<F
       };
     }
     const decision = verdictFromFactors(parsed.probabilities, DEFAULT_THRESHOLDS);
+    // The gate floors edits at risky; score what it acts on, not the raw battery.
+    const verdict = applyEditFloor(
+      { verdict: decision.verdict, short: "", detail: "" },
+      isEditLikeState(test.input),
+    ).verdict;
+    const derivedReasons = verdict === decision.verdict ? decision.reasons : [...decision.reasons, "edit_floor"];
     const modelChoice = parsed.risk ?? "(none)";
     return {
       ...base,
-      derived: decision.verdict,
-      derivedReasons: decision.reasons,
-      derivedPass: matches(test.expected, decision.verdict),
+      derived: verdict,
+      derivedReasons,
+      derivedPass: matches(test.expected, verdict),
       modelChoice,
       modelPass: matches(test.expected, modelChoice),
-      agrees: decision.verdict === modelChoice,
+      agrees: verdict === modelChoice,
+      probabilities: parsed.probabilities,
       ms,
       cost,
     };
