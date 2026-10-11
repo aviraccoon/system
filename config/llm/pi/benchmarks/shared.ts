@@ -76,17 +76,23 @@ function loadRoles(path?: string): RolesFile {
 
 // ── Resolution ──
 
-/** Resolve "!command" apiKeys by running the command. */
+/**
+ * Resolve "!command" apiKeys by running the command. A failed or empty command
+ * throws: falling back to the command text sends it as the key and every
+ * request fails later with an unrelated HTTP error.
+ */
 export function resolveApiKey(raw: string | undefined): string | undefined {
-  if (!raw) return undefined;
-  if (raw.startsWith("!")) {
-    try {
-      return execSync(raw.slice(1), { encoding: "utf-8" }).trim();
-    } catch {
-      return raw;
-    }
+  const value = raw?.trim();
+  if (!value) return undefined;
+  if (!value.startsWith("!")) return value;
+  let key: string;
+  try {
+    key = execSync(value.slice(1), { encoding: "utf-8" }).trim();
+  } catch (err) {
+    throw new Error(`API key command failed: ${err instanceof Error ? err.message : String(err)}`);
   }
-  return raw;
+  if (!key) throw new Error(`API key command printed nothing: ${value.slice(1)}`);
+  return key;
 }
 
 export interface ResolvedModel {

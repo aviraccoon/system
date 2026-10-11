@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { fmt, loadProviders, mapWithConcurrency, parseModelArgs, resolveRoleModels } from "./shared";
+import { fmt, loadProviders, mapWithConcurrency, parseModelArgs, resolveApiKey, resolveRoleModels } from "./shared";
 
 // ── mapWithConcurrency ──
 
@@ -45,6 +45,43 @@ describe("fmt", () => {
 
   test("handles single-element array", () => {
     expect(fmt(["safe"])).toBe("safe");
+  });
+});
+
+// ── resolveApiKey ──
+
+describe("resolveApiKey", () => {
+  test("passes an inline key through, trimmed", () => {
+    expect(resolveApiKey("sk-test-123")).toBe("sk-test-123");
+    expect(resolveApiKey("  sk-test-123  ")).toBe("sk-test-123");
+  });
+
+  test("returns undefined for a missing or blank key", () => {
+    expect(resolveApiKey(undefined)).toBeUndefined();
+    expect(resolveApiKey("")).toBeUndefined();
+    expect(resolveApiKey("   ")).toBeUndefined();
+  });
+
+  test("runs a !command and trims its output", () => {
+    expect(resolveApiKey("!printf '  sk-from-command  \\n'")).toBe("sk-from-command");
+  });
+
+  test("throws when the command fails instead of using the command text", () => {
+    expect(() => resolveApiKey("!exit 3")).toThrow(/API key command failed/);
+  });
+
+  test("runs a padded !command", () => {
+    expect(resolveApiKey("  !printf 'sk-padded'  ")).toBe("sk-padded");
+  });
+
+  test("carries the command's stderr into the failure", () => {
+    // The asserted text is computed by the shell, so execSync's echo of the
+    // command cannot satisfy the match on its own.
+    expect(() => resolveApiKey("!sh -c 'echo FAIL-$((6*7)) >&2; exit 1'")).toThrow(/FAIL-42/);
+  });
+
+  test("throws when the command prints nothing", () => {
+    expect(() => resolveApiKey("!true")).toThrow(/printed nothing/);
   });
 });
 
