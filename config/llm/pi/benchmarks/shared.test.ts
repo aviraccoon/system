@@ -1,5 +1,16 @@
-import { describe, expect, test } from "bun:test";
-import { fmt, loadProviders, mapWithConcurrency, parseModelArgs, resolveApiKey, resolveRoleModels } from "./shared";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  fmt,
+  loadAuthKey,
+  loadProviders,
+  mapWithConcurrency,
+  parseModelArgs,
+  resolveApiKey,
+  resolveRoleModels,
+} from "./shared";
 
 // ── mapWithConcurrency ──
 
@@ -183,6 +194,7 @@ describe("resolveRoleModels", () => {
       const models = resolveRoleModels("explain", ["qwen", "gpt"], {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(models).toHaveLength(2);
       expect(models[0].model).toBe("qwen-small");
@@ -203,6 +215,7 @@ describe("resolveRoleModels", () => {
       const models = resolveRoleModels("explain", undefined, {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(models).toHaveLength(1);
       expect(models[0].model).toBe("qwen-small");
@@ -222,6 +235,7 @@ describe("resolveRoleModels", () => {
       const [m] = resolveRoleModels("draft", undefined, {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(m.extra).toEqual({ chat_template_kwargs: { enable_thinking: false } });
       expect(m.maxTokens).toBe(128);
@@ -241,6 +255,7 @@ describe("resolveRoleModels", () => {
       const [m] = resolveRoleModels("explain", undefined, {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(m.maxTokens).toBe(512);
     } finally {
@@ -258,6 +273,7 @@ describe("resolveRoleModels", () => {
       const [m] = resolveRoleModels("minimal", undefined, {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(m.maxTokens).toBe(256);
     } finally {
@@ -273,6 +289,7 @@ describe("resolveRoleModels", () => {
       const [m] = resolveRoleModels("test", undefined, {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(m.apiKey).toBe("secret-key");
     } finally {
@@ -288,6 +305,7 @@ describe("resolveRoleModels", () => {
       const [m] = resolveRoleModels("test", undefined, {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(m.apiKey).toBeUndefined();
     } finally {
@@ -303,6 +321,7 @@ describe("resolveRoleModels", () => {
       const [m] = resolveRoleModels("test", undefined, {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(m.label).toBe("Qwen Small");
     } finally {
@@ -318,6 +337,7 @@ describe("resolveRoleModels", () => {
       const [m] = resolveRoleModels("test", undefined, {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(m.label).toBe("cloud/gpt-5-mini");
     } finally {
@@ -335,6 +355,7 @@ describe("resolveRoleModels", () => {
       const models = resolveRoleModels("draft", ["qwen"], {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(models).toHaveLength(2);
       expect(models.map((m) => m.ref)).toEqual(["local/qwen-small", "local/qwen-large"]);
@@ -350,6 +371,7 @@ describe("resolveRoleModels", () => {
         resolveRoleModels("nonexistent", undefined, {
           rolesPath: `${FIXTURE_DIR}/roles.json`,
           providersPath: `${FIXTURE_DIR}/models.json`,
+          authPath: `${FIXTURE_DIR}/auth.json`,
         }),
       ).toThrow('Role "nonexistent" not found');
     } finally {
@@ -366,6 +388,7 @@ describe("resolveRoleModels", () => {
         resolveRoleModels("test", undefined, {
           rolesPath: `${FIXTURE_DIR}/roles.json`,
           providersPath: `${FIXTURE_DIR}/models.json`,
+          authPath: `${FIXTURE_DIR}/auth.json`,
         }),
       ).toThrow('Invalid ref "no-slash"');
     } finally {
@@ -383,6 +406,7 @@ describe("resolveRoleModels", () => {
       const [m] = resolveRoleModels("test", undefined, {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(m.baseUrl).toBe("http://localhost:8080/v1");
       expect(m.model).toBe("nonexistent");
@@ -400,6 +424,7 @@ describe("resolveRoleModels", () => {
         resolveRoleModels("test", undefined, {
           rolesPath: `${FIXTURE_DIR}/roles.json`,
           providersPath: `${FIXTURE_DIR}/models.json`,
+          authPath: `${FIXTURE_DIR}/auth.json`,
         }),
       ).toThrow("not found in models.json or built-in providers");
     } finally {
@@ -416,6 +441,7 @@ describe("resolveRoleModels", () => {
         resolveRoleModels("test", ["nonexistent"], {
           rolesPath: `${FIXTURE_DIR}/roles.json`,
           providersPath: `${FIXTURE_DIR}/models.json`,
+          authPath: `${FIXTURE_DIR}/auth.json`,
         }),
       ).toThrow("No models in role");
     } finally {
@@ -432,6 +458,7 @@ describe("resolveRoleModels", () => {
       const models = resolveRoleModels("test", ["cloud/gpt-5-mini"], {
         rolesPath: `${FIXTURE_DIR}/roles.json`,
         providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
       });
       expect(models).toHaveLength(1);
       expect(models[0].ref).toBe("cloud/gpt-5-mini");
@@ -450,6 +477,7 @@ describe("resolveRoleModels", () => {
         resolveRoleModels("test", ["totally-unknown/model"], {
           rolesPath: `${FIXTURE_DIR}/roles.json`,
           providersPath: `${FIXTURE_DIR}/models.json`,
+          authPath: `${FIXTURE_DIR}/auth.json`,
         }),
       ).toThrow("not found in models.json or built-in providers");
     } finally {
@@ -494,5 +522,75 @@ describe("parseModelArgs", () => {
     process.argv = ["node", "script.ts", "--model", "omlx/Qwen3.6", "--model=zai/glm-4.5"];
     expect(parseModelArgs()).toEqual(["omlx/Qwen3.6", "zai/glm-4.5"]);
     process.argv = orig;
+  });
+});
+
+describe("loadAuthKey", () => {
+  const dir = join(tmpdir(), `loadauthkey-test-${process.pid}`);
+  // Named auth-fixture.json, not auth.json: the sandbox denies reads of that
+  // exact path, and the path is an argument so the name is free.
+  const authPath = join(dir, "auth-fixture.json");
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function writeAuth(content: string): void {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(authPath, content);
+  }
+
+  test("reads a { key, type } entry", () => {
+    writeAuth(JSON.stringify({ openrouter: { key: "sk-test", type: "api_key" } }));
+    expect(loadAuthKey("openrouter", authPath)).toBe("sk-test");
+  });
+
+  test("a non-string key resolves to nothing instead of throwing a bare TypeError", () => {
+    writeAuth(JSON.stringify({ openrouter: { key: 123 } }));
+    expect(loadAuthKey("openrouter", authPath)).toBeUndefined();
+  });
+
+  test("executes a !command entry and trims its output", () => {
+    writeAuth(JSON.stringify({ openrouter: { key: "!echo sk-from-command" } }));
+    expect(loadAuthKey("openrouter", authPath)).toBe("sk-from-command");
+  });
+
+  test("a failing !command throws instead of returning the command text", () => {
+    writeAuth(JSON.stringify({ openrouter: { key: "!exit 3" } }));
+    expect(() => loadAuthKey("openrouter", authPath)).toThrow("API key command failed");
+  });
+
+  test("a bare string entry is not a credential shape and resolves to nothing", () => {
+    writeAuth(JSON.stringify({ openrouter: "bare-string" }));
+    expect(loadAuthKey("openrouter", authPath)).toBeUndefined();
+  });
+
+  test("an auth.json key wins over a models.json apiKey (pi's order)", () => {
+    writeFixtures(
+      { local: { baseUrl: "http://localhost:8080/v1", apiKey: "from-models", models: [{ id: "qwen-small" }] } },
+      { test: { models: [{ ref: "local/qwen-small" }] } },
+    );
+    writeFileSync(join(FIXTURE_DIR, "auth.json"), JSON.stringify({ local: { key: "from-auth", type: "api_key" } }));
+    try {
+      const [m] = resolveRoleModels("test", undefined, {
+        rolesPath: `${FIXTURE_DIR}/roles.json`,
+        providersPath: `${FIXTURE_DIR}/models.json`,
+        authPath: `${FIXTURE_DIR}/auth.json`,
+      });
+      expect(m.apiKey).toBe("from-auth");
+    } finally {
+      cleanupFixtures();
+    }
+  });
+
+  test("an oauth-shaped entry resolves to nothing", () => {
+    writeAuth(JSON.stringify({ openrouter: { type: "oauth", access: "a", refresh: "r", expires: 1 } }));
+    expect(loadAuthKey("openrouter", authPath)).toBeUndefined();
+  });
+
+  test("a present-but-unreadable file throws instead of resolving to nothing", () => {
+    const dirAsAuth = join(dir, "auth-dir");
+    mkdirSync(dirAsAuth, { recursive: true });
+    expect(() => loadAuthKey("openrouter", dirAsAuth)).toThrow("unreadable");
   });
 });

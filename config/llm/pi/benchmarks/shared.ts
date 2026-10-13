@@ -1,8 +1,8 @@
 /**
  * Shared benchmark infrastructure — role/model resolution, runner, output.
  *
- * Reads model config from ~/.pi/agent/roles.json + models.json (custom providers),
- * and @earendil-works/pi-ai (built-in providers/models). This matches pi's own
+ * Reads role config from ~/.pi/agent/roles.json plus roles.local.json overrides,
+ * and provider config from models.json plus @earendil-works/pi-ai built-ins. This matches pi's own
  * ModelRegistry merging: built-in models are available without models.json entries,
  * and custom providers override or extend them.
  *
@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { getEnvApiKey } from "@earendil-works/pi-ai/compat";
 import { type BuiltinProvider, getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { loadConfig } from "../extensions/shared/model-roles";
 
 // ── Config types ──
 
@@ -70,8 +71,10 @@ export function loadProviders(path?: string): Record<string, ProviderConfig> {
 }
 
 function loadRoles(path?: string): RolesFile {
-  const roles = loadJsonFile<RolesFile>(path ?? join(getAgentDir(), "roles.json"));
-  return roles ?? {};
+  // Explicit path: test fixtures. Default: the runtime's own config load —
+  // roles.json with roles.local.json overrides, exactly what the gate resolves.
+  if (!path) return loadConfig();
+  return loadJsonFile<RolesFile>(path) ?? {};
 }
 
 // ── Resolution ──
@@ -95,6 +98,31 @@ export function resolveApiKey(raw: string | undefined): string | undefined {
   return key;
 }
 
+/**
+ * Provider key from auth.json — pi's store for provider credentials (after the
+ * runtime `--api-key` override, before models.json and env vars). Entries are
+ * `{ key, type }` objects; `!command` values execute. Two deliberate deviations
+ * from pi, both for benchmark ergonomics: a failing `!command` throws instead of
+ * falling through to the env var (a half-authenticated run fails per-case with
+ * 401s that read as model errors), and OAuth entries resolve to nothing (the
+ * benchmark cannot refresh tokens). A present-but-unreadable file throws; only
+ * absence resolves to undefined.
+ */
+export function loadAuthKey(providerName: string, authPath?: string): string | undefined {
+  const path = authPath ?? join(getAgentDir(), "auth.json");
+  let auth: Record<string, { key?: unknown }>;
+  try {
+    auth = JSON.parse(readFileSync(path, "utf-8"));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(
+      `auth.json at ${path} is present but unreadable: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const entry = auth?.[providerName];
+  return typeof entry?.key === "string" ? resolveApiKey(entry.key) : undefined;
+}
+
 export interface ResolvedModel {
   label: string;
   ref: string;
@@ -115,7 +143,7 @@ export interface ResolvedModel {
 export function resolveRoleModels(
   roleName: string,
   modelFilters?: string[],
-  options?: { rolesPath?: string; providersPath?: string },
+  options?: { rolesPath?: string; providersPath?: string; authPath?: string },
 ): ResolvedModel[] {
   const roles = loadRoles(options?.rolesPath);
   const customProviders = loadProviders(options?.providersPath);
@@ -197,8 +225,10 @@ export function resolveRoleModels(
       );
     }
 
-    // Resolve apiKey: models.json > env var
-    let apiKey = resolveApiKey(customProvider?.apiKey);
+    // Resolve apiKey in pi's order: auth.json (stored credential) > models.json
+    // (custom provider) > env var.
+    let apiKey = loadAuthKey(providerName, options?.authPath);
+    if (!apiKey) apiKey = resolveApiKey(customProvider?.apiKey);
     if (!apiKey) {
       apiKey = getEnvApiKey(providerName);
     }
