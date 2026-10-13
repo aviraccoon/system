@@ -29,7 +29,7 @@ const COLLAPSED_OUTPUT_LINES = 4;
 const COLLAPSED_THINKING_CHARS = 120;
 const COLLAPSED_TEXT_LINES = 5;
 const DEBUG_INTERVAL = 500;
-const debugLog = createDebugLogger("subagent", "renderResult.log");
+const debugLog = createDebugLogger("subagent", `renderResult-${process.pid}.log`);
 
 export function renderCall(args: Record<string, unknown>, theme: Theme, context: { expanded?: boolean } | unknown) {
   const scope: string = (args.agentScope as string) ?? "user";
@@ -370,12 +370,15 @@ function renderParallel(details: SubagentDetails, expanded: boolean, theme: Them
 
 // ── entry ──
 
-/** Append the child transcript paths, so a caller can read what a run actually did. */
-export function withSessionPaths(text: string, files: Array<string | undefined>): string {
-  const paths = files.filter((file): file is string => Boolean(file));
-  if (paths.length === 0) return text;
-  const label = paths.length === 1 ? "subagent session" : "subagent sessions";
-  return `${text}\n\n[${label}: ${paths.join(", ")}]`;
+/** Append the child transcript paths and pids, so a caller can read what a run actually did. */
+export function withSessionPaths(text: string, runs: Array<{ path?: string; pid?: number }>): string {
+  const parts = runs
+    .filter((run) => run.path || run.pid !== undefined)
+    .map((run) => (run.pid !== undefined ? `${run.path ?? "(no transcript)"} · pid ${run.pid}` : run.path))
+    .filter((part): part is string => Boolean(part));
+  if (parts.length === 0) return text;
+  const label = parts.length === 1 ? "subagent session" : "subagent sessions";
+  return `${text}\n\n[${label}: ${parts.join(", ")}]`;
 }
 
 export function renderResult(

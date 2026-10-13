@@ -13,13 +13,13 @@ import type { Message } from "@earendil-works/pi-ai";
 import { type ExtensionContext, type ThemeColor, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { createDebugLogger } from "../shared/debug";
 import { loadConfig, resolveRole, resolveRoleChain } from "../shared/model-roles";
-import { BASH_SANDBOX_ENV } from "../shared/sandbox";
+import { BASH_SANDBOX_ENV, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
 import type { AgentConfig } from "./agents";
 import { type AttemptOutcome, attemptPlan, isRetryable, MAX_ATTEMPTS } from "./retry";
 import { type NudgeState, steerNudge, taskWithBudget } from "./turn-budget";
 
 const SUBAGENT_SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-sessions");
-const debugLog = createDebugLogger("subagent", "renderResult.log");
+const debugLog = createDebugLogger("subagent");
 
 // ── Subagent execution ──
 
@@ -70,6 +70,8 @@ export interface SingleResult {
   userInputs?: UserInput[];
   /** Path to the child's transcript, so the caller can read what a run actually did. */
   sessionFile?: string;
+  /** Child process id; the spawn line in this pi process's debug log records it, tying the result to a live process. */
+  pid?: number;
   role?: string; // role name used for model resolution
   model?: string; // resolved model ref
   stopReason?: string;
@@ -396,6 +398,26 @@ export async function runSingleAgent(
   return result as SingleResult;
 }
 
+/**
+ * Stop reason after the child process closes. A turn-capped run reports
+ * max_turns_exceeded unless the abort raced a natural agent_end with
+ * stopReason "stop"; a user abort marks "aborted" only when it landed before
+ * agent_end completed — after agent_end the abort is cleanup, not the outcome.
+ * The returned reason replaces the run's own stop reason when defined.
+ */
+export function exitStopReason(
+  maxTurnsReached: boolean,
+  wasAborted: boolean,
+  agentEndReceived: boolean,
+  stopReason: string | undefined,
+): string | undefined {
+  if (maxTurnsReached) {
+    return stopReason === "stop" ? stopReason : "max_turns_exceeded";
+  }
+  if (wasAborted && !agentEndReceived) return "aborted";
+  return stopReason;
+}
+
 /** One attempt: spawn the child, stream its events, collect the result. */
 async function runSingleAgentAttempt(
   defaultCwd: string,
@@ -527,6 +549,22 @@ async function runSingleAgentAttempt(
     step,
   };
 
+  // A missing cwd fails node's spawn with ENOENT that names the command, not the
+  // directory — fail here instead, naming the actual problem.
+  const effectiveCwd = cwd ?? defaultCwd;
+  if (!fs.existsSync(effectiveCwd)) {
+    return {
+      agent: agentName,
+      agentSource: agent.source,
+      task,
+      exitCode: 1,
+      messages: [],
+      stderr: `cwd does not exist: ${effectiveCwd}`,
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+      step,
+    };
+  }
+
   // RPC state tracking
   let isStreaming = false;
   // Ordered log of everything the subagent produced (thinking, text, tool calls) —
@@ -634,11 +672,21 @@ async function runSingleAgentAttempt(
     const exitCode = await new Promise<number>((resolve) => {
       const invocation = getPiInvocation(args);
       const proc = spawn(invocation.command, invocation.args, {
-        cwd: cwd ?? defaultCwd,
+        cwd: effectiveCwd,
         shell: false,
         stdio: ["pipe", "pipe", "pipe"], // stdin for steering commands
         env: childEnv,
       });
+      debugLog("spawn", 0, {
+        agent: agentName,
+        model: model ?? null,
+        command: invocation.command,
+        args: invocation.args,
+        pid: proc.pid ?? null,
+        cwd: effectiveCwd,
+        parentSandboxCommand: Boolean(process.env[SANDBOX_COMMAND_ENV]),
+      });
+      currentResult.pid = proc.pid;
       let stdoutBuffer = "";
       let stderrBuffer = "";
       let killTimer: ReturnType<typeof setTimeout> | null = null;
@@ -968,10 +1016,28 @@ async function runSingleAgentAttempt(
           clearTimeout(killTimer);
           killTimer = null;
         }
+        debugLog("close", 0, {
+          agent: agentName,
+          exitCode: code ?? 0,
+          events: eventCount,
+          stopReason: currentResult.stopReason ?? null,
+          sessionFile: currentResult.sessionFile ?? null,
+          stderrTail: currentResult.stderr.slice(-400),
+        });
         resolve(code ?? 0);
       });
 
-      proc.on("error", () => {
+      proc.on("error", (err: Error) => {
+        // A spawn failure emits this instead of close: without recording it, the
+        // attempt resolves with empty everything and the failure is invisible.
+        debugLog("spawnError", 0, {
+          agent: agentName,
+          pid: proc.pid ?? null,
+          code: (err as NodeJS.ErrnoException).code ?? null,
+          message: err.message,
+        });
+        currentResult.errorMessage = `spawn failed: ${err.message}`;
+        currentResult.stderr += `spawn: ${err.message}\n`;
         resolve(1);
       });
 
@@ -990,15 +1056,8 @@ async function runSingleAgentAttempt(
     });
 
     currentResult.exitCode = exitCode;
-    if (maxTurnsReached) {
-      // Capped: report max_turns_exceeded unless the run genuinely completed
-      // (the abort raced a natural agent_end with stopReason "stop").
-      if (currentResult.stopReason !== "stop") currentResult.stopReason = "max_turns_exceeded";
-    } else if (wasAborted && !agentEndReceived) {
-      // Only throw if user aborted BEFORE agent_end completed.
-      // After agent_end, we send abort as cleanup — wasAborted is true but it's normal.
-      throw new Error("Subagent was aborted");
-    }
+    const reason = exitStopReason(maxTurnsReached, wasAborted, agentEndReceived, currentResult.stopReason);
+    if (reason) currentResult.stopReason = reason;
     return currentResult;
   } finally {
     cleanup();

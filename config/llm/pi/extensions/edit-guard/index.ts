@@ -228,12 +228,12 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   // ── Post-edit scan: append violations to the tool result ──
 
   pi.on("tool_result", async (event, ctx) => {
-    // A dispatch that returns a result with children — success or failure —
-    // re-arms the freshness cycle like a user message: the next dispatch must
-    // follow a journal write recording that child's outcome. An aborted
-    // dispatch throws and returns no children: it does not re-arm; the abort
-    // ends the turn. Blocked attempts emit no tool_result at all (pi skips
-    // the handler), and no-op declines ran no child (details.results empty).
+    // A dispatch that returns a result with children — success, failure or
+    // aborted — re-arms the freshness cycle like a user message: the next
+    // dispatch must follow a journal write recording that child's outcome (an
+    // aborted child still read the journal). Blocked attempts emit no
+    // tool_result at all (pi skips the handler), and no-op declines ran no
+    // child (details.results empty).
     if (event.toolName === "subagent") {
       if (dispatchRan(event.details)) {
         journalThreshold = Date.now();

@@ -83,7 +83,11 @@ without producing a message — is retried: the first model twice, then the next
 in the agent's role chain, up to 3 attempts. When the chain is short, the plan repeats
 the last candidate (a retry can land on a different upstream even for the same model).
 A dispatch without a role has no chain and gets one attempt. User aborts and turn-budget
-stops are not retried. A retried failure line names the attempt count.
+stops are not retried. A retried failure line names the attempt count. A user abort
+returns the partial result (stopReason `aborted`) with whatever stderr, exit code and
+session path the run collected, instead of discarding them. Every attempt logs spawn,
+close and spawn errors to `/tmp/pi-subagent-debug/debug-<pid>.log` (the log file is per
+pi process, cleared at the start of each dispatch; files stay until /tmp is cleaned).
 
 ### Streaming
 

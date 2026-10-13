@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "@earendil-works/pi-ai";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { renderCall, renderResult } from "./render";
+import { renderCall, renderResult, withSessionPaths } from "./render";
 import {
   formatTokens,
   formatToolCall,
@@ -726,5 +726,34 @@ describe("renderResult", () => {
     expect(text).toContain("5 turns");
     expect(text).toContain("↑5.0k");
     expect(text).toContain("ctx:100k");
+  });
+});
+
+describe("withSessionPaths", () => {
+  test("path and pid render as one bracket line", () => {
+    expect(withSessionPaths("done", [{ path: "/tmp/s.jsonl", pid: 42 }])).toBe(
+      "done\n\n[subagent session: /tmp/s.jsonl · pid 42]",
+    );
+  });
+
+  test("pid without a transcript names the missing transcript", () => {
+    expect(withSessionPaths("failed", [{ pid: 42 }])).toBe("failed\n\n[subagent session: (no transcript) · pid 42]");
+  });
+
+  test("path without a pid stays path-only", () => {
+    expect(withSessionPaths("done", [{ path: "/tmp/s.jsonl" }])).toBe("done\n\n[subagent session: /tmp/s.jsonl]");
+  });
+
+  test("neither path nor pid appends nothing", () => {
+    expect(withSessionPaths("done", [{}])).toBe("done");
+    expect(withSessionPaths("done", [])).toBe("done");
+  });
+
+  test("several runs pluralize the label", () => {
+    const out = withSessionPaths("chain", [
+      { path: "/tmp/a.jsonl", pid: 1 },
+      { path: "/tmp/b.jsonl", pid: 2 },
+    ]);
+    expect(out).toBe("chain\n\n[subagent sessions: /tmp/a.jsonl · pid 1, /tmp/b.jsonl · pid 2]");
   });
 });

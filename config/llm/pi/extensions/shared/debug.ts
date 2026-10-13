@@ -1,9 +1,12 @@
 /**
  * File-based debug logging for pi extensions.
  *
- * Writes to /tmp/pi-<tag>-debug/<filename>.log with per-type throttling.
- * Safe to call from hot paths (render functions, streaming events) —
- * throttled to avoid flooding disk or slowing the event loop.
+ * Writes to /tmp/pi-<tag>-debug/<filename>.log with per-type throttling. The
+ * filename defaults to `debug-<pid>.log`: several pi processes (main sessions,
+ * subagent children) can run at once, and a shared file would let one process's
+ * per-dispatch clear() wipe another's entries. Safe to call from hot paths
+ * (render functions, streaming events) — throttled to avoid flooding disk or
+ * slowing the event loop. Files stay until /tmp is cleaned on reboot.
  *
  * Usage:
  *   import { createDebugLogger } from "../shared/debug";
@@ -20,7 +23,7 @@ export interface DebugLogger {
   clear(): void;
 }
 
-export function createDebugLogger(tag: string, filename = "debug.log"): DebugLogger {
+export function createDebugLogger(tag: string, filename = `debug-${process.pid}.log`): DebugLogger {
   const dir = `/tmp/pi-${tag}-debug`;
   const logPath = path.join(dir, filename);
 

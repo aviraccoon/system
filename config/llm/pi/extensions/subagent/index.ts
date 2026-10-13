@@ -268,7 +268,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
                     type: "text",
                     text: withSessionPaths(
                       `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}${attemptsNote}`,
-                      [result.sessionFile],
+                      [{ path: result.sessionFile, pid: result.pid }],
                     ),
                   },
                 ],
@@ -283,7 +283,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
               {
                 type: "text",
                 text: withSessionPaths(getFinalOutput(results[results.length - 1].messages) || "(no output)", [
-                  results[results.length - 1].sessionFile,
+                  { path: results[results.length - 1].sessionFile, pid: results[results.length - 1].pid },
                 ]),
               },
             ],
@@ -368,7 +368,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
           const successCount = results.filter((r) => !resultFailed(r)).length;
           const summaries = results.map((r) => {
-            const output = getFinalOutput(r.messages);
+            const output = getFinalOutput(r.messages) || r.errorMessage || r.stderr;
             return `[${r.agent}] ${resultFailed(r) ? "failed" : "completed"}:\n${output || "(no output)"}`;
           });
           return {
@@ -377,7 +377,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
                 type: "text",
                 text: withSessionPaths(
                   `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
-                  results.map((r) => r.sessionFile),
+                  results.map((r) => ({ path: r.sessionFile, pid: r.pid })),
                 ),
               },
             ],
@@ -417,7 +417,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
                 {
                   type: "text",
                   text: withSessionPaths(`Agent ${result.stopReason || "failed"}: ${errorMsg}${attemptsNote}`, [
-                    result.sessionFile,
+                    { path: result.sessionFile, pid: result.pid },
                   ]),
                 },
               ],
@@ -429,7 +429,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: withSessionPaths(getFinalOutput(result.messages) || "(no output)", [result.sessionFile]),
+                text: withSessionPaths(getFinalOutput(result.messages) || "(no output)", [
+                  { path: result.sessionFile, pid: result.pid },
+                ]),
               },
             ],
             details: makeDetails("single")([result]),

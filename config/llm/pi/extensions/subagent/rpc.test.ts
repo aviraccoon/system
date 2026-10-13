@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "@earendil-works/pi-ai";
-import { attemptOutcome, finalAnswerText, resultFailed, type SingleResult } from "./rpc";
+import { attemptOutcome, exitStopReason, finalAnswerText, resultFailed, type SingleResult } from "./rpc";
 
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
 
@@ -72,5 +72,25 @@ describe("resultFailed", () => {
     expect(resultFailed(result({ stopReason: "error", messages: [] }))).toBe(true);
     expect(resultFailed(result({ stopReason: "max_turns_exceeded", messages: [] }))).toBe(true);
     expect(resultFailed(result({ exitCode: -1, messages: [] }))).toBe(false);
+  });
+});
+
+describe("exitStopReason", () => {
+  test("a user abort before agent_end marks the run aborted", () => {
+    expect(exitStopReason(false, true, false, undefined)).toBe("aborted");
+  });
+
+  test("an abort after agent_end is cleanup, not the outcome", () => {
+    expect(exitStopReason(false, true, true, "stop")).toBe("stop");
+  });
+
+  test("a turn-capped run reports max_turns_exceeded unless it genuinely stopped", () => {
+    expect(exitStopReason(true, false, false, "stop")).toBe("stop");
+    expect(exitStopReason(true, true, true, undefined)).toBe("max_turns_exceeded");
+  });
+
+  test("a natural close keeps the run's own stop reason", () => {
+    expect(exitStopReason(false, false, false, "stop")).toBe("stop");
+    expect(exitStopReason(false, false, false, undefined)).toBeUndefined();
   });
 });

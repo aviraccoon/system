@@ -279,9 +279,9 @@ export function journalLinkBlockReason(
 
 /** True when a subagent tool result represents a dispatch that returned
  * children — success or failure. No-op declines (invalid parameters, a
- * disabled tool, a canceled confirm) carry empty or absent results, and an
- * aborted dispatch throws (details-less error), so neither re-arms the
- * freshness cycle. */
+ * disabled tool, a canceled confirm) carry empty or absent results, and neither
+ * re-arms the freshness cycle. An aborted dispatch returns its partial result,
+ * so it re-arms like any other: the child read the journal, fresh or stale. */
 export function dispatchRan(details: unknown): boolean {
   const results = (details as { results?: unknown } | null)?.results;
   return Array.isArray(results) && results.length > 0;
