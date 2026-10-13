@@ -34,7 +34,7 @@ When you need to understand how pi resolves models, loads extensions, or handles
 │   ├── core/
 │   │   ├── model-registry.js      # model resolution: built-in + models.json merge
 │   │   ├── model-resolver.js      # model selection prompt parsing
-│   │   ├── auth-storage.js        # API key resolution: auth.json → env vars → models.json
+│   │   ├── auth-storage.js        # API key resolution: auth.json → models.json → env vars
 │   │   ├── sdk.js                 # ExtensionAPI, ExtensionContext types
 │   │   └── ...                    # session-manager, keybindings, exec, etc.
 │   └── docs/                      # extension docs, tui docs
@@ -61,7 +61,7 @@ When you need to understand how pi resolves models, loads extensions, or handles
 1. **Built-in models**: `pi-ai`'s `getProviders()` / `getModels()` return a static catalog of ~22 providers with model definitions (baseUrl, context window, costs, etc.). No config needed.
 2. **Custom providers**: `~/.pi/agent/models.json` adds or overrides providers. Custom providers need `baseUrl` + `apiKey`. Built-in providers can be overridden (change baseUrl, add models).
 3. **Merge**: `loadBuiltInModels()` then `mergeCustomModels()` — custom wins on `provider/id` conflicts.
-4. **Auth priority**: `getApiKeyAndHeaders()` checks: runtime override → auth.json → env var (`getEnvApiKey()`) → models.json apiKey.
+4. **Auth priority**: `getApiKeyAndHeaders()` checks: runtime override → auth.json → models.json apiKey → env var (`getEnvApiKey()`).
 
 The benchmark's `shared.ts` replicates this merge logic (reads models.json + pi-ai built-ins) without instantiating `ModelRegistry` itself (which requires `AuthStorage`).
 
@@ -70,8 +70,8 @@ The benchmark's `shared.ts` replicates this merge logic (reads models.json + pi-
 `dist/core/auth-storage.js` — `AuthStorage` class. Priority chain for API keys:
 1. Runtime override (CLI `--api-key`)
 2. `~/.pi/agent/auth.json` (`api_key` or `oauth` credential)
-3. Environment variable (`ANTHROPIC_API_KEY`, `ZAI_API_KEY`, `OPENROUTER_API_KEY`, etc.)
-4. Fallback resolver (models.json `apiKey` field — supports `!command` prefix for shell execution)
+3. Fallback resolver (models.json `apiKey` field — supports `!command` prefix for shell execution)
+4. Environment variable (`ANTHROPIC_API_KEY`, `ZAI_API_KEY`, `OPENROUTER_API_KEY`, etc.)
 
 `pi-ai`'s `env-api-keys.js` has the provider → env var mapping. Useful for knowing which env var a provider needs.
 

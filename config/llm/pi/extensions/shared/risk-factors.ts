@@ -63,7 +63,12 @@ export const RISK_FACTORS: Record<string, DecisionsQuestion> = {
     },
   ),
   writes_to_sensitive_location: noul(
-    "Does this call write to a credential location, an SSH authorization file, or a system configuration path?",
+    "Does this call write to a credential location, an SSH authorization file, or a system configuration path? File content that mentions such locations or contains example keys is not a write to them.",
+    {
+      true: "The call's destination is the sensitive file itself: an SSH private or authorized key, a credential store, a system config path.",
+      false:
+        "The call writes an ordinary file — source, docs, a test — whose content mentions credential files or holds example keys.",
+    },
   ),
   sends_data_off_machine: noul("Does this call send data to a remote endpoint?"),
   runs_remote_code: noul(
