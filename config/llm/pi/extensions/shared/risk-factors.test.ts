@@ -175,6 +175,8 @@ describe("buildFactorsPrompt", () => {
     for (const name of FACTOR_NAMES) expect(prompt).toContain(name);
     expect(prompt).toContain("one JSON object");
     expect(prompt).toContain("Nothing irreplaceable is lost");
+    expect(prompt).toContain("temporary scratch location");
+    expect(prompt).toContain("including when only some output lands in a temporary directory");
   });
 });
 

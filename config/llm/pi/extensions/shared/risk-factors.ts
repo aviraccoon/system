@@ -24,7 +24,12 @@ const noul = (instructions: string, criteria?: { true: string; false: string }):
 
 export const RISK_FACTORS: Record<string, DecisionsQuestion> = {
   mutates_state: noul(
-    "Does this call change anything on the machine — create, modify, move or delete a file, or alter system state? Tests, linters, type-checkers and builds count only if they write outside the project's own caches and build directories.",
+    "Does this call change anything that persists beyond the call — create, modify, move or delete a file, or alter system state? A write whose destination is a temporary scratch location (/tmp, the OS temp directory) does not count; a call whose other parts make persistent changes still counts. A destination the call does not spell out — a variable or a path built at runtime — is not a temporary scratch location: scratch turns on where the destination can reach, not on whether it names every file. Tests, linters, type-checkers and builds count only if they write outside the project's own caches and build directories.",
+    {
+      true: "It changes something persistent: a project, home or config file is created, changed or removed, a database or system state changes — including when only some output lands in a temporary directory.",
+      false:
+        "Only scratch is touched: output redirected or saved into a temporary directory, the project's own caches and build output — and nothing else in the call changes persistent state.",
+    },
   ),
   destroys_data: noul(
     "Does this call destroy data that cannot be regenerated — deleting or overwriting files, records or state whose content exists nowhere else?",
