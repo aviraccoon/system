@@ -166,7 +166,10 @@ export default function permissionGate(pi: ExtensionAPI) {
     const factors = await classifyWithFactors(ctx, description, timeoutMs);
     if (factors) return applyEditFloor(factors, EDIT_LIKE_TOOLS.includes(toolName));
     const proseText = await askProse(ctx, description, timeoutMs);
-    return proseText ? parseExplanation(proseText, true) : null;
+    // The prose path gets the same edit floor as the battery: its prompt may
+    // call a scratch write safe, and a safe edit-like verdict auto-allows.
+    const prose = proseText ? parseExplanation(proseText, true) : null;
+    return prose ? applyEditFloor(prose, EDIT_LIKE_TOOLS.includes(toolName)) : null;
   }
 
   /**
@@ -276,8 +279,11 @@ export default function permissionGate(pi: ExtensionAPI) {
       }
       const text = await prosePromise;
       const prose = text ? parseExplanation(text, true) : null;
-      if (prose) state.classifyCache.set(key, { ...prose });
-      return prose;
+      // Same floor as classify(): an unfloored safe prose verdict cached here
+      // would be auto-allowed verbatim when the identical call is retried.
+      const floored = prose ? applyEditFloor(prose, EDIT_LIKE_TOOLS.includes(toolName)) : null;
+      if (floored) state.classifyCache.set(key, { ...floored });
+      return floored;
     })();
 
     return {

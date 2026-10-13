@@ -42,7 +42,11 @@ export const RISK_FACTORS: Record<string, DecisionsQuestion> = {
   large_scale_damage: noul(
     "If data is lost, is it large-scale — a home directory, a system path, a whole repository or dataset — rather than one file, one build directory or one cache?",
   ),
-  touches_credentials: noul("Does this call read, transmit or write credentials, keys or tokens?"),
+  touches_credentials: noul("Does this call read, transmit or write credentials, keys or tokens?", {
+    true: "The call touches a real secret: reading a key file or an env value, a secret store, or sending or writing an actual credential value.",
+    false:
+      "It handles placeholder values or a variable reference in content the call writes — a config template, a fixture, an example ($API_TOKEN, change-me) — or files merely named like credentials with no secret in play.",
+  }),
   exposes_all_credentials: noul(
     "Would this call expose many credentials at once — a full environment, a secret store, an entire keyring — rather than one?",
     {
@@ -85,11 +89,11 @@ export const RISK_FACTORS: Record<string, DecisionsQuestion> = {
     },
   ),
   affects_shared_or_remote_state: noul(
-    "Does this call change shared or remote state in a way that is hard to undo — deleting or rewriting remote data, mutating a live database, or publishing an artifact?",
+    "Does this call change shared or remote state in a way that is hard to undo — deleting or rewriting remote data, mutating a live database, or publishing an artifact? Operations mentioned inside content this call writes describe nothing the call does.",
     {
-      true: "It destroys or rewrites what others rely on: a force push, a deleted branch, release or remote object, a live database changed, a package or artifact published.",
+      true: "It destroys or rewrites what others rely on: a force push it performs, a branch, release or other remote object it deletes, a live database it changes, a package or artifact it publishes.",
       false:
-        "It only adds to shared state or touches records the user owns: pushing commits to a branch, opening or commenting on a pull request, updating one entry.",
+        "It only adds to shared state or touches records the user owns: pushing commits to a branch, opening or commenting on a pull request, updating one entry — or it writes a file that merely mentions such operations.",
     },
   ),
   persists_after_exit: noul(
@@ -99,10 +103,20 @@ export const RISK_FACTORS: Record<string, DecisionsQuestion> = {
     "Does this call install or upgrade software or dependencies, running code supplied by someone else (package managers, postinstall scripts, brew, nix)?",
   ),
   obfuscated_execution: noul(
-    "Does this call hide what it executes — an encoded blob, eval, a generated script, or a command assembled from strings?",
+    "Does this call hide what it executes — an encoded blob, eval, a generated script, or a command assembled from strings? Code this call writes into a file is readable content, not hidden execution.",
+    {
+      true: "The call's own execution is disguised: an encoded blob piped to a decoder, eval of a built string, a script generated and run in one step.",
+      false:
+        "The call writes readable source that happens to use eval or string assembly, or runs a script file by name — what runs is visible in the call.",
+    },
   ),
   history_rewrite: noul(
-    "Does this call rewrite or delete version-control history — a force push, a hard reset, a branch or tag deletion, or a rebase of work others have?",
+    "Does this call rewrite or delete version-control history — a force push, a hard reset, a branch or tag deletion, or a rebase of work others have? Command text that appears inside content this call writes is documentation, not an action of the call.",
+    {
+      true: "The call runs a version-control command that rewrites or deletes history: a force push, a push --delete, filter-branch, a hard reset, a history-editing rebase.",
+      false:
+        "The call writes or edits a file whose content mentions such commands — an example in documentation, a fixture, a script written at the user's request. No version-control command runs.",
+    },
   ),
   disables_safety_controls: noul(
     "Does this call disable or weaken a system safety control — a firewall, an antivirus or endpoint agent, a sandbox, audit logging, or a security policy — rather than changing ordinary file permissions?",

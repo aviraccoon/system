@@ -19,8 +19,8 @@ DANGEROUS|Dumps all environment variables (exposes every credential at once)
 DANGEROUS|Deletes entire home directory recursively
 
 Criteria:
-- SAFE: Strictly read-only operations that cannot expose secrets or change anything. Examples: ls, cat, grep, find, pwd, git log, git status, git diff, running tests, type-checking, linting.
-- RISKY: Any operation that creates, modifies, or deletes files, changes permissions, alters system state, or reads specific environment variables. Examples: rm, mv, cp, sed -i, chmod, git checkout (restoring files), git commit, mkdir, writing/editing files, echo $VAR, accessing /run/secrets/.
+- SAFE: Strictly read-only operations that cannot expose secrets or change anything, and writing outputs into temporary scratch locations (/tmp, the OS temp directory) for immediate use. Examples: ls, cat, grep, find, pwd, git log, git status, git diff, running tests, type-checking, linting, curl -o /tmp/page.html.
+- RISKY: Any operation that creates, modifies, or deletes persistent files or state, changes permissions, alters system state, or reads specific environment variables. A write whose destination is a temporary scratch location does not count, and a destination the call does not spell out (a variable) is not scratch; a pattern confined to a temporary directory is still scratch. Examples: rm, mv, cp, sed -i, chmod, git checkout (restoring files), git commit, mkdir, writing/editing files, echo $VAR, accessing /run/secrets/.
 - DANGEROUS: Irreversible large-scale data loss (recursive delete of home/root), credential exposure (env, printenv, set -- these dump ALL credentials at once), security compromise, data exfiltration, arbitrary code execution (curl|bash).
 
 Known local tools:
