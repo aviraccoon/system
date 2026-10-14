@@ -33,6 +33,8 @@ BENCH_SEED=run-a bun run benchmarks/explain.ts
 
 `BENCH_DUMP=/tmp/run.jsonl` makes `jev.ts` write one JSON row per case (factor probabilities, severity score, verdicts) for offline threshold sweeps without re-running the model.
 
+`BENCH_GROUP=<names>` runs only the cases tagged with the named groups — a wording change to one section is measured without re-running the full battery (every case is one request per question). Names are comma- or whitespace-separated section names from `explain-cases.ts` (the failure message lists the available ones); unset or `all` runs everything; unknown names fail loudly instead of scoring zero cases. A group run tunes; a full 3-seed battery run confirms before committing a wording change.
+
 ## Speed
 
 Cases are independent requests, so they run concurrently — `BENCH_CONCURRENCY` (default 6) sets the cap. Lower it for a local endpoint that should not be hit in parallel; raise it for a hosted provider.

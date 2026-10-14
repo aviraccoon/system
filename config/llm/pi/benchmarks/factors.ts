@@ -26,6 +26,7 @@ import {
   parseModelArgs,
   type ResolvedModel,
   resolveRoleModels,
+  selectTests,
   type TestCase,
 } from "./shared";
 
@@ -133,7 +134,7 @@ async function runCase(model: ResolvedModel, test: TestCase<Verdict>): Promise<F
 
 const resolved = resolveRoleModels("explain", parseModelArgs());
 const fixture = makeFixture(process.env.BENCH_SEED);
-const tests = buildTests(fixture);
+const tests = selectTests(buildTests(fixture));
 
 for (const model of resolved) {
   const rows = await mapWithConcurrency(tests, CONCURRENCY, (test) => runCase(model, test));

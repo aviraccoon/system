@@ -32,7 +32,7 @@ import {
 } from "../extensions/shared/risk-factors";
 import { buildTests, isEditLikeState, makeFixture, type Verdict } from "./explain-cases";
 import { type FactorRow, printFactorRun } from "./factor-report";
-import { fmt, loadProviders, mapWithConcurrency, resolveApiKey, type TestCase } from "./shared";
+import { fmt, loadProviders, mapWithConcurrency, resolveApiKey, selectTests, type TestCase } from "./shared";
 
 const MODEL = process.env.JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
 // models.json carries this provider's credential; the pi-side gate uses the
@@ -130,7 +130,7 @@ async function runCase(apiKey: string, test: TestCase<Verdict>): Promise<FactorR
 
 const apiKey = providerKey(PROVIDER);
 const fixture = makeFixture(process.env.BENCH_SEED);
-const tests = buildTests(fixture);
+const tests = selectTests(buildTests(fixture));
 const rows = await mapWithConcurrency(tests, CONCURRENCY, (test) => runCase(apiKey, test));
 
 printFactorRun({
@@ -144,6 +144,6 @@ const dump = process.env.BENCH_DUMP;
 if (dump) {
   writeFileSync(
     dump,
-    `${rows.map((row, i) => JSON.stringify({ ...row, fullInput: tests[i]?.input ?? row.input })).join("\n")}\n`,
+    `${rows.map((row, i) => JSON.stringify({ ...row, fullInput: tests[i]?.input ?? row.input, group: tests[i]?.group })).join("\n")}\n`,
   );
 }

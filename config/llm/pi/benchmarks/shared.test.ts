@@ -10,6 +10,8 @@ import {
   parseModelArgs,
   resolveApiKey,
   resolveRoleModels,
+  selectTests,
+  type TestCase,
 } from "./shared";
 
 // ── mapWithConcurrency ──
@@ -592,5 +594,56 @@ describe("loadAuthKey", () => {
     const dirAsAuth = join(dir, "auth-dir");
     mkdirSync(dirAsAuth, { recursive: true });
     expect(() => loadAuthKey("openrouter", dirAsAuth)).toThrow("unreadable");
+  });
+});
+
+// ── selectTests (BENCH_GROUP) ──
+
+describe("selectTests", () => {
+  const cases: TestCase<string>[] = [
+    { input: "a", expected: "safe", group: "one" },
+    { input: "b", expected: "safe", group: "two" },
+    { input: "c", expected: "safe" },
+  ];
+
+  test("unset or 'all' runs everything", () => {
+    delete process.env.BENCH_GROUP;
+    expect(selectTests(cases)).toHaveLength(3);
+    process.env.BENCH_GROUP = "all";
+    expect(selectTests(cases)).toHaveLength(3);
+  });
+
+  test("a known group selects only its cases", () => {
+    process.env.BENCH_GROUP = "one";
+    expect(selectTests(cases).map((c) => c.input)).toEqual(["a"]);
+  });
+
+  test("comma- or space-separated names select the union", () => {
+    process.env.BENCH_GROUP = "two,one";
+    expect(selectTests(cases).map((c) => c.input)).toEqual(["a", "b"]);
+    process.env.BENCH_GROUP = "one two";
+    expect(selectTests(cases).map((c) => c.input)).toEqual(["a", "b"]);
+  });
+
+  test("an unknown name throws and names the available groups", () => {
+    process.env.BENCH_GROUP = "one,nope";
+    expect(() => selectTests(cases)).toThrow("one, two");
+  });
+
+  test("a value of only separators throws", () => {
+    process.env.BENCH_GROUP = ", ,";
+    expect(() => selectTests(cases)).toThrow("names no group");
+  });
+
+  test("untagged cases cannot be selected", () => {
+    process.env.BENCH_GROUP = "";
+    const untagged: TestCase<string>[] = [{ input: "x", expected: "safe" }];
+    expect(selectTests(untagged)).toHaveLength(1);
+    process.env.BENCH_GROUP = "x";
+    expect(() => selectTests(untagged)).toThrow("no groups");
+  });
+
+  afterAll(() => {
+    delete process.env.BENCH_GROUP;
   });
 });

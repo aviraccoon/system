@@ -265,6 +265,32 @@ export interface TestCase<T = string> {
   input: string;
   /** Expected result — single value or array for borderline cases */
   expected: T | T[];
+  /** Named section the case belongs to; BENCH_GROUP runs a single section. */
+  group?: string;
+}
+
+/**
+ * BENCH_GROUP selects the named groups of cases so a wording change can be
+ * measured without re-running the full battery (every case is one request per
+ * question). Names are comma- or whitespace-separated; unset or "all" runs
+ * everything. Unknown names are an error, not an empty run — a typo would
+ * otherwise report a perfect score over zero cases.
+ */
+export function selectTests<T>(tests: TestCase<T>[]): TestCase<T>[] {
+  const raw = process.env.BENCH_GROUP?.trim();
+  if (!raw || raw === "all") return tests;
+  const wanted = raw.split(/[\s,]+/).filter(Boolean);
+  if (wanted.length === 0) throw new Error("BENCH_GROUP is set but names no group");
+  const available = new Set(tests.map((test) => test.group).filter(Boolean));
+  const unknown = wanted.filter((name) => !available.has(name));
+  if (unknown.length > 0) {
+    const names = [...available].sort().join(", ");
+    throw new Error(
+      `BENCH_GROUP names unknown groups: ${unknown.join(", ")}. Available: ${names || "(none — cases carry no groups)"}`,
+    );
+  }
+  const selected = new Set(wanted);
+  return tests.filter((test) => test.group !== undefined && selected.has(test.group));
 }
 
 export interface TestResult {
@@ -414,16 +440,17 @@ export async function runBenchmark<T extends string>(config: BenchConfig<T>): Pr
   const resolved = resolveRoleModels(config.role, modelFilters);
   const color = config.color ?? valueColor;
   const concurrency = parseConcurrency();
+  const tests = selectTests(config.tests);
 
   // Print model plan up front
   console.log(
-    `\n${BOLD}Role:${RESET} ${config.role}  ${BOLD}Models:${RESET} ${resolved.map((m) => m.label).join(", ")}  ${DIM}(${resolved.length} model${resolved.length > 1 ? "s" : ""}, ${config.tests.length} tests, concurrency ${concurrency})${RESET}`,
+    `\n${BOLD}Role:${RESET} ${config.role}  ${BOLD}Models:${RESET} ${resolved.map((m) => m.label).join(", ")}  ${DIM}(${resolved.length} model${resolved.length > 1 ? "s" : ""}, ${tests.length} tests, concurrency ${concurrency})${RESET}`,
   );
 
   for (const model of resolved) {
     console.log(`\n${BOLD}${model.label}${RESET}\n`);
 
-    const rows = await mapWithConcurrency(config.tests, concurrency, (test) =>
+    const rows = await mapWithConcurrency(tests, concurrency, (test) =>
       runOne(model, test, config.systemPrompt, config.parseOutput, config.buildMessages),
     );
 
