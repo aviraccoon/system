@@ -39,6 +39,11 @@ describe("compileRules", () => {
     expect(errors).toEqual([]);
   });
 
+  test("enforce defaults to notice; a rule may opt into blockOnce", () => {
+    expect(todoRule.enforce).toBe("notice");
+    expect(pick("in-place edit").enforce).toBe("blockOnce");
+  });
+
   test("reports broken regexes instead of silently dropping them", () => {
     const result = compileRules([
       {
@@ -214,6 +219,7 @@ describe("mergeRuleConfigs", () => {
       "public file",
       "internal codename",
       "bash command",
+      "in-place edit",
       "extra",
     ]);
     expect(merged[0]).toBe(replacement);
@@ -253,6 +259,30 @@ describe("validateRuleConfig", () => {
         "cfg",
       ),
     ).toContain("patterns");
+  });
+
+  test("accepts enforce on bash rules, rejects unknown values and file rules", () => {
+    const bashRule = {
+      displayName: "x",
+      policy: "p",
+      match: { kind: "bash" },
+      patterns: [{ label: "l", regex: "r" }],
+    };
+    expect(validateRuleConfig({ ...bashRule, enforce: "notice" }, "cfg")).toBeNull();
+    expect(validateRuleConfig({ ...bashRule, enforce: "blockOnce" }, "cfg")).toBeNull();
+    expect(validateRuleConfig({ ...bashRule, enforce: "always" }, "cfg")).toContain("enforce");
+    expect(
+      validateRuleConfig(
+        {
+          displayName: "x",
+          policy: "p",
+          match: { kind: "basename", names: ["a.md"] },
+          enforce: "blockOnce",
+          patterns: [{ label: "l", regex: "r" }],
+        },
+        "cfg",
+      ),
+    ).toContain("blockOnce");
   });
 });
 
@@ -300,6 +330,56 @@ describe("bash-command rule", () => {
     expect(scanContent("rg 'foo|bar' src/", rules)).toHaveLength(0);
     expect(scanContent("cargo clippy", rules)).toHaveLength(0);
     expect(scanContent("rg foo src/ | wc -l", rules)).toHaveLength(0);
+  });
+});
+
+describe("in-place-edit rule", () => {
+  const bashRule = pick("in-place edit");
+  const rules = bashRule.rules;
+
+  test("is a bash-kind rule enforced once per session", () => {
+    expect(bashRule.kind).toBe("bash");
+    expect(bashRule.enforce).toBe("blockOnce");
+  });
+
+  test("flags sed and perl in-place rewrites", () => {
+    expect(
+      labelsOf(
+        scanContent(
+          [
+            "gsed -i 's|old|new|' src/file.ts",
+            "sed -i '' 's/foo/bar/' src/file.ts",
+            "sed -E -i 's/foo/bar/' src/file.ts",
+            "sudo sed --in-place 's/foo/bar/' /etc/hosts",
+            "cd src && perl -i -pe 's/foo/bar/' file.ts",
+            "perl -0pi -e 's/foo\\nbar/baz/' file.ts",
+            "perl -pi.bak -e 's/foo/bar/' file.ts",
+          ].join("\n"),
+          rules,
+        ),
+      ),
+    ).toEqual([
+      ["sed -i rewrites the file in place"],
+      ["sed -i rewrites the file in place"],
+      ["sed -i rewrites the file in place"],
+      ["sed -i rewrites the file in place"],
+      ["perl -i rewrites the file in place"],
+      ["perl -i rewrites the file in place"],
+      ["perl -i rewrites the file in place"],
+    ]);
+  });
+
+  test("leaves reads, mentions, and non-in-place interpreters alone", () => {
+    expect(scanContent("rg -n 'sed -i' config/", rules)).toHaveLength(0);
+    expect(scanContent("rg -n 'patch|sed -i' docs/", rules)).toHaveLength(0);
+    expect(scanContent('rg "gsed|perl -i|sed -i" config/', rules)).toHaveLength(0);
+    expect(scanContent("sed -n '1,60p' file.ts; rg -n -i pattern file.ts", rules)).toHaveLength(0);
+    expect(scanContent("sed 's/foo/bar/' file.ts", rules)).toHaveLength(0);
+    expect(scanContent("sed --expression 's/i/x/' file.ts", rules)).toHaveLength(0);
+    expect(scanContent("perl -pe 's/\\e\\[[0-9;]*m//g' log.txt", rules)).toHaveLength(0);
+    expect(scanContent("perl -MTime::HiRes -e 'print 1'", rules)).toHaveLength(0);
+    expect(scanContent('git commit -m "switch sed -i for patch"', rules)).toHaveLength(0);
+    expect(scanContent("echo 'perl -i'", rules)).toHaveLength(0);
   });
 });
 

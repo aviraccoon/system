@@ -11,8 +11,14 @@ losing to the model's habits is mirrored here as line patterns.
   tool result as a self-contained block: matched lines with `>>` context plus
   the verbatim policy statement, so the agent can correct without the user
   reading diffs.
-- Every shell command — `bash` or the confined `bash_readonly` — is scanned with
-  `bash`-kind rules before it reaches the agent, with the same block appended.
+- Every shell command is scanned with the `bash`-kind `notice` rules, with the
+  block appended to the tool result. A rule with `enforce: "blockOnce"` refuses
+  the first matching command of the session instead, using the block as the
+  refusal reason; later matches pass
+  silently, so a bulk transform or a file reachable only inside a container is
+  not fought twice. The refusal is recorded in the session, so a reload or
+  resume does not re-arm it. Only the unrestricted shell blocks — a confined
+  shell cannot write the files these rules protect.
 - `write` to an existing non-empty file is blocked once with a pointer to
   `patch` (write is for new files). Re-issuing the same write proceeds, so
   genuine full rewrites stay possible.
@@ -78,6 +84,11 @@ defaults.
   roots; `{notesDir}`, `{sessionsDir}`, `{cwd}` placeholders expand at runtime.
 - `match.kind: "bash"` — the rule runs against every shell command instead of
   file contents.
+- `enforce` — `"notice"` (the default) appends the violation block to the tool
+  result after the call ran. `"blockOnce"`, valid for bash rules only, refuses
+  the first matching command of the session with the block as the reason and
+  lets every later match through. File rules are evaluated against the file
+  after the edit lands, so a pre-exec refusal has nothing to scan.
 - Broken regexes and an invalid config file are reported as warnings and the
   affected pattern/rule is skipped — a broken rule must never silently stop
   matching.

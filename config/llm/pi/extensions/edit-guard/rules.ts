@@ -44,6 +44,14 @@ export interface RuleConfig {
   policy: string;
   /** flags is standard RegExp flags ("i" for case-insensitive). */
   patterns: { label: string; regex: string; flags?: string }[];
+  /**
+   * How a match is enforced. "notice" (default) appends the violation block
+   * to the tool result after the call ran; "blockOnce" refuses the first
+   * matching call of the session with the same block and lets later ones
+   * through. Valid for bash rules only — file rules scan the file after the
+   * edit lands, so a pre-exec refusal has no content to judge.
+   */
+  enforce?: "notice" | "blockOnce";
 }
 
 export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
@@ -137,6 +145,42 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
       },
     ],
   },
+  {
+    // In-place shell rewrites bypass patch: a substitution that does not match
+    // is a silent no-op, so a missed edit reads as success until something
+    // else breaks. Blocked once per session, then passed — a bulk transform or
+    // a file reachable only in a container is a legitimate reason to use the
+    // shell, and these commands run to completion for the rest of the session.
+    //
+    // Anchored at a command position, with whitespace required after the
+    // single-character separators, so a mention inside a quoted argument
+    // (`rg 'sed -i'`, `rg "patch|sed -i"`) does not fire. Tokens between the
+    // command and the flag may not contain a separator, so a `sed -n ... ;
+    // rg -n -i ...` compound cannot bridge into a match. A quoted separator
+    // with whitespace after it (`rg 'x | sed -i'`) still fires, and a tool
+    // inside a `sh -c "..."` payload is not at a command position and is not
+    // matched unless another boundary (`... && perl -i ...`) follows it.
+    displayName: "in-place edit",
+    match: { kind: "bash" },
+    enforce: "blockOnce",
+    policy:
+      "Edit files with the patch tool, not in-place shell rewrites (sed -i, perl -i): a substitution that does not match changes nothing " +
+      "and exits successfully, so a missed edit reads as success until something else breaks, while patch refuses an unmatched edit and " +
+      "shows the diff it applied. If a shell rewrite is genuinely required — the file is reachable only inside a container or over SSH, or " +
+      "the change is a bulk transform patch cannot express — proceed with it, then read the file to confirm the rewrite changed what you intended.",
+    patterns: [
+      {
+        label: "sed -i rewrites the file in place",
+        regex:
+          "(?:^\\s*|&&\\s*|\\|\\|\\s*|[;&|(]\\s+)(?:sudo\\s+)?g?sed\\b\\s+(?:[^\\s;|&]+\\s+)*?(?:-[A-Za-z0-9]*i[A-Za-z0-9]*(?:\\.[A-Za-z0-9_.-]+)?|--in-place(?:=\\S+)?)",
+      },
+      {
+        label: "perl -i rewrites the file in place",
+        regex:
+          "(?:^\\s*|&&\\s*|\\|\\|\\s*|[;&|(]\\s+)(?:sudo\\s+)?perl\\b\\s+(?:[^\\s;|&]+\\s+)*?(?:-[0-9]*(?:p|n)?i(?:\\.[A-Za-z0-9_.-]+)?)",
+      },
+    ],
+  },
 ];
 
 // ── Config loading: validate + merge user config over defaults ──
@@ -188,6 +232,12 @@ export function validateRuleConfig(entry: unknown, source: string): string | nul
     if (p.flags !== undefined && typeof p.flags !== "string")
       return where(`"${r.displayName}": pattern "${p.label}": "flags" must be a string`);
   }
+  if (r.enforce !== undefined && r.enforce !== "notice" && r.enforce !== "blockOnce")
+    return where(`"${r.displayName}": "enforce" must be "notice" or "blockOnce"`);
+  if (r.enforce === "blockOnce" && (match as { kind?: unknown }).kind !== "bash")
+    return where(
+      `"${r.displayName}": "enforce": "blockOnce" needs a "bash" match (file rules scan the file after the edit lands)`,
+    );
   return null;
 }
 
@@ -207,6 +257,8 @@ export interface CompiledPathRule {
   matches: (absPath: string, roots: RuntimeRoots) => boolean;
   policy: string;
   rules: ContentRule[];
+  /** Defaults to "notice" when the config omits it. */
+  enforce: "notice" | "blockOnce";
 }
 
 export interface CompileResult {
@@ -247,6 +299,7 @@ export function compileRules(config: RuleConfig[]): CompileResult {
       }
     }
 
+    const enforce = entry.enforce ?? "notice";
     if (entry.match.kind === "basename") {
       const names = new Set(entry.match.names.map((n) => n.toLowerCase()));
       rules.push({
@@ -255,6 +308,7 @@ export function compileRules(config: RuleConfig[]): CompileResult {
         policy: entry.policy,
         matches: (abs) => names.has(basename(abs).toLowerCase()),
         rules: contentRules,
+        enforce,
       });
     } else if (entry.match.kind === "allExcept") {
       const excludePaths = entry.match.paths;
@@ -267,6 +321,7 @@ export function compileRules(config: RuleConfig[]): CompileResult {
           return !excluded;
         },
         rules: contentRules,
+        enforce,
       });
     } else {
       rules.push({
@@ -275,6 +330,7 @@ export function compileRules(config: RuleConfig[]): CompileResult {
         policy: entry.policy,
         matches: () => true,
         rules: contentRules,
+        enforce,
       });
     }
   }

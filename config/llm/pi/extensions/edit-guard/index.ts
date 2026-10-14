@@ -21,7 +21,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { loadJournalConfig } from "../shared/journal-context";
-import { isShellTool } from "../shared/shell-tools";
+import { isShellTool, READONLY_TOOL } from "../shared/shell-tools";
+import { BLOCK_ONCE_ENTRY, BlockOnceSet } from "./block-once";
 import { proseGateBlock, rewriteBlock } from "./blocks";
 import {
   dispatchRan,
@@ -114,6 +115,10 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   // Paths whose write-to-existing block was already issued once this session;
   // a re-issued write to the same path proceeds (genuine full rewrite).
   const rewriteAllowed = new Set<string>();
+  // bash-kind rules with enforce "blockOnce": the first matching command of
+  // the session is refused, later matches pass (bulk transforms, container-only
+  // files, or a re-issued command the agent judged patch unsuitable for).
+  const blockedOnce = new BlockOnceSet();
   // Prose gate: whether the writing-style skill has been read this session.
   let writingStyleLoaded = false;
   // Prose gate: history scan runs once per session, on the first gated edit
@@ -134,6 +139,9 @@ export default function editGuardExtension(pi: ExtensionAPI) {
     proseGateHistoryScanned = false;
     journalThreshold = Date.now();
     journalGateOpened = null;
+    // A reload or resume re-instantiates the extension with the same session
+    // history — the rules already blocked there stay blocked.
+    blockedOnce.restoreFromSession(ctx.sessionManager);
     const { config, loadErrors } = loadRuleConfig();
     for (const error of loadErrors) ctx.ui.notify(error, "warning");
     const result = compileRules(config);
@@ -181,6 +189,22 @@ export default function editGuardExtension(pi: ExtensionAPI) {
       const linkBlock = journalLinkBlockReason(input, sessionDir, param);
       if (linkBlock) {
         return { block: true, reason: linkBlock };
+      }
+    }
+
+    // ── In-place shell rewrites: refuse the first match of the session ──
+    // Unrestricted shell only: a confined shell cannot write the files this
+    // rule protects, so blocking there would spend the session's one refusal
+    // on a command that fails loudly anyway.
+    if (isShellTool(event.toolName) && event.toolName !== READONLY_TOOL) {
+      const command = (event.input as { command?: unknown }).command;
+      if (typeof command === "string" && command.length > 0) {
+        for (const rule of compiled) {
+          const violations = blockedOnce.claim(rule, command);
+          if (!violations) continue;
+          pi.appendEntry(BLOCK_ONCE_ENTRY, { blocked: rule.displayName });
+          return { block: true, reason: formatViolations(violations, rule, "") };
+        }
       }
     }
 
@@ -259,6 +283,8 @@ export default function editGuardExtension(pi: ExtensionAPI) {
     // ── Shell commands: run the bash-kind rules over the command string ──
     // Any shell tool, not just `bash`: these rules read the command text
     // (output filtering, flag misuse), and a confined shell filters output too.
+    // "blockOnce" rules are enforced pre-exec in tool_call and stay silent
+    // here — their block already carried the policy.
     if (isShellTool(event.toolName)) {
       const input = event.input as { command?: unknown };
       const command = typeof input.command === "string" ? input.command : "";
@@ -267,7 +293,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
       const blocks: string[] = [];
       const labels: string[] = [];
       for (const rule of compiled) {
-        if (rule.kind !== "bash" || rule.rules.length === 0) continue;
+        if (rule.kind !== "bash" || rule.enforce !== "notice" || rule.rules.length === 0) continue;
         const violations = scanContent(command, rule.rules);
         if (violations.length === 0) continue;
         blocks.push(formatViolations(violations, rule, ""));
