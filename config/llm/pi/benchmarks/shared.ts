@@ -428,6 +428,13 @@ export async function mapWithConcurrency<I, O>(
   return results;
 }
 
+/** Resolve the apiKey of a models.json provider, failing loudly. */
+export function resolveProviderKey(name: string): string {
+  const key = resolveApiKey(loadProviders()[name]?.apiKey as string | undefined);
+  if (!key) throw new Error(`No apiKey for provider "${name}" in models.json`);
+  return key;
+}
+
 /** Concurrency for case execution. Cases are independent requests, so the run
  *  is limited by the provider, not the runner. Override with BENCH_CONCURRENCY. */
 function parseConcurrency(): number {

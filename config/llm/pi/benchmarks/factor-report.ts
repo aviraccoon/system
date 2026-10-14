@@ -25,6 +25,8 @@ export interface FactorRow {
   cost: number;
   /** Severity score (0-3) the decisions runner asked for; the policy promotes above SEVERITY_DANGEROUS. */
   severity?: number | null;
+  /** Output-capture advisory noul, when the state is a bash command. */
+  advice?: number | null;
   /** Factor probabilities, for offline threshold sweeps. */
   probabilities?: Record<string, number>;
   error?: string;

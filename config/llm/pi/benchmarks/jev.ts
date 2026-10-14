@@ -18,6 +18,7 @@
 
 import { writeFileSync } from "node:fs";
 import { applyEditFloor } from "../extensions/permission-gate/explain";
+import { ADVICE_QUESTION } from "../extensions/shared/advisory";
 import {
   DEFAULT_DECISIONS_MODEL,
   type DecisionsAnswer,
@@ -32,7 +33,7 @@ import {
 } from "../extensions/shared/risk-factors";
 import { buildTests, isEditLikeState, makeFixture, type Verdict } from "./explain-cases";
 import { type FactorRow, printFactorRun } from "./factor-report";
-import { fmt, loadProviders, mapWithConcurrency, resolveApiKey, selectTests, type TestCase } from "./shared";
+import { fmt, mapWithConcurrency, resolveProviderKey, selectTests, type TestCase } from "./shared";
 
 const MODEL = process.env.JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
 // models.json carries this provider's credential; the pi-side gate uses the
@@ -56,10 +57,11 @@ const QUESTIONS: Record<string, DecisionsQuestion> = {
   severity: SEVERITY_QUESTION,
 };
 
-function providerKey(name: string): string {
-  const key = resolveApiKey(loadProviders()[name]?.apiKey as string | undefined);
-  if (!key) throw new Error(`No apiKey for provider "${name}" in ~/.pi/agent/models.json`);
-  return key;
+/** Mirror the gate: bash states (both shell tools) also answer the
+ *  output-capture advisory. */
+function questionsFor(state: string): Record<string, DecisionsQuestion> {
+  if (!state.startsWith("bash command:") && !state.startsWith("bash_readonly:")) return QUESTIONS;
+  return { ...QUESTIONS, advice: ADVICE_QUESTION };
 }
 
 function matches(expected: Verdict | Verdict[], got: string): boolean {
@@ -70,13 +72,15 @@ async function runCase(apiKey: string, test: TestCase<Verdict>): Promise<FactorR
   const base = { input: test.input.split("\n")[0].slice(0, 44), expected: fmt(test.expected), cost: 0 };
   try {
     const result = await decisionsComplete(
-      { model: MODEL, state: test.input, questions: QUESTIONS },
+      { model: MODEL, state: test.input, questions: questionsFor(test.input) },
       { apiKey, timeoutMs: 60_000 },
     );
     const answers: Record<string, DecisionsAnswer> = result.answers;
     const probabilities = factorProbabilities(answers);
     const risk = answers.risk;
     const modelChoice = risk?.type === "choice" ? risk.choice : "(none)";
+    const advice = answers.advice;
+    const adviceNoul = advice?.type === "noul" ? advice.noul : null;
     const decision = decisionFromAnswers(answers);
     if (!decision) {
       // The gate refuses an incomplete answer, so scoring one here would report a
@@ -91,6 +95,7 @@ async function runCase(apiKey: string, test: TestCase<Verdict>): Promise<FactorR
         agrees: false,
         severity: null,
         probabilities,
+        advice: adviceNoul,
         ms: result.ms,
         cost: result.usage.cost,
       };
@@ -110,6 +115,7 @@ async function runCase(apiKey: string, test: TestCase<Verdict>): Promise<FactorR
       agrees: verdict === modelChoice,
       severity: decision.severity ?? null,
       probabilities: decision.probabilities,
+      advice: adviceNoul,
       ms: result.ms,
       cost: result.usage.cost,
     };
@@ -128,7 +134,7 @@ async function runCase(apiKey: string, test: TestCase<Verdict>): Promise<FactorR
   }
 }
 
-const apiKey = providerKey(PROVIDER);
+const apiKey = resolveProviderKey(PROVIDER);
 const fixture = makeFixture(process.env.BENCH_SEED);
 const tests = selectTests(buildTests(fixture));
 const rows = await mapWithConcurrency(tests, CONCURRENCY, (test) => runCase(apiKey, test));

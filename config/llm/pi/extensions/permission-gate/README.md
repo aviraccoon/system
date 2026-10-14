@@ -50,7 +50,11 @@ answers a battery of independent yes/no risk factors and the verdict comes from
 thresholds in code — the factors and policy live in `shared/risk-factors.ts`,
 shared with the benchmarks that measure them. A severity `score` rides the same
 request: a call scored above 2.5 (past serious harm) is dangerous even when no
-dangerous factor fired. The `explain` role still writes
+dangerous factor fired. Shell calls (`bash`, `bash_readonly`) answer one more
+question on the same request — the output-capture advisory: a long diagnostic
+(tests, build, typecheck gate) whose output is only filtered or discarded gets
+blocked with a capture rewrite when it would have been auto-allowed; the score
+rides the classification entry either way. The `explain` role still writes
 the human sentence; both run in parallel, so the dialog shows the sentence and
 the fired factors with their probabilities on one line, and `Ctrl+E` adds the
 factor list against the thresholds plus the longer explanation.

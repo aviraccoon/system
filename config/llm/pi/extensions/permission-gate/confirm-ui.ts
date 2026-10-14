@@ -32,6 +32,8 @@ export interface ExplanationResult {
   verdict: ExplanationVerdict;
   short: string;
   detail: string;
+  /** The output-capture advisory's noul, when the call is a shell command. */
+  advice?: number;
 }
 
 export interface ExplanationProvider {

@@ -12,11 +12,13 @@ import {
   renderDiff,
 } from "@earendil-works/pi-coding-agent";
 import { computePatchPreview } from "../patch/preview";
+import { ADVICE_QUESTION, adviceInterception, withAdvice } from "../shared/advisory";
 import { DEFAULT_DECISIONS_MODEL, decisionsComplete } from "../shared/decisions";
 import { EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { extractText, getSidecarStats, hasRole, resolveProviderAuth, sidecarComplete } from "../shared/model-roles";
 import { decisionFromAnswers, RISK_FACTORS, SEVERITY_QUESTION } from "../shared/risk-factors";
 import { isConfinedBash } from "../shared/sandbox";
+import { isShellTool } from "../shared/shell-tools";
 import { computeEditPreview, computeWritePreview } from "./edit-preview";
 
 /** Preview couldn't be computed (load/computation failure). Distinct from
@@ -163,7 +165,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     description: string,
     timeoutMs = 5000,
   ): Promise<import("./confirm-ui").ExplanationResult | null> {
-    const factors = await classifyWithFactors(ctx, description, timeoutMs);
+    const factors = await classifyWithFactors(ctx, toolName, description, timeoutMs);
     if (factors) return applyEditFloor(factors, EDIT_LIKE_TOOLS.includes(toolName));
     const proseText = await askProse(ctx, description, timeoutMs);
     // The prose path gets the same edit floor as the battery: its prompt may
@@ -212,6 +214,7 @@ export default function permissionGate(pi: ExtensionAPI) {
    */
   async function classifyWithFactors(
     ctx: ExtensionContext,
+    toolName: string,
     description: string,
     timeoutMs: number,
     signal?: AbortSignal,
@@ -220,13 +223,21 @@ export default function permissionGate(pi: ExtensionAPI) {
     try {
       const auth = await resolveProviderAuth(DECISIONS_PROVIDER, ctx.modelRegistry);
       if (!auth?.apiKey) return null;
+      // The output-capture advisory rides the same request on shell calls: one
+      // more noul, judged separately from the risk verdict.
+      const questions: Record<string, import("../shared/decisions").DecisionsQuestion> = isShellTool(toolName)
+        ? { ...RISK_FACTORS, severity: SEVERITY_QUESTION, advice: ADVICE_QUESTION }
+        : { ...RISK_FACTORS, severity: SEVERITY_QUESTION };
       const result = await decisionsComplete(
-        { model: DECISIONS_MODEL, state: description, questions: { ...RISK_FACTORS, severity: SEVERITY_QUESTION } },
+        { model: DECISIONS_MODEL, state: description, questions },
         { apiKey: auth.apiKey, headers: auth.headers, timeoutMs, signal },
       );
       const decision = decisionFromAnswers(result.answers);
       if (!decision) return null;
-      return factorsToExplanation(decision);
+      const explanation = factorsToExplanation(decision);
+      const advice = result.answers.advice;
+      if (advice?.type !== "noul") return explanation;
+      return withAdvice({ ...explanation, advice: advice.noul }, advice.noul);
     } catch {
       return null;
     }
@@ -260,7 +271,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     const abortController = new AbortController();
     const listeners: Array<(result: ExplanationResult) => void> = [];
 
-    const factorsPromise = classifyWithFactors(ctx, description, 5000, abortController.signal);
+    const factorsPromise = classifyWithFactors(ctx, toolName, description, 5000, abortController.signal);
     const prosePromise = askProse(ctx, description, 5000, abortController.signal);
 
     const promise = (async (): Promise<ExplanationResult | null> => {
@@ -272,7 +283,10 @@ export default function permissionGate(pi: ExtensionAPI) {
           const prose = text ? parseExplanation(text) : null;
           if (!prose) return;
           const merged = mergeExplanations(floored, prose);
-          state.classifyCache.set(key, { ...merged });
+          // mergeExplanations builds a fresh literal — carry the advice noul
+          // over, or a dialog-path entry loses it and the cached branch's
+          // interception never fires for the identical repeat call.
+          state.classifyCache.set(key, { ...merged, advice: floored.advice });
           for (const listener of listeners) listener(merged);
         });
         return floored;
@@ -865,6 +879,11 @@ export default function permissionGate(pi: ExtensionAPI) {
 
       if (cached) {
         const resolution = resolve(cached);
+        const advised = adviceInterception(cached.advice, resolution.action);
+        if (advised) {
+          recordClassification(event.toolName, event.toolCallId, cached);
+          return { block: true, reason: advised.reason };
+        }
         if (resolution.action === "allow") {
           autoAllow(cached, " (cached)");
           return undefined;
@@ -886,12 +905,13 @@ export default function permissionGate(pi: ExtensionAPI) {
       ctx.ui.setWorkingMessage();
 
       if (explResult) {
-        state.classifyCache.set(key, {
-          verdict: explResult.verdict,
-          short: explResult.short,
-          detail: explResult.detail,
-        });
+        state.classifyCache.set(key, { ...explResult });
         const resolution = resolve(explResult);
+        const advised = adviceInterception(explResult.advice, resolution.action);
+        if (advised) {
+          recordClassification(event.toolName, event.toolCallId, explResult);
+          return { block: true, reason: advised.reason };
+        }
         if (resolution.action === "allow") {
           autoAllow(explResult, "");
           return undefined;

@@ -45,7 +45,7 @@ export interface GateState {
   allowedPathGlobs: string[];
   toolOverrides: Partial<Record<string, "allow" | "confirm">>;
   /** Exact-match cache: hash of (toolName + full input) -> full explanation result */
-  classifyCache: Map<string, { verdict: RiskVerdict; short: string; detail: string }>;
+  classifyCache: Map<string, { verdict: RiskVerdict; short: string; detail: string; advice?: number }>;
   /** Audit log of auto-allowed calls */
   autoAllowLog: AutoClassifyLog[];
 }
@@ -473,7 +473,7 @@ export function createInitialState(): GateState {
     allowedPaths: [],
     allowedPathGlobs: [],
     toolOverrides: {},
-    classifyCache: new Map(),
+    classifyCache: new Map<string, { verdict: RiskVerdict; short: string; detail: string; advice?: number }>(),
     autoAllowLog: [],
   };
 }
