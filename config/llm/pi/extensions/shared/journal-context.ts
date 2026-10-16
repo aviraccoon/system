@@ -20,7 +20,8 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
@@ -34,6 +35,25 @@ export const JOURNAL_FILE_RE = /^\d{4}-\d{2}-\d{2}-\d{2}-.+\.md$/;
 
 function isJournalFile(filename: string): boolean {
   return JOURNAL_FILE_RE.test(filename);
+}
+
+/**
+ * The project journal dir for a session cwd. Worktrees journal under the main
+ * project name (.../<project>.worktrees/<branch>/), so the nearest
+ * *.worktrees ancestor decides; a plain cwd falls back to notesDir/<basename>.
+ */
+export function journalDirFor(notesDir: string, cwd: string): string {
+  let dir = cwd;
+  while (dir !== dirname(dir)) {
+    const name = basename(dir);
+    if (name.endsWith(".worktrees")) {
+      // A bare container (<repo>/.worktrees/<branch>) takes the repo dir's name.
+      const stem = name.slice(0, -".worktrees".length) || basename(dirname(dir));
+      return join(notesDir, stem);
+    }
+    dir = dirname(dir);
+  }
+  return join(notesDir, basename(cwd) || "root");
 }
 
 export interface ProjectMeta {
@@ -98,6 +118,17 @@ export function loadJournalConfig(): JournalConfig {
   const configDir = process.env.XDG_CONFIG_HOME || join(process.env.HOME || "", ".config");
   const path = join(configDir, "llm", "journal.json");
   return JSON.parse(readFileSync(path, "utf-8")) as JournalConfig;
+}
+
+/** Notes dir from the journal config, falling back to the conventional
+ * location when the config is missing so the journal gate and agent discovery
+ * agree on where the notes tree lives. */
+export function journalNotesDir(): string {
+  try {
+    return loadJournalConfig().notesDir;
+  } catch {
+    return join(homedir(), "notes", "llm");
+  }
 }
 
 export async function getRecentNotes(notesDir: string, projectName: string): Promise<NotesResult> {

@@ -5,8 +5,9 @@
  * fresh context window. Useful for research tasks that would otherwise bloat
  * the main agent's context.
  *
- * Agent definitions live in ~/.pi/agent/agents/*.md (user-level) and
- * .pi/agents/*.md (project-level, requires explicit opt-in).
+ * Agent definitions live in ~/.pi/agent/agents/*.md (user-level), the repo's
+ * .agents/agents/*.md and .pi/agents/*.md (opt-in via agentScope), and the
+ * project's journal dir in the notes tree (private, always available).
  *
  * Toggle: /subagent-toggle or Ctrl+Shift+S to enable/disable the tool.
  * Steer: /subagent-steer or Ctrl+Shift+T to send a message to a running subagent.
@@ -19,13 +20,8 @@ import * as path from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import {
-  type AgentConfig,
-  buildToolDescription,
-  discoverAgents,
-  findNearestProjectAgentsDir,
-  loadAgentsFromDir,
-} from "./agents";
+import { journalNotesDir } from "../shared/journal-context";
+import { type AgentConfig, buildToolDescription, discoverAgents, loadAgentsFromDir, markShadowed } from "./agents";
 import { journalPath, taskForChild } from "./journal-task";
 import { resolveMode } from "./mode";
 import { renderCall as renderCallFn, renderResult as renderResultFn, withSessionPaths } from "./render";
@@ -83,7 +79,8 @@ const ChainItem = Type.Object({
 });
 
 const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
-  description: 'Which agent directories to use. Default: "user". Use "both" to include project-local agents.',
+  description:
+    'Which repo agent dirs to use: "both" includes .agents/agents and .pi/agents. Default: "user" (repo dirs excluded). Private notes agents always load.',
   default: "user",
 });
 
@@ -129,10 +126,7 @@ let toolEnabled = true;
 export default function subagentExtension(pi: ExtensionAPI) {
   function registerTool() {
     // Discover agents at registration time for the tool description.
-    const userAgents = loadAgentsFromDir(path.join(os.homedir(), ".pi", "agent", "agents"), "user");
-    const projectAgentsDir = findNearestProjectAgentsDir(process.cwd());
-    const projectAgents = projectAgentsDir ? loadAgentsFromDir(projectAgentsDir, "project") : [];
-    const allAgents = [...userAgents, ...projectAgents];
+    const allAgents = discoverAgents(process.cwd(), "both", journalNotesDir()).agents;
 
     pi.registerTool({
       name: "subagent",
@@ -155,7 +149,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
         const agentScope: "user" | "project" | "both" = params.agentScope ?? "user";
         const journal = journalPath(params.journal);
-        const discovery = discoverAgents(ctx.cwd, agentScope);
+        const discovery = discoverAgents(ctx.cwd, agentScope, journalNotesDir());
         const agents = discovery.agents;
 
         // resolveMode collapses a one-item `tasks` batch to single; see mode.ts.
@@ -171,7 +165,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
           (results: SingleResult[]): SubagentDetails => ({
             mode,
             agentScope,
-            projectAgentsDir: discovery.projectAgentsDir,
             results,
           });
 
@@ -198,7 +191,10 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
           if (projectAgentsRequested.length > 0) {
             const names = projectAgentsRequested.map((a) => a.name).join(", ");
-            const dir = discovery.projectAgentsDir ?? "(unknown)";
+            const dir =
+              [discovery.projectDirs.neutral, discovery.projectDirs.pi]
+                .filter((d): d is string => d !== null)
+                .join(", ") || "(unknown)";
             const ok = await ctx.ui.confirm(
               "Run project-local agents?",
               `Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
@@ -504,28 +500,39 @@ export default function subagentExtension(pi: ExtensionAPI) {
   pi.registerCommand("subagent-status", {
     description: "List available subagent definitions",
     handler: async (_args, ctx) => {
-      const userAgents = loadAgentsFromDir(path.join(os.homedir(), ".pi", "agent", "agents"), "user");
-      const projectAgentsDir = findNearestProjectAgentsDir(ctx.cwd);
-      const projectAgents = projectAgentsDir ? loadAgentsFromDir(projectAgentsDir, "project") : [];
+      const discovery = discoverAgents(ctx.cwd, "both", journalNotesDir());
+      const sections: Array<{ title: string; dirs: Array<string | null>; source: AgentConfig["source"] }> = [
+        { title: "User agents", dirs: [path.join(os.homedir(), ".pi", "agent", "agents")], source: "user" },
+        { title: "Project agents", dirs: [discovery.projectDirs.neutral, discovery.projectDirs.pi], source: "project" },
+        {
+          title: "Notes agents (private)",
+          dirs: [discovery.notesDirs.neutral, discovery.notesDirs.pi],
+          source: "notes",
+        },
+      ];
+      const loaded = sections.map((section) => ({
+        ...section,
+        agents: section.dirs
+          .filter((d): d is string => d !== null)
+          .flatMap((d) => loadAgentsFromDir(d, section.source)),
+      }));
+
+      // Every definition file is listed; a file overridden by a later root (or
+      // by .pi/agents in the same root) is marked shadowed.
+      const shadowed = markShadowed(loaded.map((section) => section.agents));
 
       let msg = `Status: ${toolEnabled ? "✓ enabled" : "✗ disabled"}\n\nAvailable subagent definitions:\n`;
-      if (userAgents.length > 0) {
-        msg += "User agents (~/.pi/agent/agents/):\n";
-        for (const a of userAgents) {
-          const role = a.role || "(none)";
-          const tools = a.tools ? ` [${a.tools.join(", ")}]` : " [built-in]";
-          msg += `  ${a.name}${tools} → role: ${role}\n`;
-        }
-      } else {
-        msg += "No user agents defined.\n";
-      }
-
-      if (projectAgents.length > 0) {
-        msg += `\nProject agents (${projectAgentsDir}):\n`;
-        for (const a of projectAgents) {
-          const role = a.role || "(none)";
-          const tools = a.tools ? ` [${a.tools.join(", ")}]` : " [built-in]";
-          msg += `  ${a.name}${tools} → role: ${role}\n`;
+      msg +=
+        '(shadowed) = a later root also defines the name and wins when it is loaded (repo roots: agentScope "both"/"project").\n';
+      if (loaded.every((section) => section.agents.length === 0)) msg += "No agents defined.\n";
+      for (let i = 0; i < loaded.length; i++) {
+        if (loaded[i].agents.length === 0) continue;
+        const where = loaded[i].dirs.filter((d): d is string => d !== null).join(", ");
+        msg += `\n${loaded[i].title}${where ? ` (${where})` : ""}:\n`;
+        for (const [j, agent] of loaded[i].agents.entries()) {
+          const role = agent.role || "(none)";
+          const tools = agent.tools ? ` [${agent.tools.join(", ")}]` : " [built-in]";
+          msg += `  ${agent.name}${shadowed[i][j] ? " (shadowed)" : ""}${tools} → role: ${role}\n`;
         }
       }
 

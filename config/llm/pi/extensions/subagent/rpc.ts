@@ -61,7 +61,7 @@ export interface UserInput {
 
 export interface SingleResult {
   agent: string;
-  agentSource: "user" | "project" | "unknown";
+  agentSource: "user" | "project" | "notes" | "unknown";
   task: string;
   exitCode: number;
   messages: Message[];
@@ -94,7 +94,6 @@ export interface SubagentHandle {
 export interface SubagentDetails {
   mode: "single" | "parallel" | "chain";
   agentScope: "user" | "project" | "both";
-  projectAgentsDir: string | null;
   results: SingleResult[];
 }
 

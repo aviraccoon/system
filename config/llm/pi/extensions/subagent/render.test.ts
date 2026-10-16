@@ -319,7 +319,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "single",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [makeSingleResult()],
     };
     const result = renderResult(
@@ -337,7 +336,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "single",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [makeSingleResult({ exitCode: 1, stopReason: "max_turns_exceeded" })],
     };
     const result = renderResult(
@@ -353,7 +351,6 @@ describe("renderResult", () => {
     const emptyDetails: SubagentDetails = {
       mode: "chain",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [makeSingleResult({ agent: "a", step: 1 })],
     };
     const noHint = renderResult(
@@ -391,7 +388,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "parallel",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [done, running],
     };
     const result = renderResult({ content: [], details }, { expanded: true, isPartial: false }, theme, {})
@@ -412,7 +408,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "chain",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [makeSingleResult({ agent: "step1", step: 1 }), makeSingleResult({ agent: "step2", step: 2 })],
     };
     const result = renderResult(
@@ -454,7 +449,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "single",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [makeSingleResult({ messages })],
     };
     const result = renderResult(
@@ -493,7 +487,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "single",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [makeSingleResult({ messages })],
     };
     const result = renderResult(
@@ -607,7 +600,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "single",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [makeSingleResult({ messages, userInputs: [{ text: "check the tests too", turn: 1 }] })],
     };
     const result = renderResult(
@@ -647,7 +639,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "single",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [makeSingleResult({ messages })],
     };
     const result = renderResult(
@@ -683,7 +674,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "single",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [makeSingleResult({ messages, userInputs: [{ text: "wrap it up", turn: 2 }] })],
     };
     const result = renderResult(
@@ -701,7 +691,6 @@ describe("renderResult", () => {
     const details: SubagentDetails = {
       mode: "single",
       agentScope: "user",
-      projectAgentsDir: null,
       results: [
         makeSingleResult({
           usage: {

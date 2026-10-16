@@ -6,8 +6,9 @@ import {
   type AgentConfig,
   buildToolDescription,
   discoverAgents,
-  findNearestProjectAgentsDir,
+  findNearestProjectAgentDirs,
   loadAgentsFromDir,
+  markShadowed,
 } from "./agents";
 
 const TEST_DIR = join(tmpdir(), `subagent-agents-test-${process.pid}`);
@@ -97,6 +98,12 @@ describe("loadAgentsFromDir", () => {
     expect(agents[0].source).toBe("project");
   });
 
+  test("labels the notes source", () => {
+    const dir = makeDir("notes-source");
+    writeAgent(dir, "n.md", { name: "note", description: "d" }, "N");
+    expect(loadAgentsFromDir(dir, "notes")[0].source).toBe("notes");
+  });
+
   test("trims whitespace in comma-separated fields", () => {
     const dir = makeDir("whitespace");
     writeAgent(dir, "sloppy.md", { name: "sloppy", description: "test", tools: " read , write , edit " }, "body");
@@ -126,30 +133,70 @@ describe("loadAgentsFromDir", () => {
   });
 });
 
-// ── findNearestProjectAgentsDir ──
+// ── findNearestProjectAgentDirs ──
 
-describe("findNearestProjectAgentsDir", () => {
-  test("returns null when no .pi/agents exists", () => {
+describe("findNearestProjectAgentDirs", () => {
+  test("returns nulls when neither dir exists", () => {
     const dir = makeDir("no-agents");
-    expect(findNearestProjectAgentsDir(dir)).toBeNull();
+    expect(findNearestProjectAgentDirs(dir)).toEqual({ neutral: null, pi: null });
   });
 
-  test("finds .pi/agents in current directory", () => {
+  test("finds .pi/agents with agent files in the current directory", () => {
     const project = makeDir("project");
     const agentsDir = makeDir("project", ".pi", "agents");
-    expect(findNearestProjectAgentsDir(project)).toBe(agentsDir);
+    writeAgent(agentsDir, "a.md", { name: "a", description: "A" }, "A");
+    expect(findNearestProjectAgentDirs(project)).toEqual({ neutral: null, pi: agentsDir });
+  });
+
+  test("finds both kinds at the same level", () => {
+    const project = makeDir("project-both");
+    const neutral = makeDir("project-both", ".agents", "agents");
+    const pi = makeDir("project-both", ".pi", "agents");
+    writeAgent(neutral, "n.md", { name: "n", description: "N" }, "N");
+    expect(findNearestProjectAgentDirs(project)).toEqual({ neutral, pi });
   });
 
   test("walks up to parent directories", () => {
     const agentsDir = makeDir("root", ".pi", "agents");
+    writeAgent(agentsDir, "a.md", { name: "a", description: "A" }, "A");
     const child = makeDir("root", "src", "lib");
-    expect(findNearestProjectAgentsDir(child)).toBe(agentsDir);
+    expect(findNearestProjectAgentDirs(child).pi).toBe(agentsDir);
+  });
+
+  test("the nearest level wins even when only the other kind exists there", () => {
+    const outer = makeDir("outer", ".pi", "agents");
+    writeAgent(outer, "o.md", { name: "o", description: "O" }, "O");
+    const neutral = makeDir("outer", "vendor", "pkg", ".agents", "agents");
+    writeAgent(neutral, "n.md", { name: "n", description: "N" }, "N");
+    expect(findNearestProjectAgentDirs(join(TEST_DIR, "outer", "vendor", "pkg"))).toEqual({ neutral, pi: null });
+  });
+
+  test("a nearer level with no agent definitions does not shadow an outer one", () => {
+    const outer = makeDir("outer-empty", ".pi", "agents");
+    writeAgent(outer, "o.md", { name: "o", description: "O" }, "O");
+    const nearer = makeDir("outer-empty", "vendor", "pkg", ".agents", "agents");
+    writeFileSync(join(nearer, "README.md"), "not an agent");
+    expect(findNearestProjectAgentDirs(join(TEST_DIR, "outer-empty", "vendor", "pkg")).pi).toBe(outer);
+  });
+
+  test("does not treat directories at or above home as repo levels", () => {
+    const home = makeDir("home");
+    const agentsDir = makeDir("home", ".agents", "agents");
+    writeAgent(agentsDir, "h.md", { name: "h", description: "H" }, "H");
+    expect(findNearestProjectAgentDirs(makeDir("home", "project"), home)).toEqual({ neutral: null, pi: null });
+  });
+
+  test("finds a level below home", () => {
+    const home = makeDir("home-below");
+    const agentsDir = makeDir("home-below", "dev", ".pi", "agents");
+    writeAgent(agentsDir, "d.md", { name: "d", description: "D" }, "D");
+    expect(findNearestProjectAgentDirs(join(TEST_DIR, "home-below", "dev", "repo"), home).pi).toBe(agentsDir);
   });
 
   test("stops at filesystem root", () => {
-    // A deeply nested path with no .pi/agents
+    // A deeply nested path with no agent dirs anywhere above it
     const dir = makeDir("a", "b", "c");
-    expect(findNearestProjectAgentsDir(dir)).toBeNull();
+    expect(findNearestProjectAgentDirs(dir)).toEqual({ neutral: null, pi: null });
   });
 });
 
@@ -168,8 +215,8 @@ describe("discoverAgents", () => {
     // discoverAgents uses ~/.pi/agent/agents for user scope — we can't override that
     // So test with a cwd that has no project agents and verify scope behavior
     const result = discoverAgents(makeDir("empty-cwd"), "user");
-    // No user agents exist at ~/.pi/agent/agents in test env, project excluded by scope
-    expect(result.projectAgentsDir).toBeNull();
+    // Repo dirs are found but not loaded under this scope; the real user dir is out of test control
+    expect(result.projectDirs).toEqual({ neutral: null, pi: null });
   });
 
   test("scope=project loads only project agents", () => {
@@ -207,6 +254,70 @@ describe("discoverAgents", () => {
       expect(researcher.source).toBe("project");
     }
   });
+
+  test("scope=user excludes repo agents but still reports the dirs", () => {
+    const neutral = makeDir("user-scope", ".agents", "agents");
+    writeAgent(neutral, "r.md", { name: "repo-only", description: "R" }, "R");
+
+    const result = discoverAgents(makeDir("user-scope"), "user");
+    expect(result.agents.find((a) => a.name === "repo-only")).toBeUndefined();
+    expect(result.projectDirs.neutral).toBe(neutral);
+  });
+
+  test("pi-specific overrides neutral in the same root", () => {
+    const neutral = makeDir("merge", ".agents", "agents");
+    writeAgent(neutral, "n.md", { name: "dup", description: "neutral" }, "N");
+    const pi = makeDir("merge", ".pi", "agents");
+    writeAgent(pi, "p.md", { name: "dup", description: "pi" }, "P");
+
+    const result = discoverAgents(makeDir("merge"), "project");
+    expect(result.agents.find((a) => a.name === "dup")?.description).toBe("pi");
+  });
+
+  test("notes agents load in every scope and override repo agents", () => {
+    const notesDir = makeDir("notes-root");
+    const project = makeDir("notes-proj");
+    const repoPi = makeDir("notes-proj", ".pi", "agents");
+    writeAgent(repoPi, "r.md", { name: "helper", description: "repo" }, "R");
+    const notesPi = makeDir("notes-root", "notes-proj", ".pi", "agents");
+    writeAgent(notesPi, "n.md", { name: "helper", description: "notes" }, "N");
+
+    const result = discoverAgents(project, "both", notesDir);
+    const helper = result.agents.find((a) => a.name === "helper");
+    expect(helper?.description).toBe("notes");
+    expect(helper?.source).toBe("notes");
+    expect(result.notesDirs.pi).toBe(notesPi);
+  });
+
+  test("notes neutral loads when no pi-specific dir exists", () => {
+    const notesDir = makeDir("notes-root-neutral");
+    const neutral = makeDir("notes-root-neutral", "plain", ".agents", "agents");
+    writeAgent(neutral, "p.md", { name: "planner", description: "plan" }, "P");
+
+    const result = discoverAgents(makeDir("plain"), "user", notesDir);
+    expect(result.agents.find((a) => a.name === "planner")?.source).toBe("notes");
+  });
+
+  test("notes agents load under scope=project", () => {
+    const notesDir = makeDir("notes-scope-project");
+    const neutral = makeDir("notes-scope-project", "scope-project", ".agents", "agents");
+    writeAgent(neutral, "v.md", { name: "scope-notes", description: "V" }, "V");
+
+    const result = discoverAgents(makeDir("scope-project"), "project", notesDir);
+    expect(result.agents.find((a) => a.name === "scope-notes")?.source).toBe("notes");
+  });
+
+  test("notes resolve through a worktree to the main project", () => {
+    const notesDir = makeDir("notes-root-wt");
+    const neutral = makeDir("notes-root-wt", "bar-project", ".agents", "agents");
+    writeAgent(neutral, "v.md", { name: "verifier", description: "prose" }, "V");
+    const worktree = join(TEST_DIR, "src", "bar-project.worktrees", "feat", "branch");
+    mkdirSync(worktree, { recursive: true });
+
+    const result = discoverAgents(worktree, "user", notesDir);
+    expect(result.agents.find((a) => a.name === "verifier")?.source).toBe("notes");
+    expect(result.notesDirs.neutral).toBe(neutral);
+  });
 });
 
 // ── buildToolDescription ──
@@ -215,6 +326,7 @@ describe("buildToolDescription", () => {
   test("includes header lines for empty agents", () => {
     const desc = buildToolDescription([]);
     expect(desc).toContain("Delegate tasks to specialized subagents");
+    expect(desc).toContain('agentScope: "both"');
     expect(desc).toContain("No agents defined");
   });
 
@@ -248,5 +360,33 @@ describe("buildToolDescription", () => {
     expect(desc).toContain("- basic: Simple agent");
     expect(desc).not.toContain("[");
     expect(desc).not.toContain("role:");
+  });
+});
+
+// ── markShadowed ──
+
+describe("markShadowed", () => {
+  const agent = (name: string): AgentConfig => ({
+    name,
+    description: "",
+    systemPrompt: "",
+    source: "user",
+    filePath: "",
+  });
+
+  test("a later section shadows an earlier name", () => {
+    expect(markShadowed([[agent("x")], [agent("x")]])).toEqual([[true], [false]]);
+  });
+
+  test("a later dir in the same section shadows an earlier name", () => {
+    expect(markShadowed([[agent("x"), agent("x")]])).toEqual([[true, false]]);
+  });
+
+  test("a name in all three sections leaves only the top one unmarked", () => {
+    expect(markShadowed([[agent("x")], [agent("x")], [agent("x")]])).toEqual([[true], [true], [false]]);
+  });
+
+  test("distinct names are never marked", () => {
+    expect(markShadowed([[agent("a")], [agent("b")]])).toEqual([[false], [false]]);
   });
 });

@@ -4,7 +4,7 @@ Delegate tasks to specialized agents with isolated context windows. Spawns a sep
 
 ## What it does
 
-1. **`subagent` tool** — the LLM can delegate research, code investigation, or other tasks to agents defined in `~/.pi/agent/agents/*.md` (user-level) and `.pi/agents/*.md` (project-level)
+1. **`subagent` tool** — the LLM can delegate research, code investigation, or other tasks to agents defined across the user, repo, and project-notes roots (see Discovery)
 2. **Three modes** — single (`agent` + `task`), parallel (`tasks` array, up to 8 tasks, 4 concurrent), and chain (`chain` array with `{previous}` placeholder for sequential handoffs). A one-item `tasks` batch runs as single (a blank agent or task keeps it parallel).
 3. **Streaming output** — in single mode, text, thinking, and tool calls appear live in the TUI during execution in exact arrival order. Chain/parallel show completion status only (see Known limitations)
 4. **Agent discovery** — `.md` files with YAML frontmatter define agent name, description, tools, role, extensions, and system prompt
@@ -13,7 +13,7 @@ Delegate tasks to specialized agents with isolated context windows. Spawns a sep
 7. **Session storage** — each run writes a JSONL session to `~/.pi/agent/subagent-sessions/`, cleaned up after 7 days
 8. **Turn budget** — `maxTurns` (default 30) is stated in the task; three turns before the cap the child is steered once to write its report; the run is aborted at the cap
 9. **Retries** — a provider failure gets up to 3 attempts across the agent's model chain
-10. **Project-local agent gating** — prompts for confirmation before running agents from `.pi/agents/` in the project repo
+10. **Repo agent gating** — prompts for confirmation before running agents from the repo's `.agents/agents/` or `.pi/agents/`; private notes agents are user-owned and ungated
 11. **Journal context** — `journal: "<path>"` prepends a read-the-journal line to every task: a journal dir (TODO.md plus the newest entries) or a specific entry file, any project under the notes tree. `journal: "none"` marks a deliberately blind dispatch; omit it to link the journal path in each task yourself (edit-guard enforces one of the three)
 
 ## Commands
@@ -49,9 +49,15 @@ System prompt body goes here...
 
 ### Discovery
 
-- **User agents**: `~/.pi/agent/agents/*.md` — always available (deployed by Nix via symlink from `config/llm/pi/agents/`)
-- **Project agents**: `.pi/agents/*.md` — requires `agentScope: "both"` or `"project"` param, plus user confirmation
-- When both define an agent with the same name, project takes precedence (with `agentScope: "both"`)
+Roots, lowest to highest precedence:
+
+1. `~/.pi/agent/agents/*.md` — user, always available (deployed by Nix via symlink from `config/llm/pi/agents/`)
+2. `<repo>/.agents/agents/*.md` and `<repo>/.pi/agents/*.md` — repo, from the nearest level with agent files in either dir, walking up from cwd and stopping at the home directory (or the filesystem root, for a cwd outside home); requires `agentScope: "both"` or `"project"`, plus user confirmation
+3. `<notes>/<project>/.agents/agents/*.md` and `<notes>/<project>/.pi/agents/*.md` — private, for the project owning the cwd (`<project>` is the journal dir name); always available, no confirmation
+
+A file in a later root overrides an earlier root's file with the same name, and `.pi/agents` overrides `.agents/agents` at the same root. `.agents/agents` fits harness-agnostic definitions (`name`, `description`, body); `.pi/agents` carries pi-specific frontmatter (`role`, `extensions`, tool allowlist). `/subagent-status` lists every file and marks the shadowed ones.
+
+The notes project resolves by the cwd's worktree-aware basename, the same rule the journal gate uses, so start pi in the repo root for the notes dir to match the repo.
 
 ## How it works
 

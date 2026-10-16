@@ -20,14 +20,13 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
-import { loadJournalConfig } from "../shared/journal-context";
+import { journalDirFor, journalNotesDir } from "../shared/journal-context";
 import { isShellTool, READONLY_TOOL } from "../shared/shell-tools";
 import { BLOCK_ONCE_ENTRY, BlockOnceSet } from "./block-once";
 import { proseGateBlock, rewriteBlock } from "./blocks";
 import {
   dispatchRan,
   journalBlockNeeded,
-  journalDirFor,
   journalFreshnessBlockReason,
   journalLinkBlockReason,
   journalParam,
@@ -92,14 +91,6 @@ function loadRuleConfig(): { config: RuleConfig[]; loadErrors: string[] } {
     else valid.push(entry as RuleConfig);
   });
   return { config: mergeRuleConfigs(DEFAULT_RULE_CONFIG, valid), loadErrors };
-}
-
-function journalNotesDir(): string {
-  try {
-    return loadJournalConfig().notesDir;
-  } catch {
-    return join(homedir(), "notes", "llm");
-  }
 }
 
 /** Resolve a tool-input path the way agents write them: @-prefix, ~, relative. */

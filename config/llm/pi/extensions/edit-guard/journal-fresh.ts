@@ -17,25 +17,6 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { JOURNAL_FILE_RE } from "../shared/journal-context";
 
-/**
- * The project journal dir for a session cwd. Worktrees journal under the main
- * project name (.../<project>.worktrees/<branch>/), so the nearest
- * *.worktrees ancestor decides; a plain cwd falls back to notesDir/<basename>.
- */
-export function journalDirFor(notesDir: string, cwd: string): string {
-  let dir = cwd;
-  while (dir !== dirname(dir)) {
-    const name = basename(dir);
-    if (name.endsWith(".worktrees")) {
-      // A bare container (<repo>/.worktrees/<branch>) takes the repo dir's name.
-      const stem = name.slice(0, -".worktrees".length) || basename(dirname(dir));
-      return join(notesDir, stem);
-    }
-    dir = dirname(dir);
-  }
-  return join(notesDir, basename(cwd) || "root");
-}
-
 /** Newest journal entry mtime (dated entry files, top level only); null when absent. */
 export function newestMtime(dir: string): number | null {
   let entries: Dirent[];
