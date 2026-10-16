@@ -181,6 +181,13 @@ function notesAgentDirs(notesDir: string, cwd: string): AgentDirs {
   };
 }
 
+/** The repo level holding the discovered agent dirs (both kinds sit one level
+ * under it). */
+export function projectRootOf(dirs: AgentDirs): string | null {
+  const dir = dirs.pi ?? dirs.neutral;
+  return dir === null ? null : path.dirname(path.dirname(dir));
+}
+
 /** Merge agents from dirs in precedence order; a later file wins a name collision. */
 function addAgents(target: Map<string, AgentConfig>, dirs: Array<string | null>, source: AgentSource): void {
   for (const dir of dirs) {
@@ -214,6 +221,12 @@ export function discoverAgents(
   return { agents: Array.from(agentMap.values()), projectDirs, notesDirs };
 }
 
+/** Repo agents are repo-controlled and load only for a trusted project; user
+ * and notes agents are unaffected. */
+export function respectProjectTrust(agents: AgentConfig[], trusted: boolean): AgentConfig[] {
+  return trusted ? agents : agents.filter((a) => a.source !== "project");
+}
+
 /**
  * For each section, mark the agents that a later section (or a later dir in the
  * same section) overrides on a name collision. Sections are in precedence
@@ -236,7 +249,7 @@ export function buildToolDescription(agents: AgentConfig[]): string {
     "Delegate tasks to specialized subagents with isolated context windows.",
     "Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
     'Default agent scope is "user": ~/.pi/agent/agents plus this project\'s private notes agents.',
-    'To include repo agents (.agents/agents, .pi/agents), set agentScope: "both" (or "project").',
+    'Repo agents (.agents/agents, .pi/agents) need agentScope: "both" (or "project"), project trust, and (interactive sessions) a once-per-session confirmation.',
   ];
 
   if (agents.length > 0) {

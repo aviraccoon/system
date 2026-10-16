@@ -9,6 +9,8 @@ import {
   findNearestProjectAgentDirs,
   loadAgentsFromDir,
   markShadowed,
+  projectRootOf,
+  respectProjectTrust,
 } from "./agents";
 
 const TEST_DIR = join(tmpdir(), `subagent-agents-test-${process.pid}`);
@@ -360,6 +362,40 @@ describe("buildToolDescription", () => {
     expect(desc).toContain("- basic: Simple agent");
     expect(desc).not.toContain("[");
     expect(desc).not.toContain("role:");
+  });
+});
+
+// ── projectRootOf / respectProjectTrust ──
+
+describe("projectRootOf", () => {
+  test("returns the level above both kinds", () => {
+    expect(projectRootOf({ neutral: "/repo/.agents/agents", pi: null })).toBe("/repo");
+    expect(projectRootOf({ neutral: null, pi: "/repo/.pi/agents" })).toBe("/repo");
+    expect(projectRootOf({ neutral: "/repo/.agents/agents", pi: "/repo/.pi/agents" })).toBe("/repo");
+  });
+
+  test("returns null when no dir was found", () => {
+    expect(projectRootOf({ neutral: null, pi: null })).toBeNull();
+  });
+});
+
+describe("respectProjectTrust", () => {
+  const agent = (name: string, source: AgentConfig["source"]): AgentConfig => ({
+    name,
+    description: "",
+    systemPrompt: "",
+    source,
+    filePath: "",
+  });
+
+  test("drops repo agents when the project is not trusted", () => {
+    const agents = [agent("u", "user"), agent("p", "project"), agent("n", "notes")];
+    expect(respectProjectTrust(agents, false).map((a) => a.name)).toEqual(["u", "n"]);
+  });
+
+  test("keeps every source when trusted", () => {
+    const agents = [agent("u", "user"), agent("p", "project"), agent("n", "notes")];
+    expect(respectProjectTrust(agents, true).map((a) => a.name)).toEqual(["u", "p", "n"]);
   });
 });
 

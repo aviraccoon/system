@@ -21,10 +21,18 @@ import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { journalNotesDir } from "../shared/journal-context";
-import { type AgentConfig, buildToolDescription, discoverAgents, loadAgentsFromDir, markShadowed } from "./agents";
+import {
+  type AgentConfig,
+  buildToolDescription,
+  discoverAgents,
+  loadAgentsFromDir,
+  markShadowed,
+  respectProjectTrust,
+} from "./agents";
 import { journalPath, taskForChild } from "./journal-task";
 import { resolveMode } from "./mode";
 import { renderCall as renderCallFn, renderResult as renderResultFn, withSessionPaths } from "./render";
+import { repoGate } from "./repo-gate";
 import {
   getAvailableRoles,
   getFinalOutput,
@@ -35,6 +43,7 @@ import {
   type SubagentDetails,
   type SubagentHandle,
 } from "./rpc";
+import { AcceptedRoots, PROJECT_TRUST_ENTRY } from "./trust";
 
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
@@ -95,9 +104,6 @@ const SubagentParams = Type.Object({
   ),
   chain: Type.Optional(Type.Array(ChainItem, { description: "Array of {agent, task} for sequential execution" })),
   agentScope: Type.Optional(AgentScopeSchema),
-  confirmProjectAgents: Type.Optional(
-    Type.Boolean({ description: "Prompt before running project-local agents. Default: true.", default: true }),
-  ),
   cwd: Type.Optional(
     Type.String({
       description:
@@ -124,6 +130,15 @@ const SubagentParams = Type.Object({
 let toolEnabled = true;
 
 export default function subagentExtension(pi: ExtensionAPI) {
+  // Repo roots whose confirmation was accepted this session.
+  const acceptedRoots = new AcceptedRoots();
+
+  pi.on("session_start", async (_event, ctx) => {
+    // A reload or resume re-instantiates the extension with the same session
+    // history — a repository accepted there stays accepted.
+    acceptedRoots.restoreFromSession(ctx.sessionManager);
+  });
+
   function registerTool() {
     // Discover agents at registration time for the tool description.
     const allAgents = discoverAgents(process.cwd(), "both", journalNotesDir()).agents;
@@ -149,11 +164,17 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
         const agentScope: "user" | "project" | "both" = params.agentScope ?? "user";
         const journal = journalPath(params.journal);
+        const trusted = ctx.isProjectTrusted();
         const discovery = discoverAgents(ctx.cwd, agentScope, journalNotesDir());
-        const agents = discovery.agents;
+        const agents = respectProjectTrust(discovery.agents, trusted);
 
         // resolveMode collapses a one-item `tasks` batch to single; see mode.ts.
         const { parallelTasks, singleAgent, singleTask, singleCwd } = resolveMode(params);
+
+        const requestedAgentNames = new Set<string>();
+        if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
+        if (parallelTasks) for (const t of parallelTasks) requestedAgentNames.add(t.agent);
+        if (singleAgent) requestedAgentNames.add(singleAgent);
 
         const hasChain = (params.chain?.length ?? 0) > 0;
         const hasTasks = (parallelTasks?.length ?? 0) > 0;
@@ -178,32 +199,46 @@ export default function subagentExtension(pi: ExtensionAPI) {
           };
         }
 
-        // Confirm project-local agents
-        if ((agentScope === "project" || agentScope === "both") && params.confirmProjectAgents !== false && ctx.hasUI) {
-          const requestedAgentNames = new Set<string>();
-          if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
-          if (parallelTasks) for (const t of parallelTasks) requestedAgentNames.add(t.agent);
-          if (singleAgent) requestedAgentNames.add(singleAgent);
+        const mode = hasChain ? "chain" : hasTasks ? "parallel" : ("single" as const);
+        const gate = repoGate({
+          discovered: discovery.agents,
+          requestedNames: requestedAgentNames,
+          agentScope,
+          trusted,
+          hasUI: ctx.hasUI,
+          accepted: (root) => acceptedRoots.has(root),
+          projectDirs: discovery.projectDirs,
+        });
 
-          const projectAgentsRequested = Array.from(requestedAgentNames)
-            .map((name) => agents.find((a) => a.name === name))
-            .filter((a): a is AgentConfig => a?.source === "project");
+        // Repo agents are repo-controlled; pi's project trust is the floor.
+        if (gate.kind === "block") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Repo agents are disabled: project trust is not granted for ${ctx.cwd}. Blocked: ${gate.names.join(", ")}. Grant trust with /trust, then restart pi and re-dispatch.`,
+              },
+            ],
+            details: makeDetails(mode)([]),
+          };
+        }
 
-          if (projectAgentsRequested.length > 0) {
-            const names = projectAgentsRequested.map((a) => a.name).join(", ");
-            const dir =
-              [discovery.projectDirs.neutral, discovery.projectDirs.pi]
-                .filter((d): d is string => d !== null)
-                .join(", ") || "(unknown)";
-            const ok = await ctx.ui.confirm(
-              "Run project-local agents?",
-              `Agents: ${names}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
-            );
-            if (!ok)
-              return {
-                content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
-                details: makeDetails(hasChain ? "chain" : hasTasks ? "parallel" : "single")([]),
-              };
+        // Confirm repo agents once per repository per session.
+        if (gate.kind === "confirm") {
+          const dir = gate.dirs.join(", ") || "(unknown)";
+          const ok = await ctx.ui.confirm(
+            "Run project-local agents?",
+            `Agents: ${gate.names.join(", ")}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+          );
+          if (!ok) {
+            return {
+              content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
+              details: makeDetails(mode)([]),
+            };
+          }
+          if (gate.root !== null) {
+            acceptedRoots.add(gate.root);
+            pi.appendEntry(PROJECT_TRUST_ENTRY, { root: gate.root });
           }
         }
 
@@ -524,6 +559,9 @@ export default function subagentExtension(pi: ExtensionAPI) {
       let msg = `Status: ${toolEnabled ? "✓ enabled" : "✗ disabled"}\n\nAvailable subagent definitions:\n`;
       msg +=
         '(shadowed) = a later root also defines the name and wins when it is loaded (repo roots: agentScope "both"/"project").\n';
+      if (!ctx.isProjectTrusted() && (discovery.projectDirs.neutral !== null || discovery.projectDirs.pi !== null)) {
+        msg += "Project trust is not granted; repo agents are disabled (/trust, then restart pi).\n";
+      }
       if (loaded.every((section) => section.agents.length === 0)) msg += "No agents defined.\n";
       for (let i = 0; i < loaded.length; i++) {
         if (loaded[i].agents.length === 0) continue;

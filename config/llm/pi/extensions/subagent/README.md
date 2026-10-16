@@ -13,7 +13,7 @@ Delegate tasks to specialized agents with isolated context windows. Spawns a sep
 7. **Session storage** — each run writes a JSONL session to `~/.pi/agent/subagent-sessions/`, cleaned up after 7 days
 8. **Turn budget** — `maxTurns` (default 30) is stated in the task; three turns before the cap the child is steered once to write its report; the run is aborted at the cap
 9. **Retries** — a provider failure gets up to 3 attempts across the agent's model chain
-10. **Repo agent gating** — prompts for confirmation before running agents from the repo's `.agents/agents/` or `.pi/agents/`; private notes agents are user-owned and ungated
+10. **Repo agent gating** — an untrusted project disables both repo dirs (`/trust`, applied after restart); a trusted one confirms once per repository per session when run interactively. Private notes agents are user-owned and ungated
 11. **Journal context** — `journal: "<path>"` prepends a read-the-journal line to every task: a journal dir (TODO.md plus the newest entries) or a specific entry file, any project under the notes tree. `journal: "none"` marks a deliberately blind dispatch; omit it to link the journal path in each task yourself (edit-guard enforces one of the three)
 
 ## Commands
@@ -52,7 +52,7 @@ System prompt body goes here...
 Roots, lowest to highest precedence:
 
 1. `~/.pi/agent/agents/*.md` — user, always available (deployed by Nix via symlink from `config/llm/pi/agents/`)
-2. `<repo>/.agents/agents/*.md` and `<repo>/.pi/agents/*.md` — repo, from the nearest level with agent files in either dir, walking up from cwd and stopping at the home directory (or the filesystem root, for a cwd outside home); requires `agentScope: "both"` or `"project"`, plus user confirmation
+2. `<repo>/.agents/agents/*.md` and `<repo>/.pi/agents/*.md` — repo, from the nearest level with agent files in either dir, walking up from cwd and stopping at the home directory (or the filesystem root, for a cwd outside home); requires `agentScope: "both"` or `"project"`, a trusted project (`/trust`, applied after restart), and (interactive sessions) a once-per-session confirmation
 3. `<notes>/<project>/.agents/agents/*.md` and `<notes>/<project>/.pi/agents/*.md` — private, for the project owning the cwd (`<project>` is the journal dir name); always available, no confirmation
 
 A file in a later root overrides an earlier root's file with the same name, and `.pi/agents` overrides `.agents/agents` at the same root. `.agents/agents` fits harness-agnostic definitions (`name`, `description`, body); `.pi/agents` carries pi-specific frontmatter (`role`, `extensions`, tool allowlist). `/subagent-status` lists every file and marks the shadowed ones.
