@@ -21,6 +21,12 @@ describe("syncArgs", () => {
     expect(syncArgs({ ...base, mode: "mirror" })).toContain("--delete-excluded");
   });
 
+  test("a slice never deletes excluded files", () => {
+    const args = syncArgs({ ...base, slice: true });
+    expect(args).not.toContain("--delete-excluded");
+    expect(args).toContain("--links");
+  });
+
   test("extra flags pass through", () => {
     expect(syncArgs({ ...base, extraFlags: ["--size-only"] })).toContain("--size-only");
   });

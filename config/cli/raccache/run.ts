@@ -6,7 +6,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSy
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
 import { type Destination, loadMachine, type Paths, paths, type Settings, type Target } from "./config";
-import { buildFilters, type FilterResult, type RepoIgnores, renderFilter } from "./filters";
+import { buildFilters, type FilterResult, type RepoIgnores, renderFilter, slicePath } from "./filters";
 import { guardVerdict, observe } from "./guards";
 import { acquireLock, releaseLock } from "./lock";
 import { deadlockPaths, materialize } from "./materialize";
@@ -22,6 +22,8 @@ export interface RunOptions {
   only?: string;
   /** Run only this destination, by name. */
   destination?: string;
+  /** Debug slice: only these paths (relative to each selected target's root). */
+  path?: string[];
   configDir?: string;
   platform?: NodeJS.Platform;
   /** Poll behaviour of the cloud-only fetch; tests shorten it. */
@@ -39,7 +41,7 @@ export interface GeneratedFilter {
  * target contributes the paths git ignores; `~/.config/raccache/ignore` adds
  * whole trees by $HOME-relative path.
  */
-export function generateFilter(target: Target, settings: Settings, p: Paths): GeneratedFilter {
+export function generateFilter(target: Target, settings: Settings, p: Paths, slice: string[] = []): GeneratedFilter {
   const userIgnore = existsSync(p.ignore) ? readFileSync(p.ignore, "utf8").split("\n") : [];
   let repoIgnores: RepoIgnores[] = [];
   let repoErrors: string[] = [];
@@ -54,8 +56,11 @@ export function generateFilter(target: Target, settings: Settings, p: Paths): Ge
     exclude: settings.exclude,
     repoIgnores,
     userIgnore,
+    slice,
   });
-  const file = join(p.dir, `filter.${target.dest.replaceAll("/", "_")}`);
+  // A slice gets its own file, so the target's filter is never left sliced on disk.
+  const suffix = slice.length > 0 ? ".slice" : "";
+  const file = join(p.dir, `filter.${target.dest.replaceAll("/", "_")}${suffix}`);
   writeFileSync(`${file}.tmp`, renderFilter(target.dest, rules.lines));
   renameSync(`${file}.tmp`, file);
   return { file, rules, repoErrors };
@@ -155,7 +160,9 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
     if (options.destination && destinations.length === 0) return fail(`no destination named '${options.destination}'`);
 
     const planned = pairLabels(targets, destinations);
+    const slice = options.path ?? [];
     log(startLine(planned, options.dryRun === true));
+    if (slice.length > 0) log(`slice: ${slice.join(", ")}`);
     const startTs = Date.now();
     let rc = 0;
     const pairs: Array<{ label: string; counts: Counts }> = [];
@@ -174,7 +181,7 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
 
       let filter: GeneratedFilter;
       try {
-        filter = generateFilter(target, settings, p);
+        filter = generateFilter(target, settings, p, slice);
       } catch (error) {
         const detail = error instanceof Error ? error.message : String(error);
         for (const line of pairMessages(destinations, target.dest, `FAILED to build filters: ${detail}`)) log(line);
@@ -192,8 +199,22 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
       }
       const { include, exclude, gitignore, user, repos } = filter.rules.stats;
       log(
-        `${target.dest} filters: ${gitignore} from ${repos} repos, ${user} from ignore, ${exclude + include} built in`,
+        `${target.dest} filters: ${gitignore} from ${repos} repos, ${user} from ignore, ${exclude + include} built in` +
+          `${filter.rules.stats.slice > 0 ? `, ${filter.rules.stats.slice} slice` : ""}`,
       );
+      // An entry that is not on disk here, or a directory without its trailing slash,
+      // is an empty pass that rclone reports as success: say so instead.
+      for (const entry of slice) {
+        if (/[?*[{]/.test(entry)) continue;
+        const stat = statSync(join(target.src, slicePath(entry)), { throwIfNoEntry: false });
+        if (!stat) {
+          log(`slice ${target.dest}: '${entry}' is not found (or not readable) under ${target.src}`);
+        } else if (entry.endsWith("/") && !stat.isDirectory()) {
+          log(`slice ${target.dest}: '${entry}' names a file - drop the trailing slash`);
+        } else if (!entry.endsWith("/") && stat.isDirectory()) {
+          log(`slice ${target.dest}: '${entry}' is a directory - add a trailing slash for its contents`);
+        }
+      }
 
       for (const destination of destinations) {
         const label = `${destination.name}/${target.dest}`;
@@ -206,6 +227,7 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
           bwLimit: settings.bwLimit,
           dryRun: options.dryRun,
           mode: destination.mode,
+          slice: slice.length > 0,
           extraFlags: destination.flags,
         });
         let status = runSync(settings.rclone, args, p.log, env);

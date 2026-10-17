@@ -18,10 +18,10 @@ mirrors the targets in ~/.config/raccache/targets.toml to every destination in
 destinations.toml, and shows what this machine and the other devices in
 devices.toml are doing right now.
 
-usage: raccache run [--dry-run] [--only <target>] [--destination <name>]
+usage: raccache run [--dry-run] [--only <target>] [--destination <name>] [--path <p>]...
        raccache status [--watch] [--interval <seconds>] [--json] [--device <name>...]
        raccache pause|resume|stop [--device <name>...]
-       raccache filters [<target>]
+       raccache filters [--path <pattern>]... [<target>]
 
 commands:
   run                  mirror every target to every destination; the scheduled job
@@ -39,6 +39,8 @@ flags:
   --dry-run            run: pass --dry-run to rclone, upload nothing
   --only <target>      run: restrict to one target
   --destination <name> run: restrict to one destination
+  --path <pattern>     run, filters: only these paths (relative to the target's
+                       root); repeatable; a trailing slash means the whole subtree
   --device <name>      status/controls: restrict to one device (repeatable)
   -w, --watch          status: refresh continuously and show rates
   --interval <s>       status: refresh interval in seconds (default 30)
@@ -58,6 +60,7 @@ export interface Cli {
   dryRun: boolean;
   only?: string;
   destination?: string;
+  path: string[];
   help: boolean;
 }
 
@@ -71,6 +74,7 @@ export function parseCli(argv: string[]): Cli {
       "dry-run": { type: "boolean" },
       only: { type: "string" },
       destination: { type: "string" },
+      path: { type: "string", multiple: true },
       json: { type: "boolean" },
       help: { type: "boolean", short: "h" },
     },
@@ -94,6 +98,7 @@ export function parseCli(argv: string[]): Cli {
     dryRun: values["dry-run"] ?? false,
     only: values.only,
     destination: values.destination,
+    path: values.path ?? [],
     help: values.help ?? false,
   };
 }
@@ -239,13 +244,14 @@ async function printFilters(cli: Cli): Promise<number> {
   }
   let rc = 0;
   for (const target of selected) {
-    const { file, rules, repoErrors } = generateFilter(target, machine.settings, p);
+    const { file, rules, repoErrors } = generateFilter(target, machine.settings, p, cli.path);
     console.log(`--- ${target.dest}  (${target.src}) → ${file}`);
     for (const warning of repoErrors) console.error(`warn: ${warning}`);
     for (const error of rules.errors) console.error(`error: ${error}`);
     console.log(
       `${rules.stats.gitignore} from ${rules.stats.repos} repos, ${rules.stats.user} from ignore, ` +
-        `${rules.stats.include} includes, ${rules.stats.exclude} excludes`,
+        `${rules.stats.include} includes, ${rules.stats.exclude} excludes` +
+        `${rules.stats.slice > 0 ? `, ${rules.stats.slice} slice` : ""}`,
     );
     for (const line of rules.lines) console.log(line);
     if (rules.errors.length > 0) rc = 1;
@@ -308,7 +314,12 @@ async function main(): Promise<void> {
     return;
   }
   if (cli.command === "run") {
-    process.exitCode = await runBackup({ dryRun: cli.dryRun, only: cli.only, destination: cli.destination });
+    process.exitCode = await runBackup({
+      dryRun: cli.dryRun,
+      only: cli.only,
+      destination: cli.destination,
+      path: cli.path,
+    });
     return;
   }
   if (cli.command === "filters") {

@@ -21,6 +21,14 @@ describe("parseCli", () => {
     expect(cli.destination).toBe("r2");
   });
 
+  test("--path is repeatable and empty by default", () => {
+    expect(parseCli(["run", "--path", "Downloads", "--path", "Pictures/x.png"]).path).toEqual([
+      "Downloads",
+      "Pictures/x.png",
+    ]);
+    expect(parseCli(["run"]).path).toEqual([]);
+  });
+
   test("filters takes the target as a positional", () => {
     const cli = parseCli(["filters", "dev"]);
     expect(cli.command).toBe("filters");

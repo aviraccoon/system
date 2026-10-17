@@ -5,10 +5,10 @@ every configured destination, and shows what every device in `devices.toml` is
 doing. One binary, driven entirely by the machine's own config.
 
 ```
-raccache run [--dry-run] [--only <target>] [--destination <name>]
+raccache run [--dry-run] [--only <target>] [--destination <name>] [--path <p>]...
 raccache status [--watch] [--interval <s>] [--json] [--device <name>...]
 raccache pause|resume|stop [--device <name>...]
-raccache filters [<target>]
+raccache filters [--path <p>]... [<target>]
 ```
 
 `raccache --help` is the flag reference. `run` is what the scheduler calls;
@@ -69,6 +69,27 @@ target is refused and fails the run.
 `mode = "mirror"` passes `--delete-excluded`, so a rule that appears also removes
 the matching files from the destination; recover them through the bucket's
 hidden-file lifecycle. `mode = "copy"` never deletes.
+
+## Slices
+
+`run --path <pattern>` (repeatable) syncs only those paths, relative to each
+selected target's root, with a trailing slash meaning the whole subtree: the
+slice rules join the filter after the target's own rules — so an excluded path
+stays excluded inside the slice — and a `- /**` closes the list. The include
+exceptions are matched first, so those files ride along wherever they are;
+everything else outside the slice is excluded. An entry that is not on disk under
+the target, or a directory named without its trailing slash, is logged: rclone
+reports such a pass as a success.
+The sync then passes no `--delete-excluded` — everything outside the slice is
+excluded, and the flag would delete it at the destination — while normal mirror
+deletion inside the slice still happens. The filter goes to
+`filter.<dest>.slice`, so a slice never leaves the target's own filter sliced on
+disk, and `filters --path <pattern> <target>` prints what a slice would use.
+
+A slice is for debugging and for a scoped catch-up, not for steady state: it
+still lists the target's destination directory, and a terminal run of an iCloud
+target cannot reproduce the cloud-only case below (a terminal read materialises
+the file on the spot).
 
 Symlinks are stored as `.rclonelink` files (`--links`), not followed or dropped:
 repos track them, and dropping one leaves a restore that is quietly incomplete.

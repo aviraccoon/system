@@ -165,7 +165,7 @@ describe("runBackup", () => {
   const harness = (deliver: "brctl" | "never" | "self" = "brctl") => {
     const root = tempDir();
     const src = join(root, "src");
-    mkdirSync(src);
+    mkdirSync(join(src, "sub"), { recursive: true });
     const note = join(src, "note.pdf");
     writeFileSync(note, "content");
     // Unreadable here stands in for a file whose content is still in iCloud.
@@ -181,10 +181,12 @@ describe("runBackup", () => {
     chmodSync(brctl, 0o755);
 
     const syncCount = join(root, "sync.count");
+    const argsFile = join(root, "rclone.args");
     const rclone = join(root, "rclone");
     writeFileSync(
       rclone,
       `#!/bin/sh
+echo "$@" >> "${argsFile}"
 case "$1" in
   version) echo "rclone v0.0.0"; exit 0 ;;
   listremotes) echo "stub:"; exit 0 ;;
@@ -212,7 +214,7 @@ exit 0
     writeFileSync(join(configDir, "config"), `RCLONE=${rclone}\nBRCTL=${brctl}\nPOWER_GUARD=0\n`);
     writeFileSync(join(configDir, "targets.toml"), `[[target]]\ndest = "dev"\nsrc = "${src}"\n`);
     writeFileSync(join(configDir, "destinations.toml"), `[[destination]]\nname = "stub"\nremote = "stub:laptop"\n`);
-    return { root, configDir, log: join(root, "raccache.log"), note, brctlLog, syncCount };
+    return { root, configDir, log: join(root, "raccache.log"), note, brctlLog, syncCount, argsFile };
   };
 
   /** Run against a scratch config and a scratch log, without the machine's secrets. */
@@ -275,5 +277,30 @@ exit 0
     // Nothing to fetch, so the daemon was never asked.
     expect(existsSync(brctlLog)).toBe(false);
     expect(readFileSync(syncCount, "utf8").trim()).toBe("2");
+  });
+
+  test("a --path slice writes its own filter and drops --delete-excluded", async () => {
+    const { configDir, log, argsFile } = harness();
+    const rc = await isolatedRun(configDir, log, { path: ["note.pdf"] });
+
+    expect(rc).toBe(0);
+    const text = readFileSync(log, "utf8");
+    expect(text).toContain("slice: note.pdf");
+    expect(text).toContain(", 1 slice");
+    // The excluded rest of the target must not be deleted at the destination.
+    expect(readFileSync(argsFile, "utf8")).not.toContain("--delete-excluded");
+    const filter = readFileSync(join(configDir, "filter.dev.slice"), "utf8").split("\n");
+    expect(filter).toContain("+ /note.pdf");
+    expect(filter[filter.length - 2]).toBe("- /**");
+  });
+
+  test("a slice that transfers nothing is logged, not reported as a clean pass", async () => {
+    const { configDir, log } = harness();
+    await isolatedRun(configDir, log, { path: ["nope.pdf", "sub", "note.pdf/"] });
+
+    const text = readFileSync(log, "utf8");
+    expect(text).toContain("'nope.pdf' is not found (or not readable) under");
+    expect(text).toContain("'sub' is a directory - add a trailing slash");
+    expect(text).toContain("'note.pdf/' names a file - drop the trailing slash");
   });
 });

@@ -15,6 +15,7 @@ export interface FilterStats {
   exclude: number;
   gitignore: number;
   user: number;
+  slice: number;
   repos: number;
 }
 
@@ -59,25 +60,56 @@ function userRule(line: string, dest: string): { rule?: string; error?: string }
   return { rule: `- /${rest}${trailingSlash ? "/" : ""}` };
 }
 
+/** The path a `--path` entry names: no leading slash, no trailing slash, no `./`. */
+export function slicePath(entry: string): string {
+  return normalizeSlashes(entry).trim().replace(/^\.\//, "").replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+/**
+ * A `--path` entry as an rclone rule. Slices are emitted after the target's own
+ * rules, so what those exclude stays excluded; a trailing slash means the subtree.
+ */
+export function sliceRule(entry: string): { rule?: string; error?: string } {
+  const subtree = normalizeSlashes(entry).trim().replace(/^\.\//, "").endsWith("/");
+  const path = slicePath(entry);
+  if (!path) return { error: `--path '${entry}' is empty` };
+  const parts = path.split("/");
+  if (parts.includes(".") || parts.includes("..")) {
+    return { error: `--path '${entry}' has a relative path segment` };
+  }
+  return { rule: `+ /${path}${subtree ? "/**" : ""}` };
+}
+
 export function buildFilters(opts: {
   dest: string;
   include: string[];
   exclude: string[];
   repoIgnores?: RepoIgnores[];
   userIgnore: string[];
+  /** `--path` entries: sync only these, everything else excluded. */
+  slice?: string[];
 }): FilterResult {
   const repoIgnores = opts.repoIgnores ?? [];
   const lines: string[] = [];
   const seen = new Set<string>();
   const errors: string[] = [];
-  const stats: FilterStats = { include: 0, exclude: 0, gitignore: 0, user: 0, repos: repoIgnores.length };
+  const stats: FilterStats = {
+    include: 0,
+    exclude: 0,
+    gitignore: 0,
+    user: 0,
+    slice: 0,
+    repos: repoIgnores.length,
+  };
 
-  const push = (rule: string, kind: "include" | "exclude" | "gitignore" | "user") => {
+  const push = (rule: string, kind: "include" | "exclude" | "gitignore" | "user" | "slice") => {
     if (seen.has(rule)) return;
     seen.add(rule);
     lines.push(rule);
     stats[kind]++;
   };
+
+  const slice = opts.slice ?? [];
 
   // Exceptions first: the first match wins, and everything unmatched is kept.
   for (const pattern of opts.include) push(`+ ${pattern}`, "include");
@@ -100,6 +132,18 @@ export function buildFilters(opts: {
     if (error) errors.push(error);
     else if (rule) push(rule, "user");
   }
+
+  // A slice restricts the pass to these paths. It sits after the target's own
+  // rules, so what those exclude stays excluded inside it, and the catch-all closes
+  // the list so nothing outside it is listed. A sliced sync must not pass
+  // --delete-excluded: the excluded rest would then be deleted at the destination.
+  for (const entry of slice) {
+    const { rule, error } = sliceRule(entry);
+    if (error) errors.push(error);
+    else if (rule) push(rule, "slice");
+  }
+  // Not an entry, so it must not count as one.
+  if (slice.length > 0) lines.push("- /**");
 
   return { lines, errors, stats };
 }
