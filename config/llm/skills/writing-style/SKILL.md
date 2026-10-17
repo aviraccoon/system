@@ -167,6 +167,14 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 **Instead**: State the current behavior on its own terms. If the earlier behavior explains why the code is shaped the way it is, it belongs in the commit message, the journal, or a design note.
 
+### Predecessor Framing
+
+**Patterns to avoid**: *replaces the old X*, *removes the legacy Y* — the change's own record describing it against an artifact no commit contains.
+
+**The problem**: When the history dropped the predecessor (a rebase, a squash, a file that never existed in a commit), the message rests on something the repository cannot show, and the reader cannot check the sentence that names it.
+
+**Instead**: State what the change does, checkable from the diff: "adds a machine-agnostic backup CLI", not "replaces the Mac backup script". A predecessor named in the commit message must exist in a commit in the tree, and only as the failure the change prevents (see *Change-Relative Prose*).
+
 ### Timeless Text
 
 **Patterns to avoid**: time anchors — *currently*, *new*, *latest*, *now*, *soon*, *as of this writing*, *presently*, *does not yet*, *existing*. A document is assumed to describe the current state.
