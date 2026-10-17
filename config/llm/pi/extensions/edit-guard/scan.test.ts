@@ -345,22 +345,50 @@ describe("bash-command rule", () => {
     expect(bashRule.kind).toBe("bash");
   });
 
-  test("flags output filtering and rg misuse", () => {
+  test("flags output filtering and rg --replace misuse", () => {
     expect(
       labelsOf(
         scanContent(["cargo clippy 2>&1 | tail -20", "rg -rn 'pattern' src/", "rg 'foo\\|bar' lib/"].join("\n"), rules),
       ),
     ).toEqual([
       ["output filtered through pipe"],
-      ["rg -rn flag misuse (-r is --replace; this rewrites every match to 'n')"],
+      [
+        "rg -r misuse (-r is --replace, not recursive; it replaces every match with the rest of the cluster or the next argument)",
+      ],
       ["rg escaped alternation (\\| matches a literal pipe, not OR)"],
     ]);
   });
 
-  test("leaves plain commands alone", () => {
+  test("flags rg --replace in any short-flag placement", () => {
+    const label =
+      "rg -r misuse (-r is --replace, not recursive; it replaces every match with the rest of the cluster or the next argument)";
+    const commands = [
+      "rg -rn 'p' src/",
+      "rg -nr 'p' src/",
+      "rg -rln 'p' src/",
+      "rg -r 'p' src/",
+      "rg -n 'p' -r x src/",
+      "rg foo 2>&1 -rn",
+      "rg 'x&y' -rn",
+    ];
+    expect(labelsOf(scanContent(commands.join("\n"), rules))).toEqual(commands.map(() => [label]));
+  });
+
+  test("leaves plain commands and deliberate rg flags alone", () => {
     expect(scanContent("rg 'foo|bar' src/", rules)).toHaveLength(0);
     expect(scanContent("cargo clippy", rules)).toHaveLength(0);
     expect(scanContent("rg foo src/ | wc -l", rules)).toHaveLength(0);
+    expect(scanContent("rg -n 'recurse' src/", rules)).toHaveLength(0);
+    expect(scanContent("rg -e 'recurse' src/", rules)).toHaveLength(0);
+    expect(scanContent("rg --replace=n 'x' src/", rules)).toHaveLength(0);
+    expect(scanContent("rg -n foo && cp -r a b", rules)).toHaveLength(0);
+    expect(scanContent("rg -n foo; cp -r a b", rules)).toHaveLength(0);
+    expect(scanContent("rg -n foo | cp -r a b", rules)).toHaveLength(0);
+    expect(scanContent("rg -n foo && echo 'a\\|b'", rules)).toHaveLength(0);
+    expect(scanContent("rg -n foo; echo 'a\\|b'", rules)).toHaveLength(0);
+    expect(scanContent("rg -n foo | echo 'a\\|b'", rules)).toHaveLength(0);
+    expect(scanContent("rg -trust foo", rules)).toHaveLength(0);
+    expect(scanContent("rg -eerror .", rules)).toHaveLength(0);
   });
 });
 

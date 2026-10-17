@@ -147,12 +147,21 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
     patterns: [
       { label: "output filtered through pipe", regex: "\\|\\s*(?:head|tail|grep|awk|sed)\\b" },
       {
-        label: "rg -rn flag misuse (-r is --replace; this rewrites every match to 'n')",
-        regex: "\\brg\\b[^\\n|]*\\s-rn\\b",
+        // Short-flag clusters with r in any position (-rn, -nr, -rln, -r):
+        // rg's r is --replace, not grep's recursive, and long-form --replace
+        // is deliberate so only single-dash clusters match. A value-taking
+        // flag (e f E m j g d t T A B C M, from rg --help) ends the cluster
+        // scan so an attached value like -trust or -eerror is not read as r.
+        // The span stops at ;, |, and && so a later command's flags (-r on cp
+        // or sort) are not read as rg's, while a single & (a 2>&1 redirect, a
+        // URL) passes through.
+        label:
+          "rg -r misuse (-r is --replace, not recursive; it replaces every match with the rest of the cluster or the next argument)",
+        regex: "\\brg\\b(?:[^\\n|;&]|&(?!&))*\\s-(?:(?![efEmjgdTtABCM])[A-Za-z0-9])*r[A-Za-z0-9]*\\b",
       },
       {
         label: "rg escaped alternation (\\| matches a literal pipe, not OR)",
-        regex: "\\brg\\b[^\\n|]*\\\\\\|",
+        regex: "\\brg\\b(?:[^\\n|;&]|&(?!&))*\\\\\\|",
       },
     ],
   },
