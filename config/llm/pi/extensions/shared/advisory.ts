@@ -56,13 +56,14 @@ export function adviceInterception(
   return { block: true, reason: adviceBlockReason() };
 }
 
-/** The block reason: what was detected and the capture instruction. The agent
- *  picks the output file name. */
+/** The block reason: the call was refused, what was detected, and the capture
+ *  instruction. The agent picks the output file name. */
 export function adviceBlockReason(): string {
   return (
-    "output-capture: this looks like a long diagnostic whose output is filtered or discarded instead " +
-    "of captured — the moment the filtered view proves insufficient, the whole operation has to re-run. " +
-    "Capture it instead: redirect the diagnostic's output to a file under /tmp (… > /tmp/<name>.log 2>&1) " +
-    "and read or filter the file afterwards; re-reading is cheap, re-running is not."
+    "output-capture: this call was blocked and did not run. " +
+    "It filters or discards a long diagnostic's output (tests, build, typecheck, lint) instead of capturing " +
+    "it, so a filtered view that falls short forces a full re-run. " +
+    "Re-issue the command with the diagnostic's output redirected to a file (… > /tmp/<name>.log 2>&1), " +
+    "then read or filter that file. Reading a captured file back is cheap; re-running the operation is not."
   );
 }

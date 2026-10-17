@@ -33,9 +33,11 @@ describe("advice wiring", () => {
     expect(adviceInterception(undefined, "allow")).toBeNull();
   });
 
-  test("the block reason names the capture instruction", () => {
-    expect(adviceBlockReason()).toContain("output-capture");
-    expect(adviceBlockReason()).toContain("/tmp/<name>.log");
+  test("the block reason says the call was blocked and names the capture instruction", () => {
+    const reason = adviceBlockReason();
+    expect(reason).toContain("output-capture");
+    expect(reason).toContain("did not run");
+    expect(reason).toContain("/tmp/<name>.log");
   });
 
   test("withAdvice appends the score to the detail", () => {
