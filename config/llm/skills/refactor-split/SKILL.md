@@ -29,7 +29,7 @@ Split a file that has grown too large or mixes concerns into focused, cohesive m
 For **new files**: extract in any order. Use LSP for symbol-level moves when available, otherwise use text tools.
 
 - **`sed -n 'START,ENDp' file > newfile`** — extract a section into a new file (use `>` not `>>` for the first section)
-- **`edit`** — fix imports, add exports, adjust signatures
+- **targeted replacement** (pi: `patch`) — fix imports, add exports, adjust signatures
 
 For **existing files**: same mechanics, but:
 - **Read the target file first** to avoid duplicating imports and to respect its conventions
@@ -42,14 +42,14 @@ For **existing files**: same mechanics, but:
 
 ### 2. Fix exports and imports
 
-Use `edit` to add `export` to public functions/types in the new files, and add corresponding `import` statements in the source file.
+Use targeted replacement to add `export` to public functions/types in the new files, and add corresponding `import` statements in the source file.
 
 ### 3. Delete extracted sections from source (end first)
 
 After **all** extractions and imports are done, delete the old code from the source file.
 **Delete from highest line numbers to lowest** so earlier references stay stable across deletions.
 
-For large multi-line blocks where `edit` can't match exactly (whitespace sensitivity, blank lines between functions), `gsed -i 'START,ENDd'` is acceptable — but always verify line numbers with `rg -n` first since they may have shifted from imports added in step 2.
+For large multi-line blocks, reproducing the whole block as the old text is error-prone; `gsed -i 'START,ENDd'` is acceptable — but always verify line numbers with `rg -n` first since they may have shifted from imports added in step 2.
 
 ### 4. Iterate on diagnostics
 
@@ -66,7 +66,7 @@ After each extraction, run `lsp diagnostics` on the changed files. Fix type erro
 
 ## Rules
 
-- **Never use `write` to create files containing extracted code.** `write` is for genuinely new content. For moving code, use LSP or sed to extract and `edit` to fix up.
+- **Never use `write` to create files containing extracted code.** `write` is for genuinely new content. For moving code, use LSP or sed to extract and targeted replacement to fix up.
 - **Never use `any`.** If a type doesn't match, fix the types properly — narrower parameter types, proper casts with intermediate types, or adjusting the function signature.
 - **Work from the end when deleting.** Delete extracted sections from highest line numbers to lowest so earlier references stay valid.
 - **One section at a time.** Extract one logical section, fix all errors, then proceed to the next. Don't batch extractions and hope they work out.

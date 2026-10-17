@@ -39,7 +39,7 @@ in
 
         ## File Editing
 
-        - Use edit (targeted replacement) for existing files, not write (full rewrite). Rewrites lose subtle details and make reviews harder.
+        - Use patch (targeted replacement) for existing files, not write (full rewrite). Rewrites lose subtle details and make reviews harder.
         - Only use write for genuinely new files or when the entire file content is changing.
       '';
 

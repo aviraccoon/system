@@ -412,11 +412,11 @@ export default function (pi: ExtensionAPI) {
     name: "patch",
     label: "Patch",
     description:
-      "Edit one or more files using tolerant text replacement. USE THIS INSTEAD OF THE BUILT-IN EDIT TOOL FOR ALL FILE TYPES (code, markdown, config, prose). Matching accepts normalized variants (Unicode arrows/symbols → ASCII, tab↔space, smart quotes/dashes, trailing whitespace) so edits don't fail on invisible-byte differences. On failure, returns closest matches and occurrence line numbers so you can fix everything in one retry. Supports anchor-based disambiguation, replaceAll, multi-file edits, insert mode, and dryRun.",
+      "Edit one or more files using tolerant text replacement. Use this for all file edits — code, markdown, config, prose. Matching accepts normalized variants (Unicode arrows/symbols → ASCII, tab↔space, smart quotes/dashes, trailing whitespace) so edits don't fail on invisible-byte differences. On failure, returns closest matches and occurrence line numbers so you can fix everything in one retry. Supports anchor-based disambiguation, replaceAll, multi-file edits, insert mode, and dryRun.",
     promptSnippet:
-      "patch: ALWAYS use instead of edit. Tolerant matching (Unicode arrows, tab↔space, smart quotes normalized). Closest-match diagnostics on failure. Anchor disambiguation, replaceAll, multi-file, dryRun.",
+      "patch: the tool for all file edits. Tolerant matching (Unicode arrows, tab↔space, smart quotes normalized). Closest-match diagnostics on failure. Anchor disambiguation, replaceAll, multi-file, dryRun.",
     promptGuidelines: [
-      "ALWAYS use patch instead of edit for ALL file edits — code, markdown, config, prose, every file type. There is no scenario where edit is preferred. patch has every capability edit has plus tolerant matching, better diagnostics, insert mode, multi-file atomicity, and anchor disambiguation. Using edit when patch exists wastes a retry when invisible-byte differences cause the edit to fail.",
+      "Use patch for ALL file edits — code, markdown, config, prose, every file type. Prefer it over a built-in edit tool, which fails on invisible-byte differences; a failed match here returns closest matches and occurrence line numbers, so one retry fixes every edit in the call.",
       "Do not guess line numbers — patch has no line-based parameters. Use `anchor` (a unique nearby string) or `replaceAll` to disambiguate when oldText matches multiple times.",
       "Include only the lines being changed plus minimal context for uniqueness in oldText. Do not pad with surrounding unchanged lines — the duplicate-line guard rejects this.",
       'Prefer `mode: "insertAfter"`/`"insertBefore"` over replace-when-you-only-mean-to-add: insert cannot drift on indentation or invisible bytes.',
