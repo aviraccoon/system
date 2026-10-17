@@ -4,6 +4,7 @@
 
 - No yapping, in everything — code comments, commit messages, docs, chat, prose. Say the least that fully conveys it and no more: less is more, but only when it still explains everything (dense, not caveman-terse). No padding, no restated obviousness, no filler to sound thorough.
 - Commit messages, code comments, and docs are public and must be self-contained — a reader has only the repo, not your journal or session log. Don't reference any of those (journal entries, session names, internal jargon or codenames), and don't lean on context the repo cannot show: an audit, a conversation, a ticket, a session finding, a measurement taken outside the repo. Describe the change on its own terms. A commit message mirrors the repo's own messages: personal content there licenses it here; otherwise it carries no personal name — where the change legitimately names someone, write "the user" (a path or identifier stays exact).
+- Docs and comments are written for the reader's environment, not the author's: a command must run in the context the doc names (host or container, CI or local) against the stack the project actually uses.
 - When a measurement is the justification for a change, name what was measured so a reader can re-run it.
 - Test fixtures, examples, and sample data are fully synthetic. Write them from scratch — never adapt them from the user's real files, project names, work topics, or any other private content, even "neutralized". Generic names only: `foo`, `acme`, `example.com`.
 - No emoji by default, unless a project's AGENTS.md says otherwise
@@ -124,9 +125,34 @@ When you discover durable knowledge (patterns, gotchas, architectural decisions)
 
 Never edit AGENTS.md or AGENTS.local.md directly — suggest the change. If the user approves, suggest `/avi-init-agents`. Before suggesting a promotion, check whether the pattern has come up before — repetition is a signal it belongs somewhere durable.
 
+## Tests
+
+A pin (a test that locks down one behavior) is evidence only if it can fail. Where green could be
+coincidence — presence asserted rather than the effect, a proxy that holds under both
+implementations (a count, an ordering, a snapshot), an either/or asserted on one side, an
+expectation that cannot disagree, a subject the test replaces with a mock — prove it can fail:
+undo the behavior, watch the pin go red, restore. A pin that stays green under the undo asserts
+nothing: tighten it or delete it. Run the proof against the pin's own file so the run actually
+includes it.
+
+One undo at a time, baseline green between them (a stacked or unrestored edit lies), and check the
+undo reached the asserted behavior: a green round trip can mean the mutation never exercised the
+path — a fake that models only the happy path, a mock standing in for the subject — as easily as a
+weak pin. Prefer the real implementation over a mock of the thing under test; a fake must model
+the contract the code relies on, failure modes included.
+
+A check is fixed at the cause, never greened by weakening it: a relaxed assertion, a skipped test,
+a widened catch, a disabled rule. An expectation edited to match new output claims that output is
+correct. A result a rerun, a sleep, or a run order decides is a defect, not noise — make the test
+deterministic.
+
+Before reporting done, run the project's full check in its one-shot form — the suite, not just the
+files touched. A run that never exits is not a gate, and a run that selects no tests exits 0
+without proving anything.
+
 ## Version Control
 
-Use git for version-control operations. Check recent history (`git log --oneline -10`) for conventions (scopes, format, bodies) before committing; use an existing scope, don't invent one. Split changes spanning concerns into separate commits (`git add -p`, or the non-interactive `git diff -U0` → keep wanted hunks → `git apply --cached --unidiff-zero` → `git commit`). Unpushed commits are yours to reshape — amend them, stack fixups and squash them — for any reason; pushed history stays as it is.
+Use git for version-control operations. Check recent history (`git log --oneline -10`) for conventions (scopes, format, bodies) before committing; use an existing scope, don't invent one. Split changes spanning concerns into separate commits (`git add -p`, or the non-interactive `git diff -U0` → keep wanted hunks → `git apply --cached --unidiff-zero` → `git commit`). Keep the diff to the change: unrelated reformatting, renames, and refactors stay out; a repo-wide format is its own commit. Unpushed commits are yours to reshape — amend them, stack fixups and squash them — for any reason; pushed history stays as it is.
 
 **Review loop.** Before committing, a review subagent (in pi, `reviewer`) reviews the staged change and the proposed message against it. Fix the findings into the same commit. A round that still lands a behavior finding gets another round; a round whose findings change no behavior (prose, cosmetic, hygiene) ends the loop. Past three rounds, decide: apply or decline each remaining finding by judgment, journal the call, and stop dispatching reviews. Re-derive a suggested fix's mechanism against the code before implementing it. Record in the journal whatever review could not reach (runtime, live services).
 
@@ -151,6 +177,13 @@ When Avi says "wrap up": finalize the journal (what was done, decisions, commit 
 The wrap-up is complete when the journal is complete.
 
 
-## Package Install Safety
+## Safety
+
+Destructive or irreversible actions need confirmation, not a default: `rm -rf`, `git reset
+--hard`, a force-push, a database drop, deleting a remote or cloud resource. Prefer the recoverable
+form — trash over `rm`, a branch over a reset, a dry run over the real run.
+
+Real credentials never enter code, tests, fixtures, logs, or output; scrub a token or secret from
+anything quoted back.
 
 Use lockfile-install commands (`npm ci`, `pnpm install --frozen-lockfile`, `bun install --frozen-lockfile`, `yarn --frozen-lockfile`, `cargo build --locked`). Never regenerate a lockfile or `cargo update` unless asked. When resolving to a new version (not from lockfile), verify the version was actually released — not brand-new (hours/days old), not unpublished and re-published, not typosquatting. Newly published or unfamiliar versions are a supply chain attack vector. Verify a dependency is real before installing it. Install commands inherit the full shell environment — credentials, SSH keys, API tokens are all readable. For untrusted repos, run installs in a throwaway container.
