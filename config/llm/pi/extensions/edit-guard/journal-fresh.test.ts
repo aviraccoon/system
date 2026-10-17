@@ -13,6 +13,7 @@ import {
   journalLinkBlockReason,
   journalLinked,
   journalParam,
+  journalParamBlockReason,
   journalRecord,
   newestMtime,
 } from "./journal-fresh";
@@ -276,7 +277,7 @@ describe("journalBlockNeeded", () => {
 });
 
 describe("journalFreshnessBlockReason", () => {
-  test("names the record and the remedy", () => {
+  test("names the record, the remedy, and that the dispatch did not run", () => {
     const entry = journalFreshnessBlockReason({
       key: "/e",
       current: false,
@@ -285,6 +286,7 @@ describe("journalFreshnessBlockReason", () => {
     });
     expect(entry).toContain("the entry (/e)");
     expect(entry).toContain("Write the named entry");
+    expect(entry).toContain("dispatch blocked and did not run");
     const dir = journalFreshnessBlockReason({
       key: "/d",
       current: false,
@@ -327,7 +329,7 @@ describe("journalLinkBlockReason", () => {
     ).toBeNull();
   });
 
-  test("names the unlinked tasks", () => {
+  test("names the unlinked tasks and that the dispatch did not run", () => {
     const reason = journalLinkBlockReason(
       {
         tasks: [
@@ -340,6 +342,7 @@ describe("journalLinkBlockReason", () => {
     );
     expect(reason).toContain("a task does not link");
     expect(reason).toContain("tasks[1] (fixer)");
+    expect(reason).toContain("dispatch blocked and did not run");
   });
 });
 
@@ -352,5 +355,13 @@ describe("dispatchRan", () => {
     expect(dispatchRan(undefined)).toBe(false);
     expect(dispatchRan({})).toBe(false);
     expect(dispatchRan({ results: [] })).toBe(false);
+  });
+});
+
+describe("journalParamBlockReason", () => {
+  test("states the dispatch did not run and carries the resolver's reason", () => {
+    expect(journalParamBlockReason('journal param must be "none" or a journal path')).toBe(
+      'edit-guard: dispatch blocked and did not run — journal param must be "none" or a journal path.',
+    );
   });
 });

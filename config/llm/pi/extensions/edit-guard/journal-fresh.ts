@@ -201,10 +201,15 @@ export function journalBlockNeeded(record: JournalRecord, openedKey: string | nu
   return openedKey !== record.key && !record.current;
 }
 
+/** Block reason for a `journal` param the resolver rejected. */
+export function journalParamBlockReason(reason: string): string {
+  return `edit-guard: dispatch blocked and did not run — ${reason}.`;
+}
+
 /** Block reason when the record a dispatch reads has no fresh write. */
 export function journalFreshnessBlockReason(record: JournalRecord): string {
   return (
-    `edit-guard: dispatch blocked — ${record.subject} has no write newer than ` +
+    `edit-guard: dispatch blocked and did not run — ${record.subject} has no write newer than ` +
     `the last user message or completed dispatch. ${record.update} first — ` +
     "findings, decisions, unfinished work so far — then re-dispatch; a subagent must never read " +
     "a stale record. If the user explicitly said to skip journaling, re-issue the identical dispatch."
@@ -250,7 +255,7 @@ export function journalLinkBlockReason(
   if (unlinked.length === 0) return null;
   const labels = unlinked.map((t) => t.label).join(", ");
   return (
-    `edit-guard: dispatch blocked — ${unlinked.length === 1 ? "a task does" : "tasks do"} not link ` +
+    `edit-guard: dispatch blocked and did not run — ${unlinked.length === 1 ? "a task does" : "tasks do"} not link ` +
     `a journal: ${labels}. Pass journal: "<journal dir or entry>" on the subagent call and the ` +
     `tool tells every child to read it, or include the session journal path (${journalDir}) in ` +
     `each task. Pass journal: "none" only when the dispatch deliberately runs without journal ` +

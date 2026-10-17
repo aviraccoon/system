@@ -46,6 +46,7 @@ import {
   describeToolCall,
   factorsToExplanation,
   mergeExplanations,
+  nonInteractiveBlockReason,
   noteMessage,
   notesMessage,
   parseExplanation,
@@ -845,7 +846,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     }
 
     if (!ctx.hasUI) {
-      return { block: true, reason: `${event.toolName} blocked in non-interactive mode (permission gate)` };
+      return { block: true, reason: nonInteractiveBlockReason(event.toolName) };
     }
 
     // Auto-classify: call sidecar before showing dialog. Resolution composes the

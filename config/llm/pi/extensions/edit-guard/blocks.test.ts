@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { proseGateBlock, rewriteBlock } from "./blocks";
 
 describe("proseGateBlock", () => {
-  test("base reason names the skill path", () => {
+  test("base reason names the skill path and states the edit did not run", () => {
     const reason = proseGateBlock("README.md", "/Users/foo/bar-project/README.md");
     expect(reason).toContain("writing-style/SKILL.md");
+    expect(reason).toContain("this edit was blocked and did not run");
     expect(reason).not.toContain("blocked content");
   });
 
@@ -25,8 +26,9 @@ describe("proseGateBlock", () => {
 });
 
 describe("rewriteBlock", () => {
-  test("base reason points at patch without a stash sentence", () => {
+  test("base reason states the write did not run and points at patch", () => {
     const reason = rewriteBlock("README.md", 107, "/Users/foo/bar-project/README.md");
+    expect(reason).toContain("this write was blocked and did not run");
     expect(reason).toContain("already exists (107 lines)");
     expect(reason).toContain("use patch for targeted changes");
     expect(reason).not.toContain("blocked content");

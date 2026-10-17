@@ -25,16 +25,30 @@ export function scanContent(content: string, rules: ContentRule[]): Violation[] 
 
 const MAX_SHOWN = 15;
 
+/** Where a report came from, stated in the header: a refusal is not a warning about a call
+ * that ran, and a read-only sweep has no call to name at all. */
+const ORIGIN_TEXT = {
+  blocked: "this call was blocked and did not run",
+  ran: "this call ran",
+  scanned: "the file was scanned",
+} as const;
+
+type ViolationOrigin = keyof typeof ORIGIN_TEXT;
+
 /**
- * Format violations as a self-contained block: header with rule name and
- * count, per-line `>>` context (line numbers alone are ambiguous to agents),
- * then the verbatim policy statement.
+ * Format violations as a self-contained block: header with the report's origin, rule name
+ * and count, per-line `>>` context (line numbers alone are ambiguous to agents), then the
+ * verbatim policy statement.
  */
-export function formatViolations(violations: Violation[], rule: CompiledPathRule, relPath: string): string {
+export function formatViolations(
+  violations: Violation[],
+  rule: CompiledPathRule,
+  relPath: string,
+  origin: ViolationOrigin,
+): string {
   const shown = violations.slice(0, MAX_SHOWN);
-  const lines = [
-    `[edit-guard ${rule.displayName}${relPath ? ` ${relPath}` : ""}: ${violations.length} suspect line${violations.length === 1 ? "" : "s"}]`,
-  ];
+  const count = `${violations.length} suspect line${violations.length === 1 ? "" : "s"}`;
+  const lines = [`[edit-guard ${rule.displayName}${relPath ? ` ${relPath}` : ""}: ${ORIGIN_TEXT[origin]} (${count})]`];
   for (const v of shown) {
     lines.push(`  L${v.line} (${v.labels.join(", ")})`);
     lines.push(`  >> ${v.text}`);

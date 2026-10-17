@@ -443,9 +443,9 @@ describe("in-place-edit rule", () => {
 });
 
 describe("formatViolations", () => {
-  test("includes header, >> context lines, and the policy", () => {
-    const block = formatViolations(scanContent("- old thing — DONE", todoRule.rules), todoRule, "TODO.md");
-    expect(block).toContain("[edit-guard TODO.md TODO.md: 1 suspect line]");
+  test("header states the call was blocked, plus >> context lines and the policy", () => {
+    const block = formatViolations(scanContent("- old thing — DONE", todoRule.rules), todoRule, "TODO.md", "blocked");
+    expect(block).toContain("[edit-guard TODO.md TODO.md: this call was blocked and did not run (1 suspect line)]");
     expect(block).toContain(">> - old thing — DONE");
     expect(block).toContain(todoRule.policy);
     // Literal, so deleting the wishlist sentence turns this pin red rather than
@@ -453,12 +453,24 @@ describe("formatViolations", () => {
     expect(block).toContain("otherwise it belongs in the journal");
   });
 
+  test("a completed call's scan does not read as a block", () => {
+    const block = formatViolations(scanContent("- old thing — DONE", todoRule.rules), todoRule, "TODO.md", "ran");
+    expect(block).toContain("[edit-guard TODO.md TODO.md: this call ran (1 suspect line)]");
+    expect(block).not.toContain("blocked");
+  });
+
+  test("a read-only sweep claims no call", () => {
+    const block = formatViolations(scanContent("- old thing — DONE", todoRule.rules), todoRule, "TODO.md", "scanned");
+    expect(block).toContain("[edit-guard TODO.md TODO.md: the file was scanned (1 suspect line)]");
+    expect(block).not.toContain("this call");
+  });
+
   test("caps listed lines and reports the remainder", () => {
     const violations = scanContent(
       Array.from({ length: 20 }, (_, i) => `- thing ${i} DONE`).join("\n"),
       todoRule.rules,
     );
-    const block = formatViolations(violations, todoRule, "");
+    const block = formatViolations(violations, todoRule, "", "ran");
     expect(block).toContain("20 suspect lines");
     expect(block).toContain("... and 5 more");
   });

@@ -10,7 +10,10 @@ losing to the model's habits is mirrored here as line patterns.
   with the rules whose matcher accepts it. Violations are appended to the
   tool result as a self-contained block: matched lines with `>>` context plus
   the verbatim policy statement, so the agent can correct without the user
-  reading diffs.
+  reading diffs. The header states where the block came from — `this call was
+  blocked and did not run` for a refusal, `this call ran` for a completed
+  call, `the file was scanned` for the on-demand sweep — so one is not read as
+  another.
 - Every shell command is scanned with the `bash`-kind `notice` rules, with the
   block appended to the tool result. A rule with `enforce: "blockOnce"` refuses
   the first matching command of the session instead, using the block as the

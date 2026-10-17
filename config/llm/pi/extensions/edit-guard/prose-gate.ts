@@ -111,7 +111,8 @@ export function skillLoadedThisSession(session: SkillHistorySource): boolean {
 /** Self-contained block reason: the agent sees only this, not the session. */
 export function proseGateReason(displayPath: string): string {
   return (
-    `edit-guard: ${displayPath} is prose and the writing-style skill is not loaded this session. ` +
+    `edit-guard: this edit was blocked and did not run — ${displayPath} is prose and the ` +
+    "writing-style skill is not loaded this session. " +
     `Read ${WRITING_STYLE_SKILL_PATH} with the read tool, then re-issue this edit — ` +
     "the guide governs any prose another person will read: docs, instructions, READMEs, commit messages, " +
     "code comments. The gate clears for the session once the skill is loaded."

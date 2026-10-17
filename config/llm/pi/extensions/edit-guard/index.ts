@@ -30,6 +30,7 @@ import {
   journalFreshnessBlockReason,
   journalLinkBlockReason,
   journalParam,
+  journalParamBlockReason,
   journalRecord,
 } from "./journal-fresh";
 import { isGatedProsePath, mentionsWritingStyleSkill, skillLoadedThisSession } from "./prose-gate";
@@ -164,7 +165,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
       const sessionDir = journalDirFor(notesDir, ctx.cwd);
       const param = journalParam(input.journal, notesDir);
       if (param.kind === "invalid") {
-        return { block: true, reason: `edit-guard: dispatch blocked — ${param.reason}.` };
+        return { block: true, reason: journalParamBlockReason(param.reason) };
       }
       // The record the dispatch reads is the one that must be current: the
       // param's target, or the session's journal when it links by task text.
@@ -194,7 +195,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
           const violations = blockedOnce.claim(rule, command);
           if (!violations) continue;
           pi.appendEntry(BLOCK_ONCE_ENTRY, { blocked: rule.displayName });
-          return { block: true, reason: formatViolations(violations, rule, "") };
+          return { block: true, reason: formatViolations(violations, rule, "", "blocked") };
         }
       }
     }
@@ -287,7 +288,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
         if (rule.kind !== "bash" || rule.enforce !== "notice" || rule.rules.length === 0) continue;
         const violations = scanContent(command, rule.rules);
         if (violations.length === 0) continue;
-        blocks.push(formatViolations(violations, rule, ""));
+        blocks.push(formatViolations(violations, rule, "", "ran"));
         labels.push(...violations.flatMap((v) => v.labels));
       }
       if (blocks.length === 0) return;
@@ -318,7 +319,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
         if (rule.kind !== "file" || !rule.matches(abs, roots) || rule.rules.length === 0) continue;
         const violations = scanContent(content, rule.rules);
         if (violations.length === 0) continue;
-        blocks.push(formatViolations(violations, rule, relative(ctx.cwd, abs)));
+        blocks.push(formatViolations(violations, rule, relative(ctx.cwd, abs), "ran"));
         flaggedFiles.add(abs);
         for (const v of violations) {
           for (const label of v.labels) flaggedLabels.add(label);
@@ -355,7 +356,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
       if (rule.kind !== "file" || !rule.matches(abs, roots) || rule.rules.length === 0) continue;
       const violations = scanContent(content, rule.rules);
       if (violations.length === 0) continue;
-      blocks.push(formatViolations(violations, rule, relative(ctx.cwd, abs)));
+      blocks.push(formatViolations(violations, rule, relative(ctx.cwd, abs), "scanned"));
       flagged += violations.length;
     }
     return { blocks, flagged };

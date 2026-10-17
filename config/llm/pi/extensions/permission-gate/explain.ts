@@ -456,3 +456,9 @@ export function blockReason(explanation: ExplanationResult | null, toolName?: st
   if (tirithNote) lines.push(tirithNote);
   return lines.join("\n");
 }
+
+/** Block reason when the gate cannot ask at all: with no UI there is no way to grant the
+ * call, so it is refused and says so rather than reading as a warning. */
+export function nonInteractiveBlockReason(toolName: string): string {
+  return `${toolName} blocked in non-interactive mode (permission gate) — the call did not run.`;
+}

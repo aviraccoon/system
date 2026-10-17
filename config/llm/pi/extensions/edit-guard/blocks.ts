@@ -29,7 +29,8 @@ export function rewriteBlock(displayPath: string, lines: number, abs: string, st
       "(any content) — the path is now allowed for the rest of the session.";
   }
   return (
-    `edit-guard: ${displayPath} already exists (${lines} lines). Don't use write to replace existing files — ` +
+    `edit-guard: this write was blocked and did not run — ${displayPath} already exists (${lines} lines). ` +
+    "Don't use write to replace existing files — " +
     "use patch for targeted changes (write is for genuinely new files only). " +
     "If a full rewrite is genuinely intended, re-issue the write (any content) — the path is then allowed for the rest of the session." +
     note

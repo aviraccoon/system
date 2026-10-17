@@ -11,6 +11,7 @@ import {
   factorsToExplanation,
   findVerdictLine,
   mergeExplanations,
+  nonInteractiveBlockReason,
   noteMessage,
   notesMessage,
   parseExplanation,
@@ -597,5 +598,13 @@ describe("blockReason", () => {
 
   test("no tool name uses generic verb", () => {
     expect(blockReason(null)).toBe("BLOCKED by user. The action was NOT performed. Do not retry unless the user asks.");
+  });
+});
+
+describe("nonInteractiveBlockReason", () => {
+  test("names the tool and states the call did not run", () => {
+    expect(nonInteractiveBlockReason("bash")).toBe(
+      "bash blocked in non-interactive mode (permission gate) — the call did not run.",
+    );
   });
 });
