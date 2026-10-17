@@ -9,7 +9,8 @@ import { type Destination, loadMachine, type Paths, paths, type Settings, type T
 import { buildFilters, type FilterResult, type RepoIgnores, renderFilter } from "./filters";
 import { guardVerdict, observe } from "./guards";
 import { acquireLock, releaseLock } from "./lock";
-import { notify } from "./notify";
+import { deadlockPaths, materialize } from "./materialize";
+import { type NotifyOptions, notify, resolveNtfyUrl } from "./notify";
 import { type Counts, parseCounts, rcloneReady, remoteConfigured, remotes, runSync, syncArgs } from "./rclone";
 import { collectRepoIgnores, discoverRepos } from "./repos";
 
@@ -23,6 +24,8 @@ export interface RunOptions {
   destination?: string;
   configDir?: string;
   platform?: NodeJS.Platform;
+  /** Poll behaviour of the cloud-only fetch; tests shorten it. */
+  materialize?: { intervalMs?: number; deadlineMs?: number };
 }
 
 export interface GeneratedFilter {
@@ -99,18 +102,19 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
   const { settings } = machine;
   const env = { ...process.env, ...machine.env };
   const ntfyUrl = machine.env.RACCACHE_NTFY_URL;
+  // The push is best-effort, and whether it went out is part of the log: a log
+  // with no notify line can only mean there was nothing to report.
+  const push = async (options: NotifyOptions): Promise<void> => {
+    const result = await notify(p.ntfy, options);
+    log(result.sent ? `notify: sent '${options.title}'` : `notify: NOT sent (${result.reason})`);
+  };
   const fail = async (message: string): Promise<number> => {
     log(`ERROR: ${message}`);
-    await notify(p.ntfy, {
-      title: `${title}: FAILED`,
-      message,
-      priority: "high",
-      tags: "rotating_light",
-      url: ntfyUrl,
-    });
+    await push({ title: `${title}: FAILED`, message, priority: "high", tags: "rotating_light", url: ntfyUrl });
     return 1;
   };
   for (const warning of machine.warnings) log(`config: ${warning}`);
+  if (!resolveNtfyUrl(p.ntfy, ntfyUrl)) log("config: no ntfy URL configured - notifications stay off");
 
   const ready = rcloneReady(settings.rclone, env);
   if (!ready.ok) return fail(ready.reason ?? "rclone not runnable");
@@ -194,27 +198,46 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
       for (const destination of destinations) {
         const label = `${destination.name}/${target.dest}`;
         const offset = statSync(p.log, { throwIfNoEntry: false })?.size ?? 0;
-        const status = runSync(
-          settings.rclone,
-          syncArgs({
-            src: target.src,
-            dest: `${destination.remote}/${target.dest}`,
-            filterFile: filter.file,
-            logFile: p.log,
-            bwLimit: settings.bwLimit,
-            dryRun: options.dryRun,
-            mode: destination.mode,
-            extraFlags: destination.flags,
-          }),
-          p.log,
-          env,
-        );
+        const args = syncArgs({
+          src: target.src,
+          dest: `${destination.remote}/${target.dest}`,
+          filterFile: filter.file,
+          logFile: p.log,
+          bwLimit: settings.bwLimit,
+          dryRun: options.dryRun,
+          mode: destination.mode,
+          extraFlags: destination.flags,
+        });
+        let status = runSync(settings.rclone, args, p.log, env);
+        // A cloud-only file aborts the read and with it the target's delete phase.
+        // Fetch what the log named and give the sync one more pass.
+        let cloudOnly: string[] = [];
+        if (status !== 0 && !options.dryRun) {
+          const deadlocked = deadlockPaths(logLinesSince(p.log, offset));
+          if (deadlocked.length > 0) {
+            const fetched = await materialize(deadlocked, { brctl: settings.brctl, env, ...options.materialize });
+            cloudOnly = fetched.pending;
+            const readable = deadlocked.length - cloudOnly.length;
+            log(
+              `${label} dataless: ${deadlocked.length} named, ${readable} readable` +
+                `${cloudOnly.length > 0 ? `, ${cloudOnly.length} still cloud-only` : ""}`,
+            );
+            // A named path that reads now earns the second pass even when the daemon had
+            // nothing to fetch for it: a file can materialise between the failed read and
+            // the end of the sync.
+            if (readable > 0) status = runSync(settings.rclone, args, p.log, env);
+          }
+        }
         const counts = parseCounts(logLinesSince(p.log, offset));
         pairs.push({ label, counts });
         if (status === 0) {
           log(`${label} ok (${counts.copied} new, ${counts.changed} changed, ${counts.deleted} deleted)`);
         } else {
-          log(`${label} FAILED rc=${status}`);
+          log(
+            `${label} FAILED rc=${status}${
+              cloudOnly.length > 0 ? ` (${cloudOnly.length} file(s) still cloud-only)` : ""
+            }`,
+          );
           rc = 1;
         }
       }
@@ -241,7 +264,7 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
     const suffix = `${options.dryRun ? " (dry run)" : ""}`;
     const totals = `${total.copied} new, ${total.changed} changed, ${total.deleted} deleted`;
     if (rc !== 0) {
-      await notify(p.ntfy, {
+      await push({
         title: `${title}: FAILED`,
         message: `rc=${rc} after ${took}s — ${totals}${suffix}. Log: ${p.log}${breakdown ? `\n${breakdown}` : ""}`,
         priority: "high",
@@ -249,7 +272,7 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
         url: ntfyUrl,
       });
     } else if (moved.length > 0) {
-      await notify(p.ntfy, {
+      await push({
         title: `${title}: ${totals}`,
         message: `uploaded to ${destinations.map((d) => d.name).join(", ")} in ${took}s${suffix}\n${breakdown}`,
         url: ntfyUrl,

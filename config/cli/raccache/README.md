@@ -41,14 +41,14 @@ All of it lives in `~/.config/raccache/` and never in this repo.
 
 | File | What it holds |
 |------|---------------|
-| `config` | `KEY=value` settings: `HOME_GATEWAY`, `POWER_GUARD`, `BW_LIMIT`, `RCLONE`, `GIT`, `INCLUDE`, `EXCLUDE`. `INCLUDE` and `EXCLUDE` replace the built-in defaults in `config.ts`, they do not add to them. |
+| `config` | `KEY=value` settings: `HOME_GATEWAY`, `POWER_GUARD`, `BW_LIMIT`, `RCLONE`, `GIT`, `BRCTL`, `INCLUDE`, `EXCLUDE`. `INCLUDE` and `EXCLUDE` replace the built-in defaults in `config.ts`, they do not add to them. |
 | `targets.toml` | `[[target]]` rows: `dest` (directory under a destination), `src` (source tree), `gitignore` (follow the repos' `.gitignore` files). |
 | `destinations.toml` | `[[destination]]` rows: `name`, `remote` (`{host}` expands to the short hostname), `mode` (`mirror` deletes, `copy` only adds), `flags` (extra rclone flags for provider quirks). |
 | `devices.toml` | `[[device]]` rows: `name`, then either `local = true` or `ssh = "host"`. `units = [{ unit, log }]` marks a device whose jobs are systemd units, read through `remote.sh`. |
 | `ignore` | Whole trees excluded from every target, one `$HOME`-relative pattern per line (`dev/reference/**`). |
 | `env` | Optional `RCLONE_CONFIG_*` overrides. Read after `/run/secrets/rendered/raccache.env`. |
 | `pause` | Present = `run` skips. |
-| `ntfy-url` | Notification topic; `RACCACHE_NTFY_URL` wins over it. |
+| `ntfy-url` | Notification target: a topic or a URL. `RACCACHE_NTFY_URL` wins over it. A value with no scheme is read as an ntfy.sh topic, the shape the sops secret holds. |
 
 Missing `targets.toml`, `destinations.toml` or `devices.toml`: the first two are
 errors, `devices.toml` falls back to this machine alone.
@@ -74,6 +74,18 @@ Symlinks are stored as `.rclonelink` files (`--links`), not followed or dropped:
 repos track them, and dropping one leaves a restore that is quietly incomplete.
 Restore a tree with `rclone copy --links` so they come back as links.
 
+## Cloud-only files
+
+iCloud Drive evicts the contents of files it does not need locally and leaves a
+placeholder behind. A launchd job cannot materialise one on read, so rclone logs
+`read <path>: resource deadlock avoided` and skips that target's delete phase
+too, leaving the mirror add-only until those files read again. After a failed
+sync the runner takes the paths out of that log line, asks the CloudDocs daemon
+for a copy (`brctl download`; `BRCTL` overrides the path), waits for them to
+read, and retries the pair once. The number of files the daemon had not fetched
+within five minutes appears in the failure line. Only what the sync wanted to
+read is fetched, so a file that is already at the destination is never pulled back.
+
 ## Secrets
 
 `/run/secrets/rendered/raccache.env` is rendered by sops-nix from `secrets/raccache.yaml`
@@ -82,6 +94,13 @@ Restore a tree with `rclone copy --links` so they come back as links.
 them to rclone, which lets the remote's *shape* stay in `~/.config/rclone` while
 the secrets stay out of it. Machines without sops-nix can write the same file by
 hand, or override single values in `~/.config/raccache/env`.
+
+## Notifications
+
+A run that moved files, and any run that failed, posts to the ntfy topic. Every
+attempt is logged, as `notify: sent '...'` or `notify: NOT sent (<reason>)`, and a
+run with nothing configured says so, so an alert that could not be delivered
+never looks like a run with nothing to report.
 
 ## Scheduling
 

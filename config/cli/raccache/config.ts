@@ -64,6 +64,7 @@ export interface Settings {
   bwLimit: string;
   rclone: string;
   git: string;
+  brctl: string;
   include: string[];
   exclude: string[];
 }
@@ -122,6 +123,9 @@ export function parseSettings(
       case "GIT":
         settings.git = value;
         break;
+      case "BRCTL":
+        settings.brctl = value;
+        break;
       case "INCLUDE":
         settings.include = value.split(/\s+/).filter(Boolean);
         break;
@@ -144,6 +148,7 @@ export function loadSettings(configDirPath = configDir()): { settings: Settings;
     bwLimit: parsed.settings.bwLimit ?? DEFAULT_BW_LIMIT,
     rclone: parsed.settings.rclone ?? envOrSetting("RCLONE", "rclone"),
     git: parsed.settings.git ?? envOrSetting("GIT", "git"),
+    brctl: parsed.settings.brctl ?? envOrSetting("BRCTL", "/usr/bin/brctl"),
     include: parsed.settings.include ?? DEFAULT_INCLUDE,
     exclude: parsed.settings.exclude ?? DEFAULT_EXCLUDE,
   };
@@ -173,11 +178,14 @@ export function loadEnvFile(file: string): Record<string, string> {
 }
 
 /**
- * Where sops-nix renders the rclone credentials (RCLONE_CONFIG_* values) and
- * the ntfy URL — `sops.templates` lands under `rendered/`. The machine-local
- * env file is read on top, so an unmanaged machine can override any value.
+ * Where sops-nix renders the rclone credentials (RCLONE_CONFIG_* values) and the
+ * ntfy URL — `sops.templates` lands under `rendered/`. The machine-local env file
+ * is read on top, so an unmanaged machine can override any value. The path is
+ * overridable so a test does not read the machine's own secrets.
  */
-export const SECRETS_ENV = "/run/secrets/rendered/raccache.env";
+export function secretsEnvPath(): string {
+  return process.env.RACCACHE_SECRETS_ENV ?? "/run/secrets/rendered/raccache.env";
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -396,7 +404,7 @@ export function loadMachine(p: Paths, home = homedir()): Machine {
     targets: targets.targets,
     destinations: destinations.destinations,
     devices: devices.devices,
-    env: { ...loadEnvFile(SECRETS_ENV), ...loadEnvFile(p.env) },
+    env: { ...loadEnvFile(secretsEnvPath()), ...loadEnvFile(p.env) },
     warnings,
     errors,
   };

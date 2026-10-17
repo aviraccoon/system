@@ -1,12 +1,22 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { showRunProgress } from "./collect";
 import { DEFAULT_EXCLUDE, DEFAULT_INCLUDE, paths, type Settings, type Target } from "./config";
 import { parseRunProgress } from "./format";
-import { generateFilter, logLinesSince, pairLabels, pairMessages, startLine } from "./run";
+import { generateFilter, logLinesSince, pairLabels, pairMessages, type RunOptions, runBackup, startLine } from "./run";
 
 const dirs: string[] = [];
 const tempDir = (): string => {
@@ -24,6 +34,7 @@ const settings = (): Settings => ({
   bwLimit: "63M",
   rclone: "rclone",
   git: "git",
+  brctl: "/usr/bin/brctl",
   include: [...DEFAULT_INCLUDE],
   exclude: [...DEFAULT_EXCLUDE],
 });
@@ -142,5 +153,127 @@ describe("generateFilter", () => {
     const { rules } = generateFilter({ ...target, gitignore: false }, settings(), p);
     expect(rules.stats.repos).toBe(0);
     expect(rules.lines.some((line) => line.includes("acme"))).toBe(false);
+  });
+});
+
+describe("runBackup", () => {
+  /**
+   * End to end against stub rclone and brctl binaries: the first sync reports a
+   * cloud-only file and fails; `deliver` decides what makes it readable afterwards
+   * (the daemon, the file itself, or nothing). Holds "the pair is retried once".
+   */
+  const harness = (deliver: "brctl" | "never" | "self" = "brctl") => {
+    const root = tempDir();
+    const src = join(root, "src");
+    mkdirSync(src);
+    const note = join(src, "note.pdf");
+    writeFileSync(note, "content");
+    // Unreadable here stands in for a file whose content is still in iCloud.
+    chmodSync(note, 0o000);
+
+    const brctlLog = join(root, "brctl.args");
+    const brctl = join(root, "brctl");
+    // "brctl" = the daemon delivers, "self" = the file becomes readable on its own
+    // between the failed read and the check, "never" = it stays cloud-only.
+    const deliverLine = deliver === "brctl" ? 'chmod 644 "$2"\n' : "";
+    const selfLine = deliver === "self" ? `chmod 644 "${note}"\n` : "";
+    writeFileSync(brctl, `#!/bin/sh\necho "$@" >> "${brctlLog}"\n${deliverLine}`);
+    chmodSync(brctl, 0o755);
+
+    const syncCount = join(root, "sync.count");
+    const rclone = join(root, "rclone");
+    writeFileSync(
+      rclone,
+      `#!/bin/sh
+case "$1" in
+  version) echo "rclone v0.0.0"; exit 0 ;;
+  listremotes) echo "stub:"; exit 0 ;;
+esac
+log=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --log-file) log="$2"; shift ;;
+  esac
+  shift
+done
+n=$(cat "${syncCount}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "${syncCount}"
+if [ "$n" = "1" ]; then
+  echo "2026/10/17 13:27:38 ERROR : note.pdf: Failed to copy: Post \\"https://example.invalid/upload\\": read ${note}: resource deadlock avoided" >> "$log"
+${selfLine}  exit 1
+fi
+echo "2026/10/17 13:28:00 INFO  : note.pdf: Copied (new)" >> "$log"
+exit 0
+`,
+    );
+    chmodSync(rclone, 0o755);
+
+    const configDir = join(root, "config");
+    mkdirSync(configDir);
+    writeFileSync(join(configDir, "config"), `RCLONE=${rclone}\nBRCTL=${brctl}\nPOWER_GUARD=0\n`);
+    writeFileSync(join(configDir, "targets.toml"), `[[target]]\ndest = "dev"\nsrc = "${src}"\n`);
+    writeFileSync(join(configDir, "destinations.toml"), `[[destination]]\nname = "stub"\nremote = "stub:laptop"\n`);
+    return { root, configDir, log: join(root, "raccache.log"), note, brctlLog, syncCount };
+  };
+
+  /** Run against a scratch config and a scratch log, without the machine's secrets. */
+  const isolatedRun = async (configDir: string, log: string, options: RunOptions = {}): Promise<number> => {
+    const saved = {
+      log: process.env.RACCACHE_LOG,
+      secrets: process.env.RACCACHE_SECRETS_ENV,
+      dir: process.env.RACCACHE_CONFIG_DIR,
+    };
+    process.env.RACCACHE_LOG = log;
+    process.env.RACCACHE_SECRETS_ENV = join(configDir, "no-secrets.env");
+    delete process.env.RACCACHE_CONFIG_DIR;
+    try {
+      return await runBackup({ configDir, platform: "linux", ...options });
+    } finally {
+      for (const [key, value] of Object.entries({
+        RACCACHE_LOG: saved.log,
+        RACCACHE_SECRETS_ENV: saved.secrets,
+        RACCACHE_CONFIG_DIR: saved.dir,
+      })) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  };
+
+  test("fetches what the log named as unreadable and retries the pair once", async () => {
+    const { configDir, log, note, brctlLog, syncCount } = harness();
+    const rc = await isolatedRun(configDir, log);
+
+    expect(rc).toBe(0);
+    const text = readFileSync(log, "utf8");
+    expect(text).toContain("stub/dev dataless: 1 named, 1 readable");
+    expect(text).toContain("stub/dev ok (1 new, 0 changed, 0 deleted)");
+    expect(text).toContain("notify: NOT sent (no ntfy URL configured)");
+    expect(readFileSync(brctlLog, "utf8")).toBe(`download ${note}\n`);
+    expect(readFileSync(syncCount, "utf8").trim()).toBe("2");
+  });
+
+  test("a file the daemon never fetches fails the pair once, with a count", async () => {
+    const { configDir, log, note, brctlLog, syncCount } = harness("never");
+    const rc = await isolatedRun(configDir, log, { materialize: { intervalMs: 0, deadlineMs: 0 } });
+
+    expect(rc).toBe(1);
+    const text = readFileSync(log, "utf8");
+    expect(text).toContain("stub/dev dataless: 1 named, 0 readable, 1 still cloud-only");
+    expect(text).toContain("stub/dev FAILED rc=1 (1 file(s) still cloud-only)");
+    expect(readFileSync(brctlLog, "utf8")).toBe(`download ${note}\n`);
+    expect(readFileSync(syncCount, "utf8").trim()).toBe("1");
+  });
+
+  test("a named path that reads on its own is retried even when nothing was fetched", async () => {
+    const { configDir, log, brctlLog, syncCount } = harness("self");
+    const rc = await isolatedRun(configDir, log, { materialize: { intervalMs: 0, deadlineMs: 0 } });
+
+    expect(rc).toBe(0);
+    const text = readFileSync(log, "utf8");
+    expect(text).toContain("stub/dev dataless: 1 named, 1 readable");
+    expect(text).toContain("stub/dev ok (1 new, 0 changed, 0 deleted)");
+    // Nothing to fetch, so the daemon was never asked.
+    expect(existsSync(brctlLog)).toBe(false);
+    expect(readFileSync(syncCount, "utf8").trim()).toBe("2");
   });
 });
