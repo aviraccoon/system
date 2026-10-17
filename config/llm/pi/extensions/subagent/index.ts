@@ -43,6 +43,7 @@ import {
   type SubagentDetails,
   type SubagentHandle,
 } from "./rpc";
+import { DEFAULT_SUBAGENT_ROLE } from "./target";
 import { AcceptedRoots, PROJECT_TRUST_ENTRY } from "./trust";
 
 const MAX_PARALLEL_TASKS = 8;
@@ -568,9 +569,13 @@ export default function subagentExtension(pi: ExtensionAPI) {
         const where = loaded[i].dirs.filter((d): d is string => d !== null).join(", ");
         msg += `\n${loaded[i].title}${where ? ` (${where})` : ""}:\n`;
         for (const [j, agent] of loaded[i].agents.entries()) {
-          const role = agent.role || "(none)";
+          // Effective target: a pinned model, an explicit role, or the default role.
+          const target = agent.model
+            ? `model: ${agent.model}`
+            : `role: ${agent.role ?? DEFAULT_SUBAGENT_ROLE}${agent.role ? "" : " (default)"}`;
+          const thinking = agent.thinking ? `, thinking: ${agent.thinking}` : "";
           const tools = agent.tools ? ` [${agent.tools.join(", ")}]` : " [built-in]";
-          msg += `  ${agent.name}${shadowed[i][j] ? " (shadowed)" : ""}${tools} → role: ${role}\n`;
+          msg += `  ${agent.name}${shadowed[i][j] ? " (shadowed)" : ""}${tools} → ${target}${thinking}\n`;
         }
       }
 

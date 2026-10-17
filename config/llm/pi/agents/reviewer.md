@@ -1,7 +1,6 @@
 ---
 name: reviewer
 description: Review a code change for correctness regressions, bugs, and test gaps. Fetches the diff itself via git — the task names the review target and states what was already run and its result; never pastes the diff. Also reviews commit messages against their diffs, checks the prose and structure the change adds, and reviews standalone prose the dispatch names. Read-only; reports each finding with a location, a quoted anchor from the code, and a severity; never edits.
-role: explain
 tools: read,grep,find,ls,bash
 extensions: sandbox-bash
 ---

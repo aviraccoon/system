@@ -17,6 +17,7 @@ import {
   formatUsageStats,
   getDisplayTurns,
   getFinalOutput,
+  type LiveTarget,
   resultFailed,
   type SingleResult,
   type SubagentDetails,
@@ -167,16 +168,34 @@ function renderFinalOutput(finalOutput: string, theme: Theme, expanded: boolean)
 }
 
 function usageLine(r: SingleResult, theme: Theme): string {
-  const usageStr = formatUsageStats(r.usage, r.model);
+  const usageStr = formatUsageStats(r.usage);
   return usageStr ? theme.fg("dim", usageStr) : "";
+}
+
+/**
+ * What the child runs, for a header: the model ref (or the role name when no ref is
+ * resolved) plus its thinking level. An unset level is left out — that is the same
+ * absence as a missing `--thinking`, and the child then runs pi's own default.
+ */
+function targetLabel(target: Pick<LiveTarget, "model" | "role" | "thinking">, theme: Theme): string {
+  const name = target.model ?? (target.role ? `role ${target.role}` : "");
+  if (!name) return "";
+  const level = target.thinking ? (target.model ? `:${target.thinking}` : ` · ${target.thinking}`) : "";
+  return theme.fg("muted", ` · ${name}${level}`);
 }
 
 function statusHeader(r: SingleResult, theme: Theme): string {
   const isError = resultFailed(r);
   const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
   let text = `${icon} ${theme.fg("toolTitle", theme.bold(r.agent))}${theme.fg("muted", ` (${r.agentSource})`)}`;
+  text += targetLabel(r, theme);
   if (isError && r.stopReason) text += ` ${theme.fg("error", `[${r.stopReason}]`)}`;
   return text;
+}
+
+/** Header for the live view, which has a target but no result yet. */
+function liveHeader(live: LiveTarget, theme: Theme): string {
+  return `${theme.fg("warning", "⏳")} ${theme.fg("toolTitle", theme.bold(live.agent))}${theme.fg("muted", ` (${live.source})`)}${targetLabel(live, theme)}`;
 }
 
 /** True when collapsed hides something expanded would reveal (earlier turns, longer output, thinking, intermediate text). */
@@ -275,7 +294,7 @@ function renderResultSummary(
     if (!text && !showPreview) lines.push(theme.fg("muted", opts.running ? "(running...)" : "(no output)"));
   }
 
-  const usage = formatUsageStats(r.usage, r.model);
+  const usage = formatUsageStats(r.usage);
   if (usage) lines.push(theme.fg("dim", usage));
   return lines.join("\n");
 }
@@ -315,7 +334,9 @@ function renderChain(details: SubagentDetails, expanded: boolean, theme: Theme):
   for (let i = 0; i < results.length; i++) {
     const r = results[i];
     const rIcon = resultFailed(r) ? theme.fg("error", "✗") : theme.fg("success", "✓");
-    const lines: string[] = [`${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}`];
+    const lines: string[] = [
+      `${theme.fg("muted", `─── Step ${r.step}: `)}${theme.fg("accent", r.agent)} ${rIcon}${targetLabel(r, theme)}`,
+    ];
     if (expanded) lines.push(theme.fg("dim", `Task: ${r.task}`));
     // Chain deliverable is the last step's output — show its preview when collapsed.
     lines.push(renderResultSummary(r, theme, { expanded, showFinalOutput: !expanded && i === results.length - 1 }));
@@ -354,7 +375,9 @@ function renderParallel(details: SubagentDetails, expanded: boolean, theme: Them
         : resultFailed(r)
           ? theme.fg("error", "✗")
           : theme.fg("success", "✓");
-    const lines: string[] = [`${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`];
+    const lines: string[] = [
+      `${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}${targetLabel(r, theme)}`,
+    ];
     if (expanded) lines.push(theme.fg("dim", `Task: ${r.task}`));
     lines.push(renderResultSummary(r, theme, { expanded, running: isRunning, showFinalOutput: false }));
     parts.push(lines.join("\n"));
@@ -436,6 +459,10 @@ export function renderResult(
     }
     flush();
     const text = blocks.join("\n") || "(running...)";
+    // Name the target at the top of the live feed: the header is the only place it is
+    // visible while the child runs, and it is what says which model and level run.
+    const header = details?.live ? liveHeader(details.live, theme) : "";
+    const body = header ? `${header}\n${text}` : text;
     const allContentTypes = content.map((c) => c.type);
     debugLog("partial", DEBUG_INTERVAL, {
       isPartial,
@@ -446,7 +473,7 @@ export function renderResult(
       textLen: text.length,
       textPreview: `${text.slice(0, 200)}...[${text.length > 400 ? text.slice(-200) : "(end)"}]`,
     });
-    return new Text(text, 0, 0);
+    return new Text(body, 0, 0);
   }
 
   if (details.mode === "single" && details.results.length === 1) {

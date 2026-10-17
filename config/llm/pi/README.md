@@ -34,6 +34,8 @@ Definitions for the `subagent` extension, in `agents/` (deployed to `~/.pi/agent
 | **researcher** | Investigating code, searching, web research -- returns findings |
 | **reviewer** | Reviewing a diff -- or a commit message against one -- for regressions, bugs, test gaps, private content, prose and structure the change adds -- or standalone prose the dispatch names; reports, never edits |
 
+Frontmatter sets the agent's model: `model:` pins a ref (`provider/model-id`, with `thinking:`), `role:` names a chain in `roles.json`, and neither falls back to the `subagent` role. `/subagent-status` shows the effective target per agent.
+
 ## Prompt templates
 
 Slash commands in `prompts/` (deployed to `~/.pi/agent/prompts/`).
@@ -63,4 +65,4 @@ Convention: extract testable logic into a pure module (no pi imports), test with
 
 ## Sidecar LLM calls
 
-Extensions can make sidecar LLM calls for auxiliary tasks through `shared/model-roles.ts`. Each role is a fallback chain of models, configured in `~/.pi/agent/roles.json` (Nix-managed in `pi.nix`). See `permission-gate` (explain feature) and `draft-suggestion` for usage.
+Extensions can make sidecar LLM calls for auxiliary tasks through `shared/model-roles.ts`. Each role is a fallback chain of models, configured in `~/.pi/agent/roles.json` (Nix-managed in `pi.nix`). See `permission-gate` (explain feature) and `draft-suggestion` for usage. The `subagent` role is also the default chain for the `subagent` extension's agents.

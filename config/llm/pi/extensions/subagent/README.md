@@ -8,7 +8,7 @@ Delegate tasks to specialized agents with isolated context windows. Spawns a sep
 2. **Three modes** — single (`agent` + `task`), parallel (`tasks` array, up to 8 tasks, 4 concurrent), and chain (`chain` array with `{previous}` placeholder for sequential handoffs). A one-item `tasks` batch runs as single (a blank agent or task keeps it parallel).
 3. **Streaming output** — in single mode, text, thinking, and tool calls appear live in the TUI during execution in exact arrival order. Chain/parallel show completion status only (see Known limitations)
 4. **Agent discovery** — `.md` files with YAML frontmatter define agent name, description, tools, role, extensions, and system prompt
-5. **Model roles** — agent frontmatter `role` field resolves to a model from `roles.json` via the shared `model-roles` module
+5. **Model roles** — an agent's `model` or `role` frontmatter resolves to a model (and thinking level); with neither, the `subagent` role from `roles.json` applies (see Model resolution)
 6. **Per-agent extensions** — each subagent loads a fixed pair plus whatever its `extensions` frontmatter declares (see Subagent environment)
 7. **Session storage** — each run writes a JSONL session to `~/.pi/agent/subagent-sessions/`, cleaned up after 7 days
 8. **Turn budget** — `maxTurns` (default 30) is stated in the task; three turns before the cap the child is steered once to write its report; the run is aborted at the cap
@@ -19,7 +19,7 @@ Delegate tasks to specialized agents with isolated context windows. Spawns a sep
 ## Commands
 
 - `/subagent-toggle` or `Ctrl+Shift+S` — enable/disable the `subagent` tool
-- `/subagent-status` — list available agent definitions, their tools/roles, and configured model roles
+- `/subagent-status` — list available agent definitions, their tools and effective model target, and configured model roles
 - `/subagent-steer` or `Ctrl+Shift+T` — send a steering message to a running subagent (see Steering below)
 
 ## Agent definitions
@@ -30,7 +30,8 @@ Agents are `.md` files with YAML frontmatter:
 ---
 name: researcher
 description: Investigate codebases, read files, search patterns, return structured findings
-role: explain
+model: openrouter/deepseek/deepseek-v4.1-flash
+thinking: high
 tools: read,grep,find,ls,web_search,web_fetch
 extensions: web-search
 ---
@@ -44,8 +45,27 @@ System prompt body goes here...
 | `name` | yes | Agent identifier used in `agent`/`tasks`/`chain` params |
 | `description` | yes | One-line summary shown in tool description and status |
 | `tools` | no | Comma-separated tool allowlist. Defaults to built-in tools if omitted |
-| `role` | no | Resolves to a model chain from `roles.json` (e.g., `explain` → local sidecar model) |
+| `model` | no | Pinned `provider/model-id`; wins over `role` and needs no `roles.json`. Must resolve to a model the configured provider serves |
+| `role` | no | Resolves to a model chain from `roles.json` (default: the `subagent` role) |
+| `thinking` | no | Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) for every attempt. An unknown level is an error, not a silent fallback |
 | `extensions` | no | Comma-separated extension names to load. Resolved from `~/.pi/agent/extensions/<name>/` |
+
+### Model resolution
+
+Highest precedence first:
+
+1. `model:` — a pinned ref with `thinking:` as its level. Self-contained: a project agent committed
+   to another repository cannot rely on a `roles.json` on one machine, so this is the only override
+   that travels with it. Without `thinking:`, the child runs pi's default level.
+2. `role:` — a fallback chain from `roles.json`. Each attempt runs its own entry's thinking level;
+   `thinking:` in the frontmatter overrides that for every attempt.
+3. Neither — the `subagent` role, which `/sidecar-models` edits like any other role.
+4. No `subagent` role configured — the child runs pi's default model and level, as a run with no
+   `--model`/`--thinking` does.
+
+An explicitly named `role` that resolves to no available model is an error, as is a pinned `model`
+the catalog or its provider's credentials cannot resolve. The default role is optional: without it the
+child runs pi's defaults.
 
 ### Discovery
 
@@ -65,7 +85,7 @@ The notes project resolves by the cwd's worktree-aware basename, the same rule t
 
 Each subagent invocation:
 
-1. Resolves the agent's model from `roles.json` (via `role` field) or falls back to the session's current model
+1. Resolves the agent's model target from `model`/`role` frontmatter, or from the `subagent` role, and passes it to the child as `--model` and `--thinking`
 2. Writes the agent's system prompt to a temp file
 3. Spawns `pi --mode rpc --no-extensions --session-dir <dir> --append-system-prompt <file>`
 4. Sets `PI_SUBAGENT=1` to suppress journal injection and other interactive features
@@ -100,6 +120,8 @@ pi process, cleared at the start of each dispatch; files stay until /tmp is clea
 Text deltas, thinking blocks, and tool calls from the subagent are interleaved in the TUI output in their exact arrival order (an ordered event log rebuilt on each update). Thinking renders in italic with the theme's `thinkingText` color, distinct from output text. The full content array is rebuilt on each update (not incremental — the TUI replaces, not accumulates).
 
 Footer status shows live counters during execution (`[events:N updates:N] <preview>`) in single mode.
+The live view's first line names what is running — agent, source, model ref, thinking level — and the
+result header repeats it for a completed run.
 
 ### Result display
 

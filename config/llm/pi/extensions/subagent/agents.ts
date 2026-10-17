@@ -20,6 +20,8 @@
  *   description: Investigate codebases
  *   tools: read,grep,find,ls,web_search,web_fetch
  *   role: explain
+ *   model: openrouter/deepseek/deepseek-v4.1-flash
+ *   thinking: high
  *   extensions: web-search
  *   ---
  *   System prompt body...
@@ -37,6 +39,13 @@ export interface AgentConfig {
   description: string;
   tools?: string[];
   role?: string; // resolves to model from roles.json at runtime
+  /** Pinned `provider/model-id` ref. Wins over `role`, and needs no roles.json —
+   * the only way a project agent can carry its own model. */
+  model?: string;
+  /** Thinking level override. Wins over the resolved chain entry's level; with a
+   * pinned `model` and no level, the child runs pi's own default. An unknown level
+   * is reported as an error rather than passed to the child. */
+  thinking?: string;
   extensions?: string[];
   systemPrompt: string;
   source: AgentSource;
@@ -115,6 +124,8 @@ export function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig
       .map((t) => t.trim())
       .filter(Boolean);
     const role = frontmatter.role;
+    const model = frontmatter.model;
+    const thinking = frontmatter.thinking;
     const extensions = frontmatter.extensions
       ?.split(",")
       .map((e) => e.trim())
@@ -125,6 +136,8 @@ export function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig
       description: frontmatter.description,
       tools: tools && tools.length > 0 ? tools : undefined,
       role: role || undefined,
+      model: model || undefined,
+      thinking: thinking || undefined,
       extensions: extensions && extensions.length > 0 ? extensions : undefined,
       systemPrompt: body,
       source,
@@ -256,9 +269,11 @@ export function buildToolDescription(agents: AgentConfig[]): string {
     lines.push("");
     lines.push("Available agents:");
     for (const a of agents) {
-      const role = a.role ? `, role: ${a.role}` : "";
+      const target = a.model ? `model: ${a.model}` : a.role ? `role: ${a.role}` : undefined;
+      const meta = [target, a.thinking ? `thinking: ${a.thinking}` : undefined].filter(Boolean);
+      const suffix = meta.length > 0 ? `, ${meta.join(", ")}` : "";
       const tools = a.tools ? ` [${a.tools.join(", ")}]` : "";
-      lines.push(`- ${a.name}: ${a.description}${tools}${role}`);
+      lines.push(`- ${a.name}: ${a.description}${tools}${suffix}`);
     }
   } else {
     lines.push("No agents defined. Add .md files to ~/.pi/agent/agents/ or a .agents/agents/ directory.");

@@ -47,12 +47,24 @@ describe("attemptPlan", () => {
   });
 
   test("no candidates, no attempts", () => {
-    expect(attemptPlan([])).toEqual([] as string[]);
+    expect(attemptPlan<string>([])).toEqual([] as string[]);
   });
 
   test("respects a custom budget", () => {
     expect(attemptPlan(["a", "b", "c"], 2)).toEqual(["a", "a"] as string[]);
     expect(attemptPlan(["a", "b", "c"], 6)).toEqual(["a", "a", "b", "b", "c", "c"] as string[]);
     expect(MAX_ATTEMPTS).toBe(3);
+  });
+
+  test("carries the candidate's own data, so a retry keeps its model's thinking level", () => {
+    const targets = [
+      { ref: "a", thinking: "high" },
+      { ref: "b", thinking: "off" },
+    ];
+    const plan = attemptPlan(targets);
+    // Identity, not just equality: the attempt reads the level off the candidate it is given.
+    expect(plan[0]).toBe(targets[0]);
+    expect(plan[1]).toBe(targets[0]);
+    expect(plan[2]).toBe(targets[1]);
   });
 });

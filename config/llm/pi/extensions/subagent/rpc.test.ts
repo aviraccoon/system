@@ -1,6 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import type { Message } from "@earendil-works/pi-ai";
-import { attemptOutcome, exitStopReason, finalAnswerText, resultFailed, type SingleResult } from "./rpc";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentConfig } from "./agents";
+import {
+  attemptOutcome,
+  exitStopReason,
+  finalAnswerText,
+  resolveAgentTargets,
+  resultFailed,
+  type SingleResult,
+} from "./rpc";
 
 const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
 
@@ -92,5 +101,53 @@ describe("exitStopReason", () => {
   test("a natural close keeps the run's own stop reason", () => {
     expect(exitStopReason(false, false, false, "stop")).toBe("stop");
     expect(exitStopReason(false, false, false, undefined)).toBeUndefined();
+  });
+});
+
+describe("resolveAgentTargets", () => {
+  // Only a pinned-model agent is exercised here: the role path reads roles.json from
+  // disk and resolves auth through the real registry, which a unit test cannot pin.
+  const pinned = (model: string, thinking?: string): AgentConfig => ({
+    name: "pinned",
+    description: "One model",
+    model,
+    thinking,
+    source: "user",
+    filePath: "/fake/pinned.md",
+    systemPrompt: "",
+  });
+
+  function ctx(registry: { found?: boolean; authed?: boolean }): ExtensionContext {
+    return {
+      modelRegistry: {
+        find: () => (registry.found === false ? undefined : { provider: "openrouter", id: "x/y" }),
+        getApiKeyAndHeaders: async () =>
+          registry.authed === false ? { ok: false } : { ok: true, apiKey: "k", headers: undefined },
+      },
+    } as unknown as ExtensionContext;
+  }
+
+  test("a catalogued, authenticated pinned model becomes the single target", async () => {
+    const result = await resolveAgentTargets(pinned("openrouter/x/y", "high"), ctx({}));
+    expect(result.error).toBeUndefined();
+    expect(result.targets).toEqual([{ ref: "openrouter/x/y", thinking: "high" }]);
+  });
+
+  test("a ref the catalog does not carry is a config error, not a spawn", async () => {
+    const result = await resolveAgentTargets(pinned("openrouter/x/y"), ctx({ found: false }));
+    expect(result.targets).toEqual([]);
+    expect(result.error).toContain("not in the model catalog");
+    expect(result.error).toContain("openrouter/x/y");
+  });
+
+  test("a ref with no provider is rejected the same way", async () => {
+    const result = await resolveAgentTargets(pinned("x-y"), ctx({}));
+    expect(result.error).toContain("not in the model catalog");
+  });
+
+  test("an unauthenticated provider is named rather than left to the child", async () => {
+    const result = await resolveAgentTargets(pinned("openrouter/x/y"), ctx({ authed: false }));
+    expect(result.targets).toEqual([]);
+    expect(result.error).toContain('provider "openrouter" has no credentials');
   });
 });

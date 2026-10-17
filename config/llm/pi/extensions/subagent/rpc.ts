@@ -12,10 +12,11 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { type ExtensionContext, type ThemeColor, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
 import { createDebugLogger } from "../shared/debug";
-import { loadConfig, resolveRole, resolveRoleChain } from "../shared/model-roles";
+import { loadConfig, parseRef, resolveRoleChain, type ThinkingLevel } from "../shared/model-roles";
 import { BASH_SANDBOX_ENV, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
 import type { AgentConfig } from "./agents";
 import { type AttemptOutcome, attemptPlan, isRetryable, MAX_ATTEMPTS } from "./retry";
+import { type AgentTargets, type AttemptTarget, DEFAULT_SUBAGENT_ROLE, planAgentTargets, targetArgs } from "./target";
 import { type NudgeState, steerNudge, taskWithBudget } from "./turn-budget";
 
 const SUBAGENT_SESSION_DIR = path.join(os.homedir(), ".pi", "agent", "subagent-sessions");
@@ -23,10 +24,40 @@ const debugLog = createDebugLogger("subagent");
 
 // ── Subagent execution ──
 
-/** Resolve a role name to a model ref using the shared roles.json config. */
-export async function resolveModel(role: string, ctx: ExtensionContext): Promise<string | null> {
-  const resolved = await resolveRole(role, ctx.modelRegistry);
-  return resolved ? `${resolved.model.provider}/${resolved.model.id}` : null;
+/**
+ * Resolve an agent's model targets, in fallback order: a pinned `model` needs no
+ * roles.json at all, otherwise the declared `role` — or the default `subagent` role —
+ * resolves through roles.json. `planAgentTargets` holds the precedence rules.
+ */
+export async function resolveAgentTargets(agent: AgentConfig, ctx: ExtensionContext): Promise<AgentTargets> {
+  if (agent.model) {
+    // The role path filters its refs through `resolveRoleChain`; a pinned ref needs the
+    // same check, or a stale one costs three failed spawns and reads as a retry.
+    const parsed = parseRef(agent.model);
+    const model = parsed ? ctx.modelRegistry.find(parsed.provider, parsed.modelId) : undefined;
+    if (!model) {
+      return {
+        targets: [],
+        error: `Agent "${agent.name}" pins model "${agent.model}", which is not in the model catalog (expected provider/model-id).`,
+      };
+    }
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (!auth.ok) {
+      return {
+        targets: [],
+        error: `Agent "${agent.name}" pins model "${agent.model}", but provider "${parsed?.provider ?? agent.model}" has no credentials.`,
+      };
+    }
+    return planAgentTargets(agent, []);
+  }
+
+  const chain = (await resolveRoleChain(agent.role ?? DEFAULT_SUBAGENT_ROLE, ctx.modelRegistry, MAX_ATTEMPTS)).map(
+    (resolved) => ({
+      ref: `${resolved.model.provider}/${resolved.model.id}`,
+      thinking: resolved.thinking,
+    }),
+  );
+  return planAgentTargets(agent, chain);
 }
 
 /** Get available roles from roles.json (uses shared module for merging). */
@@ -52,6 +83,11 @@ export interface UsageStats {
   turns: number;
 }
 
+/** Zeroed usage for a result that never spawned a child. */
+function emptyUsage(): UsageStats {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
+}
+
 /** A user steering message sent mid-run, positioned at the completed-turn count when it arrived. */
 export interface UserInput {
   text: string;
@@ -74,6 +110,8 @@ export interface SingleResult {
   pid?: number;
   role?: string; // role name used for model resolution
   model?: string; // resolved model ref
+  /** Thinking level passed to the child; unset when pi's own default applies. */
+  thinking?: ThinkingLevel;
   stopReason?: string;
   errorMessage?: string;
   /** Models tried before this result returned (1 = no retry). */
@@ -95,6 +133,19 @@ export interface SubagentDetails {
   mode: "single" | "parallel" | "chain";
   agentScope: "user" | "project" | "both";
   results: SingleResult[];
+  /** Set on a streaming update so the live view can name the target that is running. */
+  live?: LiveTarget;
+}
+
+/** What a running child was started with. The live view has no result yet, so it
+ * cannot read this off `SingleResult`. */
+export interface LiveTarget {
+  agent: string;
+  source: SingleResult["agentSource"];
+  /** Resolved model ref, unset when the child runs pi's own default model. */
+  model?: string;
+  role?: string;
+  thinking?: ThinkingLevel;
 }
 
 export function formatTokens(count: number): string {
@@ -104,7 +155,9 @@ export function formatTokens(count: number): string {
   return `${(count / 1000000).toFixed(1)}M`;
 }
 
-export function formatUsageStats(usage: UsageStats, model?: string): string {
+/** One line of usage counters. The model and its level are the header's job
+ * (`targetLabel`), so they are not repeated here. */
+export function formatUsageStats(usage: UsageStats): string {
   const parts: string[] = [];
   if (usage.turns) parts.push(`${usage.turns} turn${usage.turns > 1 ? "s" : ""}`);
   if (usage.input) parts.push(`↑${formatTokens(usage.input)}`);
@@ -115,7 +168,6 @@ export function formatUsageStats(usage: UsageStats, model?: string): string {
   if (usage.contextTokens && usage.contextTokens > 0) {
     parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
   }
-  if (model) parts.push(model);
   return parts.join(" ");
 }
 
@@ -335,12 +387,10 @@ export async function runSingleAgent(
   debugLog.clear();
 
   const agent = agents.find((a) => a.name === agentName);
-  const candidates = agent?.role
-    ? (await resolveRoleChain(agent.role, ctx.modelRegistry, MAX_ATTEMPTS)).map(
-        (r) => `${r.model.provider}/${r.model.id}`,
-      )
-    : [];
-  const plan = attemptPlan(candidates);
+  // Resolution happens once, and the attempt runs the target it is handed, so a
+  // retry's level is the level of the model that attempt actually runs.
+  const resolved: AgentTargets = agent ? await resolveAgentTargets(agent, ctx) : { targets: [] };
+  const plan = attemptPlan(resolved.targets);
 
   // Handles are per attempt: drop the previous registration before the next
   // one, or the active-handle list keeps a dead child per retry.
@@ -353,7 +403,7 @@ export async function runSingleAgent(
       }
     : undefined;
 
-  const runAttempt = (modelOverride?: string) =>
+  const runAttempt = (target?: AttemptTarget) =>
     runSingleAgentAttempt(
       defaultCwd,
       agents,
@@ -367,11 +417,12 @@ export async function runSingleAgent(
       ctx,
       maxTurns,
       handleSink,
-      modelOverride,
+      target,
+      resolved,
     );
 
-  // No role or no resolvable candidates: one attempt, same as before, so the
-  // unknown-agent and empty-role errors still come from the attempt.
+  // No targets (no role, an absent default role, or a resolution error): one attempt,
+  // so the unknown-agent and config errors still come from the attempt.
   if (plan.length === 0) {
     const only = await runAttempt();
     only.attempts = 1;
@@ -380,16 +431,16 @@ export async function runSingleAgent(
   }
 
   let result: SingleResult | undefined;
-  for (const [i, model] of plan.entries()) {
-    result = await runAttempt(model);
+  for (const [i, target] of plan.entries()) {
+    result = await runAttempt(target);
     result.attempts = i + 1;
     if (!isRetryable(attemptOutcome(result))) {
       break;
     }
     debugLog("retry", 0, {
       agent: agentName,
-      failed: model,
-      next: plan[i + 1] ?? null,
+      failed: target.ref,
+      next: plan[i + 1]?.ref ?? null,
       stopReason: result.stopReason,
     });
   }
@@ -431,7 +482,8 @@ async function runSingleAgentAttempt(
   ctx: ExtensionContext,
   maxTurns: number,
   onHandle?: ((handle: SubagentHandle) => void) | undefined,
-  modelOverride?: string,
+  target?: AttemptTarget,
+  resolved: AgentTargets = { targets: [] },
 ): Promise<SingleResult> {
   const agent = agents.find((a) => a.name === agentName);
 
@@ -444,34 +496,34 @@ async function runSingleAgentAttempt(
       exitCode: 1,
       messages: [],
       stderr: `Unknown agent: "${agentName}". Available agents: ${available}.`,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+      usage: emptyUsage(),
       step,
     };
   }
 
-  // Resolve model from role (if specified). The retry wrapper supplies an
-  // override: after a provider failure it moves down the role chain.
-  let role: string | undefined;
-  let model: string | undefined;
-  if (agent.role) {
-    const resolved = modelOverride ?? (await resolveModel(agent.role, ctx));
-    if (!resolved) {
-      // Role has no available models — error
-      return {
-        agent: agentName,
-        agentSource: agent.source,
-        task,
-        exitCode: 1,
-        messages: [],
-        stderr: `Role "${agent.role}" has no available models. Check roles.json.`,
-        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
-        role: agent.role,
-        step,
-      };
-    }
-    role = agent.role;
-    model = resolved;
+  // A config error (a named role with no available models, an invalid thinking
+  // level) is reported instead of spawning, so the fix is one edit away.
+  if (resolved.error) {
+    return {
+      agent: agentName,
+      agentSource: agent.source,
+      task,
+      exitCode: 1,
+      messages: [],
+      stderr: resolved.error,
+      usage: emptyUsage(),
+      role: resolved.role,
+      // A pinned-model error has no role: name the ref it failed on, so the header
+      // says what was rejected instead of leaving the reason in stderr only.
+      model: agent.model,
+      step,
+    };
   }
+
+  // The retry wrapper hands each attempt its own target; without one (no role, an
+  // absent default role) the child runs pi's default model at pi's default level.
+  const role = resolved.role;
+  const model = target?.ref;
 
   // Session dir for subagent runs — keeps session files separate from main sessions.
   // Useful for debugging what subagents actually did (tool calls, messages, etc.).
@@ -481,7 +533,8 @@ async function runSingleAgentAttempt(
 
   // RPC mode: bidirectional JSONL over stdin/stdout
   const args: string[] = ["--mode", "rpc", "--session-dir", SUBAGENT_SESSION_DIR];
-  if (model) args.push("--model", model);
+  // The level rides each attempt: a chain entry's own level, or the agent's override.
+  if (target) args.push(...targetArgs(target));
 
   // Tool allowlist (built-in tools)
   if (agent.tools && agent.tools.length > 0) {
@@ -542,9 +595,11 @@ async function runSingleAgentAttempt(
     exitCode: 0,
     messages: [],
     stderr: "",
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+    usage: emptyUsage(),
     userInputs: [],
     role,
+    model,
+    thinking: target?.thinking,
     step,
   };
 
@@ -559,7 +614,7 @@ async function runSingleAgentAttempt(
       exitCode: 1,
       messages: [],
       stderr: `cwd does not exist: ${effectiveCwd}`,
-      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 },
+      usage: emptyUsage(),
       step,
     };
   }
@@ -620,7 +675,13 @@ async function runSingleAgentAttempt(
       }
       onUpdate({
         content,
-        details: makeDetails([]), // empty results → partial path in renderResult
+        // Results stay empty so renderResult keeps the streaming path; `live` carries
+        // what the header needs (chain/parallel update wrappers read results[0] and
+        // are unaffected).
+        details: {
+          ...makeDetails([]),
+          live: { agent: agentName, source: agent.source, role, model, thinking: target?.thinking },
+        },
       });
       // Footer status: guaranteed to render live in TUI
       ctx.ui.setStatus(
@@ -679,6 +740,7 @@ async function runSingleAgentAttempt(
       debugLog("spawn", 0, {
         agent: agentName,
         model: model ?? null,
+        thinking: target?.thinking ?? null,
         command: invocation.command,
         args: invocation.args,
         pid: proc.pid ?? null,
@@ -831,8 +893,10 @@ async function runSingleAgentAttempt(
                 const msg = rawMsg as unknown as Message;
                 if (msg.role === "assistant") {
                   currentResult.messages.push(msg);
-                  // Track model from last assistant message
-                  if ("model" in msg) currentResult.model = msg.model as string;
+                  // Track model from last assistant message. A resolved target already
+                  // names the ref the child was started with; the child's own id is the
+                  // fallback for a run that used pi's default model.
+                  if ("model" in msg) currentResult.model ??= msg.model as string;
                 }
               } else if (role === "toolResult") {
                 const msg = rawMsg as unknown as Message;

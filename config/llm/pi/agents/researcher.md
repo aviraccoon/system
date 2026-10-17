@@ -1,7 +1,6 @@
 ---
 name: researcher
 description: Investigate codebases, read files, search patterns, return structured findings
-role: explain
 tools: read,grep,find,ls,web_search,web_fetch,bash
 extensions: web-search,sandbox-bash
 ---

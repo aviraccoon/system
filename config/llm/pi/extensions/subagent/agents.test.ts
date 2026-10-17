@@ -74,7 +74,30 @@ describe("loadAgentsFromDir", () => {
     expect(agents[0].source).toBe("user");
     expect(agents[0].tools).toBeUndefined();
     expect(agents[0].role).toBeUndefined();
+    expect(agents[0].model).toBeUndefined();
+    expect(agents[0].thinking).toBeUndefined();
     expect(agents[0].extensions).toBeUndefined();
+  });
+
+  test("parses a pinned model and thinking level", () => {
+    const dir = makeDir("pinned-model");
+    writeAgent(
+      dir,
+      "pinned.md",
+      {
+        name: "pinned",
+        description: "Runs one model",
+        model: "openrouter/deepseek/deepseek-v4.1-flash",
+        thinking: "high",
+      },
+      "body",
+    );
+
+    const agents = loadAgentsFromDir(dir, "project");
+    expect(agents[0].model).toBe("openrouter/deepseek/deepseek-v4.1-flash");
+    expect(agents[0].thinking).toBe("high");
+    // model and role are independent: a pinned model needs no roles.json entry.
+    expect(agents[0].role).toBeUndefined();
   });
 
   test("parses tools, role, and extensions from frontmatter", () => {
@@ -346,6 +369,39 @@ describe("buildToolDescription", () => {
     ];
     const desc = buildToolDescription(agents);
     expect(desc).toContain("- researcher: Investigates codebases [read, grep], role: explain");
+  });
+
+  test("names a pinned model and its level instead of the role", () => {
+    const agents: AgentConfig[] = [
+      {
+        name: "pinned",
+        description: "One model",
+        model: "openrouter/x/y",
+        thinking: "low",
+        role: "explain",
+        systemPrompt: "",
+        source: "user",
+        filePath: "/fake/pinned.md",
+      },
+    ];
+    const desc = buildToolDescription(agents);
+    expect(desc).toContain("- pinned: One model, model: openrouter/x/y, thinking: low");
+    expect(desc).not.toContain("role: explain");
+  });
+
+  test("shows a thinking override on a role-based agent", () => {
+    const agents: AgentConfig[] = [
+      {
+        name: "thinker",
+        description: "Reasons",
+        role: "explain",
+        thinking: "max",
+        systemPrompt: "",
+        source: "user",
+        filePath: "/fake/thinker.md",
+      },
+    ];
+    expect(buildToolDescription(agents)).toContain(", role: explain, thinking: max");
   });
 
   test("omits tools/role when absent", () => {

@@ -391,6 +391,23 @@ in
             }
           ];
         };
+        # Default for subagents that declare neither `role` nor `model` (rpc.ts's
+        # DEFAULT_SUBAGENT_ROLE). A fallback chain like any other role, so /sidecar-models
+        # edits it; a consumer project cannot rely on it, which is what `model:` is for.
+        # Two entries on purpose: the retry plan is [m0, m0, m1] under MAX_ATTEMPTS, so a
+        # third model is never attempted — a local fallback belongs in slot 1.
+        subagent = {
+          models = [
+            {
+              ref = "openrouter/deepseek/deepseek-v4.1-flash";
+              thinking = "high";
+            }
+            {
+              ref = "openrouter/z-ai/glm-5.3-flash";
+              thinking = "high";
+            }
+          ];
+        };
         vision = {
           maxTokens = 4096;
           models = [

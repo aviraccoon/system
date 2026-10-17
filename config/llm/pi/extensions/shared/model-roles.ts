@@ -48,6 +48,12 @@ export const THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhig
 
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 
+/** True for a level pi accepts on the command line, so a config typo can be named
+ * rather than reaching `--thinking` or being read as "off". */
+export function isThinkingLevel(value: unknown): value is ThinkingLevel {
+  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
+}
+
 export interface ModelEntry {
   /** "provider/modelId" reference */
   ref: string;

@@ -98,11 +98,6 @@ describe("formatUsageStats", () => {
     };
     expect(formatUsageStats(usage)).toContain("ctx:50k");
   });
-
-  test("appends model name", () => {
-    const usage: UsageStats = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, contextTokens: 0, turns: 0 };
-    expect(formatUsageStats(usage, "anthropic/claude-sonnet-4")).toContain("anthropic/claude-sonnet-4");
-  });
 });
 
 // ── getFinalOutput ──
@@ -330,6 +325,78 @@ describe("renderResult", () => {
     const text = result.render(80).join("\n");
     expect(text).toContain("researcher");
     expect(text).toContain("(user)");
+  });
+
+  test("names the model and level in the result header", () => {
+    const details: SubagentDetails = {
+      mode: "single",
+      agentScope: "user",
+      results: [makeSingleResult({ model: "openrouter/deepseek/deepseek-v4.1-flash", thinking: "high" })],
+    };
+    const text = renderResult(
+      { content: [{ type: "text", text: "done" }], details },
+      { expanded: false, isPartial: false },
+      theme,
+      {},
+    )
+      .render(80)
+      .join("\n");
+    expect(text).toContain("(user) · openrouter/deepseek/deepseek-v4.1-flash:high");
+  });
+
+  test("the model ref appears once, not on both the header and the usage line", () => {
+    const details: SubagentDetails = {
+      mode: "single",
+      agentScope: "user",
+      results: [makeSingleResult({ model: "openrouter/x/y", thinking: "high" })],
+    };
+    const text = renderResult(
+      { content: [{ type: "text", text: "done" }], details },
+      { expanded: false, isPartial: false },
+      theme,
+      {},
+    )
+      .render(80)
+      .join("\n");
+    expect(text.split("openrouter/x/y").length - 1).toBe(1);
+  });
+
+  test("the live view names the target, since it has no result to read it from", () => {
+    const details: SubagentDetails = {
+      mode: "single",
+      agentScope: "user",
+      results: [],
+      live: { agent: "researcher", source: "user", model: "openrouter/x/y", thinking: "off" },
+    };
+    const text = renderResult(
+      { content: [{ type: "text", text: "working" }], details },
+      { expanded: false, isPartial: true },
+      theme,
+      {},
+    )
+      .render(80)
+      .join("\n");
+    expect(text).toContain("⏳ **researcher** (user) · openrouter/x/y:off");
+    expect(text).toContain("working");
+  });
+
+  test("the live header omits the target when the child runs pi's own default model", () => {
+    const details: SubagentDetails = {
+      mode: "single",
+      agentScope: "user",
+      results: [],
+      live: { agent: "researcher", source: "user" },
+    };
+    const text = renderResult(
+      { content: [{ type: "text", text: "working" }], details },
+      { expanded: false, isPartial: true },
+      theme,
+      {},
+    )
+      .render(80)
+      .map((line) => line.trimEnd())
+      .join("\n");
+    expect(text).toBe("⏳ **researcher** (user)\nworking");
   });
 
   test("renders single error with stop reason", () => {

@@ -34,15 +34,18 @@ export function isRetryable(outcome: AttemptOutcome): boolean {
 }
 
 /**
- * Model refs to try, in order. The first candidate gets a second attempt before
+ * Models to try, in order. The first candidate gets a second attempt before
  * the chain moves on: a provider blip is the likeliest failure, and the same
  * model can be routed to a different upstream on retry. Pads with the last
  * candidate when the chain is shorter than the attempt budget, so a
  * single-model role still gets retries.
+ *
+ * Generic over the candidate: the caller's type carries more than the ref (a
+ * per-model thinking level), and the plan must hand each attempt its own.
  */
-export function attemptPlan(candidates: readonly string[], maxAttempts: number = MAX_ATTEMPTS): string[] {
+export function attemptPlan<T>(candidates: readonly T[], maxAttempts: number = MAX_ATTEMPTS): T[] {
   if (candidates.length === 0) return [];
-  const plan: string[] = [];
+  const plan: T[] = [];
   for (const candidate of candidates) {
     for (let i = 0; i < REPEATS_PER_MODEL && plan.length < maxAttempts; i++) plan.push(candidate);
     if (plan.length >= maxAttempts) break;

@@ -6,14 +6,10 @@
  * `getSupportedThinkingLevels`), since that needs a resolved pi model.
  */
 
-import { type ModelEntry, THINKING_LEVELS, type ThinkingLevel } from "../shared/model-roles";
+import { isThinkingLevel, type ModelEntry, THINKING_LEVELS, type ThinkingLevel } from "../shared/model-roles";
 
 // Re-exported so callers of this module do not reach into shared for the vocabulary it works in.
-export { THINKING_LEVELS, type ThinkingLevel };
-
-export function isThinkingLevel(value: unknown): value is ThinkingLevel {
-  return typeof value === "string" && (THINKING_LEVELS as readonly string[]).includes(value);
-}
+export { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel };
 
 /** The level an entry is configured with. `model-roles.ts` treats a missing one as "off". */
 export function entryThinking(entry: ModelEntry | undefined): ThinkingLevel {
