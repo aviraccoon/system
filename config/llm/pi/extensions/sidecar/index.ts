@@ -12,19 +12,33 @@
  *
  * Keybindings (model picker):
  *   Enter: toggle model in/out of chain (added at end if new)
+ *   Ctrl+T: cycle thinking level of the selected chain model
  *   Alt+↑↓: reorder within chain
  *   Ctrl+A: add all (or all filtered) to chain
  *   Ctrl+X: remove all (or all filtered) from chain
  *   Ctrl+P: toggle by provider
  *   Ctrl+S: save to roles.local.json
+ *   r: reset role to defaults
  *   Ctrl+C / Esc: back to role list (or clear search)
  */
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, getKeybindings, Input, Key, matchesKey, Text } from "@earendil-works/pi-tui";
+import type { ModelEntry } from "../shared/model-roles";
+import {
+  entryForAdd,
+  entryThinking,
+  hasEnableThinkingPin,
+  isThinkingLevel,
+  nextThinking,
+  THINKING_LEVELS,
+  type ThinkingLevel,
+  withoutEnableThinkingPin,
+} from "./thinking";
 
 // ── Settings helpers ──
 
@@ -46,12 +60,6 @@ function getDefaultModel(): string | null {
 }
 
 // ── Types ──
-
-interface ModelEntry {
-  ref: string;
-  thinking?: string;
-  maxAttempts?: number;
-}
 
 interface RoleConfig {
   models: ModelEntry[];
@@ -101,6 +109,19 @@ function getAvailableModels(registry: ModelRegistry): ModelInfo[] {
     .getAvailable()
     .map((m) => ({ ref: `${m.provider}/${m.id}`, name: m.name ?? m.id, provider: m.provider, modelId: m.id }))
     .sort((a, b) => a.ref.localeCompare(b.ref));
+}
+
+/**
+ * Thinking levels a model actually accepts, weakest first. pi-ai clamps anything
+ * else, so offering an unsupported level would make the stored value disagree with
+ * what runs. Falls back to every level when the model is not in the registry (a
+ * provider refresh between picking and rendering), so the setting stays reachable.
+ */
+function supportedLevels(registry: ModelRegistry, item: ModelInfo): readonly ThinkingLevel[] {
+  const model = registry.find(item.provider, item.modelId);
+  if (!model) return THINKING_LEVELS;
+  const levels = getSupportedThinkingLevels(model).filter(isThinkingLevel);
+  return levels.length > 0 ? levels : THINKING_LEVELS;
 }
 
 // ── Chain helpers ──
@@ -167,6 +188,9 @@ export default function sidecarCommand(pi: ExtensionAPI) {
 
         // ── Models screen state ──
         let chain: ModelEntry[] = [];
+        // The role's configured entries, snapshotted when the role is opened, so a
+        // removed model keeps its thinking level / params if it is added back.
+        let configured = new Map<string, ModelEntry>();
         let allModels: ModelInfo[] = [];
         let filteredItems: Array<ModelInfo & { inChain: boolean; position: number }> = [];
         let selectedIndex = 0;
@@ -210,6 +234,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           const chainCount = chain.length;
           const parts = [
             "Enter toggle",
+            "^T think",
             "^A add all",
             "^X clear",
             "^P provider",
@@ -304,7 +329,8 @@ export default function sidecarCommand(pi: ExtensionAPI) {
             const modelText = isSelected ? theme.fg("accent", item.modelId) : item.modelId;
             const providerBadge = theme.fg("muted", ` [${item.provider}]`);
             const status = item.inChain ? theme.fg("success", ` #${item.position} ✓`) : theme.fg("dim", " ✗");
-            lines.push(`${prefix}${modelText}${providerBadge}${status}`);
+            const thinking = item.inChain ? ` ${renderThinking(chainEntry(item.ref))}` : "";
+            lines.push(`${prefix}${modelText}${providerBadge}${status}${thinking}`);
           }
 
           // Scroll indicator
@@ -312,11 +338,30 @@ export default function sidecarCommand(pi: ExtensionAPI) {
             lines.push(theme.fg("muted", `  (${selectedIndex + 1}/${filteredItems.length})`));
           }
 
-          // Detail line for selected item
+          // Detail lines for the selected item
           if (filteredItems.length > 0) {
             const selected = filteredItems[selectedIndex];
             lines.push("");
             lines.push(theme.fg("muted", `  Model Name: ${selected.name}`));
+            if (selected.inChain) {
+              const entry = chainEntry(selected.ref);
+              const supported = supportedLevels(ctx.modelRegistry, selected);
+              lines.push(
+                theme.fg("muted", "  Thinking: ") +
+                  renderThinking(entry) +
+                  theme.fg("dim", `  (^T cycles: ${supported.join(" › ")})`),
+              );
+              if (hasEnableThinkingPin(entry) && entryThinking(entry) !== "off") {
+                lines.push(
+                  theme.fg(
+                    "warning",
+                    "  ⚠ requestParams pins enable_thinking=false — this level would not take effect",
+                  ),
+                );
+              }
+            } else {
+              lines.push(theme.fg("dim", "  Not in the chain — Enter adds it, then ^T sets thinking"));
+            }
           }
 
           return lines;
@@ -324,17 +369,62 @@ export default function sidecarCommand(pi: ExtensionAPI) {
 
         // ── Chain mutations ──
 
+        function chainEntry(ref: string): ModelEntry | undefined {
+          return chain.find((m) => m.ref === ref);
+        }
+
+        /** Chain rows show the level; "off" stays dim so an all-off chain reads quietly. */
+        function renderThinking(entry: ModelEntry | undefined): string {
+          const level = entryThinking(entry);
+          return level === "off" ? theme.fg("dim", level) : theme.fg("warning", level);
+        }
+
+        function snapshotConfigured() {
+          configured = new Map(chain.map((m) => [m.ref, { ...m }]));
+        }
+
         function toggleModel(ref: string) {
           if (isInChain(chain, ref)) {
             // Remove from chain (unless it's the last one)
             if (chain.length <= 1) return;
             chain = chain.filter((m) => m.ref !== ref);
           } else {
-            // Add to end of chain
-            chain.push({ ref, thinking: "off" as const });
+            // Add to end of chain, keeping any saved config for this model
+            chain.push(entryForAdd(configured.get(ref), ref));
           }
           isDirty = true;
           buildFilteredItems();
+          updateHeader();
+          updateFooter();
+          tui.requestRender();
+        }
+
+        /**
+         * Cycle the selected chain member's thinking level through the levels its model
+         * supports. Raising it above "off" drops a pinned `enable_thinking: false`: that
+         * pin is merged over the payload pi-ai builds from the level, so it would disable
+         * thinking on the wire while the picker showed a level.
+         */
+        function cycleThinking() {
+          const item = filteredItems[selectedIndex];
+          if (!item?.inChain) return;
+          const index = chain.findIndex((m) => m.ref === item.ref);
+          if (index === -1) return;
+
+          const current = entryThinking(chain[index]);
+          const level = nextThinking(current, supportedLevels(ctx.modelRegistry, item));
+          // A non-reasoning model has only "off"; leave the picker clean rather than dirty.
+          if (level === current) return;
+
+          let entry: ModelEntry = { ...chain[index], thinking: level };
+          if (level !== "off" && hasEnableThinkingPin(entry)) {
+            entry = withoutEnableThinkingPin(entry);
+            ctx.ui.notify(`${item.ref}: dropped the enable_thinking=false override`, "warning");
+          }
+          chain[index] = entry;
+          // Keep the snapshot current so a remove/re-add in this session preserves the edit.
+          configured.set(item.ref, entry);
+          isDirty = true;
           updateHeader();
           updateFooter();
           tui.requestRender();
@@ -345,7 +435,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           const chainSet = new Set(chain.map((m) => m.ref));
           for (const ref of targets) {
             if (!chainSet.has(ref)) {
-              chain.push({ ref, thinking: "off" as const });
+              chain.push(entryForAdd(configured.get(ref), ref));
               chainSet.add(ref);
             }
           }
@@ -387,6 +477,8 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           const base = mergedRoles();
           local[selectedRole] = { ...base[selectedRole], models: chain };
           writeLocal(local);
+          // What just landed on disk is the new baseline for re-adds.
+          snapshotConfigured();
           isDirty = false;
           setSidecarStatus(ctx);
           updateFooter();
@@ -404,6 +496,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           // Reload chain from defaults
           const fresh = mergedRoles();
           chain = [...(fresh[selectedRole]?.models ?? [])];
+          snapshotConfigured();
           isDirty = false;
           setSidecarStatus(ctx);
           buildFilteredItems();
@@ -416,6 +509,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           if (existsSync(localPath())) unlinkSync(localPath());
           const fresh = mergedRoles();
           chain = [...(fresh[selectedRole]?.models ?? [])];
+          snapshotConfigured();
           isDirty = false;
           setSidecarStatus(ctx);
           if (screen === "models") {
@@ -435,7 +529,8 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           isDirty = false;
           allModels = getAvailableModels(ctx.modelRegistry);
           const fresh = mergedRoles();
-          chain = [...(fresh[selectedRole]?.models ?? [])];
+          chain = (fresh[selectedRole]?.models ?? []).map((m) => ({ ...m }));
+          snapshotConfigured();
           buildFilteredItems();
           updateHeader();
           updateFooter();
@@ -506,18 +601,28 @@ export default function sidecarCommand(pi: ExtensionAPI) {
                   return;
                 }
                 const mainRef = match.ref;
-                // Set all roles: replace first model with default, keep rest of chain
+                // Set all roles: replace first model with default, keep rest of chain.
+                // Reuse the role's own entry when it already has the default model so a
+                // configured thinking level survives the sync.
                 const base = mergedRoles();
                 const local: RolesFile = {};
                 for (const roleName of roleNames) {
                   const current = base[roleName];
-                  const chain = current?.models ?? [];
-                  const newChain = [{ ref: mainRef, thinking: "off" }, ...chain.slice(1)];
-                  local[roleName] = { ...current, models: newChain };
+                  const roleChain = current?.models ?? [];
+                  const head = entryForAdd(
+                    roleChain.find((m) => m.ref === mainRef),
+                    mainRef,
+                  );
+                  const tail = roleChain.slice(1).filter((m) => m.ref !== mainRef);
+                  local[roleName] = { ...current, models: [head, ...tail] };
                 }
                 writeLocal(local);
                 setSidecarStatus(ctx);
                 ctx.ui.notify(`All roles synced to ${mainRef}`, "info");
+                // The open role may now differ from disk; reload it so the picker matches.
+                const fresh = mergedRoles();
+                chain = (fresh[selectedRole]?.models ?? []).map((m) => ({ ...m }));
+                snapshotConfigured();
                 buildFilteredItems();
                 updateHeader();
                 updateFooter();
@@ -577,6 +682,12 @@ export default function sidecarCommand(pi: ExtensionAPI) {
               const query = searchInput.getValue();
               const targetRefs = query ? filteredItems.map((i) => i.ref) : undefined;
               clearAll(targetRefs);
+              return;
+            }
+
+            // Ctrl+T - Cycle the selected chain member's thinking level
+            if (matchesKey(data, Key.ctrl("t"))) {
+              cycleThinking();
               return;
             }
 

@@ -21,6 +21,7 @@ Opens a two-screen UI:
 
 **Model picker** (matches `/scoped-models` conventions):
 - `Enter` — toggle model in/out of chain (added at end if new)
+- `Ctrl+T` — cycle the selected chain model's thinking level
 - `Alt+↑↓` — reorder within chain
 - `Ctrl+A` — add all (or all filtered) to chain
 - `Ctrl+X` — remove all (or all filtered) from chain
@@ -31,6 +32,28 @@ Opens a two-screen UI:
 - `Esc` — back to role list
 
 Type in the search box to fuzzy-filter models by name, ID, or provider.
+
+## Thinking levels
+
+Thinking is set per model entry (`models[].thinking`), not per role, so a fallback chain can mix a
+thinking local model with a non-thinking cloud one. Each chain row shows its level, and the detail
+line shows the cycle for the selected model, e.g. `^T cycles: off › low › high › max`.
+
+`Ctrl+T` cycles the levels the model supports, as reported by pi's model catalog. pi clamps an
+unsupported level to a neighbour, so offering one would leave the stored value disagreeing with what
+runs. A non-reasoning model has only `off`; `xhigh` and `max` appear only when the model maps them.
+(When the model is momentarily missing from the catalog, every level is offered rather than locking
+the setting.)
+
+Adding a model reuses its saved entry, so removing and re-adding it (or `d`, which syncs every role to
+the main model) keeps its level.
+
+### `enable_thinking: false` pins
+
+Local Qwen/oMLX entries in `roles.json` set `requestParams.chat_template_kwargs.enable_thinking:
+false`. `sidecarComplete` merges `requestParams` over the request body, replacing `chat_template_kwargs`
+whole, so that pin disables thinking whatever level is configured. Cycling above `off` drops the pin;
+the detail view warns about one still present.
 
 ## How it works
 

@@ -259,7 +259,7 @@ in
       };
 
       # Model roles config for sidecar LLM calls (used by permission gate explain, draft suggestion, etc.)
-      # Per-model options: ref (provider/model), thinking (off|minimal|low|medium|high),
+      # Per-model options: ref (provider/model), thinking (off|minimal|low|medium|high|xhigh|max),
       # maxAttempts (retry with filtering, default 1 -- useful for weaker/local models).
       # requestParams: per-model extra API params injected via pi's onPayload hook.
       #   Used for provider-specific options (e.g. oMLX thinking control).
