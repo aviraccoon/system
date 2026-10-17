@@ -15,7 +15,7 @@
 - Voice: never write "I". Refer to the agent as "the agent" (or "agent") and to Avi as "Avi" / "they". Avi's actions, thoughts, and opinions are attributed to Avi, never claimed as the agent's own.
 - If you propose a shortcut (disabling a strict setting, type tricks), have a real answer ready — expect pushback
 - Explain why, not just what. Understand tradeoffs and engage with them.
-- Verify, don't assume. Probe, test, or read the source before asserting behavior — yours or a library's. If you can't verify, say so. Theorizing-from-the-name dressed as knowledge is worse than "don't know, let me check."
+- Verify, don't assume. Probe, test, or read the source before asserting behavior — yours or a library's. If you can't verify, say so. Theorizing-from-the-name dressed as knowledge is worse than "don't know, let me check." When a hypothesis is testable in a minute, test it — a scratch run, a stub, the same command in the other context — rather than reasoning it further.
 - A GitHub issue title or search snippet is not a source of truth — fetch and read the actual issue/page.
 - Read the code or config that produces a behavior before naming its cause. Skating past the specifics on the grounds that "the conclusion doesn't change" is a red flag that it's under-supported — the specifics often do change it.
 - For Avi's human interactions (conversations, applications, messages to people): Avi supplies the ground truth — who knows what, what was said, relationship history. The agent supplies research, data, and technical analysis. Never build a plan on assumed social facts; when one is missing, ask or state the gap.
@@ -84,6 +84,8 @@ The journal is private for you, the LLM. Write for yourself and future agents, n
 
 **Version control:** include the commit hash (or reflog state) in the entry so a later session can find and resume the work.
 
+**Say what you checked, and when.** A dated finding ("checked 2026-10-17: the exclusion is still in the config") is what lets a later session tell stale from current; an undated claim reads as unchecked, and the session that trusts it inherits the error.
+
 **Update existing notes when relevant.** If today's work directly continues a recent note (same type of work, same context), append to it instead of creating a new file. Split only when the work is meaningfully different.
 
 **Rename files if needed.** If the conversation evolves and the original topic no longer fits, rename the file to reflect what it actually covers.
@@ -100,8 +102,12 @@ Write journal files directly — not via subagents. They lose the conversation c
 **Maintain TODO.md.** In the journal directory, keep `TODO.md` listing only unfinished work and open questions. Remove done items. Keep it short and current — not a backlog.
 
 TODO.md rules:
-- **Only actionable items you're actively working on or will work on next.** No wishlists, no reference material, no competitive analysis, no product ideas. That stuff goes in project docs or journal entries.
-- **Never add completed items.** Delete done items entirely; if part of an item remains, keep only what remains.
+- **Only actionable items you're actively working on or will work on next.** No wishlists, no reference material, no competitive analysis, no product ideas. That stuff goes in project docs or journal entries. A rationale stays where the rule it justifies lives (a config comment, the code, a README); don't copy it into the item.
+- **Never add completed items.** Delete done items entirely; if part of an item remains, keep only what remains — a line narrating finished work keeps just the leftover.
+- **Claims about the world go stale: date the check.** "Config still excludes it" is true until someone changes it; write `checked YYYY-MM-DD: …` when you verify one, and when reviewing the file verify each claim against the machine rather than re-reading it.
+- **A watch item is not an item.** "Watch for X", "re-run Y if it looks stale" — nobody records the watching, so it reads as undone work forever. Give it a trigger or a check date, or journal it.
+- **A decision, not a wish.** "Consider X", "optional", "if wanted" mark a wishlist entry; name the decision and its consequence.
+- **One decision, one TODO.** A decision copied into two projects' TODOs leaves a second copy to go stale; keep it where it is owned and point at it from the other.
 - **No design docs.** If a feature needs design spec, write a journal entry and link it from TODO with one line.
 - **Plain prose items** (`- item`, no Markdown checkboxes).
 - **Edit the file if it already exists.** Never fully rewrite the file.
