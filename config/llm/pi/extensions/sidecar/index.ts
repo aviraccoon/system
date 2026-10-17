@@ -12,15 +12,18 @@
  *   Ctrl+C / Esc: cancel
  *
  * Keybindings (model picker):
- *   Enter: toggle model in/out of chain (added at end if new)
+ *   Enter: toggle model in/out of chain (a new member goes to #1)
  *   Ctrl+T: cycle thinking level of the selected chain model
  *   Alt+↑↓: reorder within chain
- *   Ctrl+A: add all (or all filtered) to chain
+ *   Ctrl+A: add all (or all filtered) to end of chain
  *   Ctrl+X: remove all (or all filtered) from chain
- *   Ctrl+P: toggle by provider
+ *   Ctrl+P: toggle by provider (adds at #1)
  *   Ctrl+S: save to roles.local.json
  *   Ctrl+R: reset role to defaults
  *   Ctrl+C / Esc: back to role list (or clear search)
+ *
+ * Chain members with no available model are still listed (`#N ✗`) and stay removable;
+ * see ./rows.ts.
  */
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
@@ -30,6 +33,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { getAgentDir, type ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { fuzzyFilter, getKeybindings, Input, Key, matchesKey, Text } from "@earendil-works/pi-tui";
 import type { ModelEntry } from "../shared/model-roles";
+import { type AvailableModel, buildRows, type ChainRow, placeInChain } from "./rows";
 import {
   entryForAdd,
   entryThinking,
@@ -69,13 +73,6 @@ interface RoleConfig {
 
 type RolesFile = Record<string, RoleConfig>;
 
-interface ModelInfo {
-  ref: string;
-  name: string;
-  provider: string;
-  modelId: string;
-}
-
 // ── Config helpers ──
 
 function localPath(): string {
@@ -105,7 +102,7 @@ function mergedRoles(): RolesFile {
   return { ...defaults, ...local };
 }
 
-function getAvailableModels(registry: ModelRegistry): ModelInfo[] {
+function getAvailableModels(registry: ModelRegistry): AvailableModel[] {
   return registry
     .getAvailable()
     .map((m) => ({ ref: `${m.provider}/${m.id}`, name: m.name ?? m.id, provider: m.provider, modelId: m.id }))
@@ -118,7 +115,10 @@ function getAvailableModels(registry: ModelRegistry): ModelInfo[] {
  * what runs. Falls back to every level when the model is not in the registry (a
  * provider refresh between picking and rendering), so the setting stays reachable.
  */
-function supportedLevels(registry: ModelRegistry, item: ModelInfo): readonly ThinkingLevel[] {
+function supportedLevels(
+  registry: ModelRegistry,
+  item: Pick<AvailableModel, "provider" | "modelId">,
+): readonly ThinkingLevel[] {
   const model = registry.find(item.provider, item.modelId);
   if (!model) return THINKING_LEVELS;
   const levels = getSupportedThinkingLevels(model).filter(isThinkingLevel);
@@ -192,8 +192,8 @@ export default function sidecarCommand(pi: ExtensionAPI) {
         // The role's configured entries, snapshotted when the role is opened, so a
         // removed model keeps its thinking level / params if it is added back.
         let configured = new Map<string, ModelEntry>();
-        let allModels: ModelInfo[] = [];
-        let filteredItems: Array<ModelInfo & { inChain: boolean; position: number }> = [];
+        let allModels: AvailableModel[] = [];
+        let filteredItems: ChainRow[] = [];
         let selectedIndex = 0;
         let isDirty = false;
         const maxVisible = 15;
@@ -272,39 +272,8 @@ export default function sidecarCommand(pi: ExtensionAPI) {
 
         function buildFilteredItems() {
           const query = searchInput.getValue();
-          const chainSet = new Set(chain.map((m) => m.ref));
-
-          // Order: chain first (in order), then remaining available
-          const ordered: ModelInfo[] = [];
-          const seen = new Set<string>();
-
-          // Chain models first
-          for (const entry of chain) {
-            const found = allModels.find((m) => m.ref === entry.ref);
-            if (found) {
-              ordered.push(found);
-              seen.add(found.ref);
-            }
-          }
-
-          // Remaining available models
-          for (const m of allModels) {
-            if (!seen.has(m.ref)) {
-              ordered.push(m);
-            }
-          }
-
-          const items = ordered.map((m) => ({
-            ...m,
-            inChain: chainSet.has(m.ref),
-            position: chainSet.has(m.ref) ? chain.findIndex((c) => c.ref === m.ref) + 1 : 0,
-          }));
-
-          if (query) {
-            filteredItems = fuzzyFilter(items, query, (i) => `${i.modelId} ${i.provider} ${i.name}`);
-          } else {
-            filteredItems = items;
-          }
+          const rows = buildRows(chain, allModels);
+          filteredItems = query ? fuzzyFilter(rows, query, (i) => `${i.modelId} ${i.provider} ${i.name}`) : rows;
 
           selectedIndex = Math.min(selectedIndex, Math.max(0, filteredItems.length - 1));
         }
@@ -327,9 +296,15 @@ export default function sidecarCommand(pi: ExtensionAPI) {
             const item = filteredItems[i];
             const isSelected = i === selectedIndex;
             const prefix = isSelected ? theme.fg("accent", "→ ") : "  ";
-            const modelText = isSelected ? theme.fg("accent", item.modelId) : item.modelId;
+            const modelText = isSelected
+              ? theme.fg("accent", item.modelId)
+              : item.available
+                ? item.modelId
+                : theme.fg("dim", item.modelId);
             const providerBadge = theme.fg("muted", ` [${item.provider}]`);
-            const status = item.inChain ? theme.fg("success", ` #${item.position} ✓`) : theme.fg("dim", " ✗");
+            const status = item.inChain
+              ? theme.fg(item.available ? "success" : "dim", ` #${item.position} ${item.available ? "✓" : "✗"}`)
+              : theme.fg("dim", " ✗");
             const thinking = item.inChain ? ` ${renderThinking(chainEntry(item.ref))}` : "";
             lines.push(`${prefix}${modelText}${providerBadge}${status}${thinking}`);
           }
@@ -343,7 +318,11 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           if (filteredItems.length > 0) {
             const selected = filteredItems[selectedIndex];
             lines.push("");
-            lines.push(theme.fg("muted", `  Model Name: ${selected.name}`));
+            if (selected.available) {
+              lines.push(theme.fg("muted", `  Model Name: ${selected.name}`));
+            } else {
+              lines.push(theme.fg("warning", `  ${selected.ref} — ${unavailableReason(selected)}`));
+            }
             if (selected.inChain) {
               const entry = chainEntry(selected.ref);
               const supported = supportedLevels(ctx.modelRegistry, selected);
@@ -361,17 +340,34 @@ export default function sidecarCommand(pi: ExtensionAPI) {
                 );
               }
             } else {
-              lines.push(theme.fg("dim", "  Not in the chain — Enter adds it, then ^T sets thinking"));
+              lines.push(theme.fg("dim", "  Not in the chain — Enter adds it at #1, then ^T sets thinking"));
             }
           }
 
           return lines;
         }
 
+        /**
+         * Why a chain member has no available model. The registry knows which of the two
+         * it is: `find` searches the whole catalog, while the available list is filtered
+         * by provider — so a known id means a credential problem, not a bad ref.
+         */
+        function unavailableReason(item: ChainRow): string {
+          return ctx.modelRegistry.find(item.provider, item.modelId)
+            ? `provider "${item.provider}" has no credentials`
+            : "not in the model catalog";
+        }
+
         // ── Chain mutations ──
 
         function chainEntry(ref: string): ModelEntry | undefined {
           return chain.find((m) => m.ref === ref);
+        }
+
+        /** Keep the cursor on `ref` after the list is rebuilt. */
+        function selectRow(ref: string) {
+          const index = filteredItems.findIndex((i) => i.ref === ref);
+          if (index !== -1) selectedIndex = index;
         }
 
         /** Chain rows show the level; "off" stays dim so an all-off chain reads quietly. */
@@ -390,11 +386,15 @@ export default function sidecarCommand(pi: ExtensionAPI) {
             if (chain.length <= 1) return;
             chain = chain.filter((m) => m.ref !== ref);
           } else {
-            // Add to end of chain, keeping any saved config for this model
-            chain.push(entryForAdd(configured.get(ref), ref));
+            // New members go to the head: adding a model means wanting to use it, and the
+            // head of the chain is what runs. Keeps any saved config for this model.
+            chain = placeInChain(chain, [entryForAdd(configured.get(ref), ref)], "head");
           }
           isDirty = true;
           buildFilteredItems();
+          // Adding at the head shifts every other row down, so follow the row that was acted on.
+          // A removed ref is a tail row now, and anchoring to it would jump the cursor there.
+          if (isInChain(chain, ref)) selectRow(ref);
           updateHeader();
           updateFooter();
           tui.requestRender();
@@ -431,15 +431,12 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           tui.requestRender();
         }
 
-        function addAll(targetRefs?: string[]) {
+        function addAll(targetRefs?: string[], placement: "head" | "tail" = "tail") {
           const targets = targetRefs ?? allModels.map((m) => m.ref);
           const chainSet = new Set(chain.map((m) => m.ref));
-          for (const ref of targets) {
-            if (!chainSet.has(ref)) {
-              chain.push(entryForAdd(configured.get(ref), ref));
-              chainSet.add(ref);
-            }
-          }
+          const added = targets.filter((ref) => !chainSet.has(ref)).map((ref) => entryForAdd(configured.get(ref), ref));
+          if (added.length === 0) return;
+          chain = placeInChain(chain, added, placement);
           isDirty = true;
           buildFilteredItems();
           updateHeader();
@@ -450,7 +447,9 @@ export default function sidecarCommand(pi: ExtensionAPI) {
         function clearAll(targetRefs?: string[]) {
           const targets = targetRefs ?? chain.map((m) => m.ref);
           const targetSet = new Set(targets);
-          chain = chain.filter((m) => !targetSet.has(m.ref));
+          const remaining = chain.filter((m) => !targetSet.has(m.ref));
+          if (remaining.length === chain.length) return;
+          chain = remaining;
           isDirty = true;
           buildFilteredItems();
           updateHeader();
@@ -464,9 +463,11 @@ export default function sidecarCommand(pi: ExtensionAPI) {
           const newIdx = idx + delta;
           if (newIdx < 0 || newIdx >= chain.length) return;
           [chain[idx], chain[newIdx]] = [chain[newIdx], chain[idx]];
-          selectedIndex += delta;
           isDirty = true;
           buildFilteredItems();
+          // With a search active the list is in relevance order, so the chain index is not
+          // the row index.
+          selectRow(ref);
           updateHeader();
           updateFooter();
           tui.requestRender();
@@ -692,7 +693,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
               return;
             }
 
-            // Ctrl+P - Toggle by provider
+            // Ctrl+P - Toggle by provider (adds at the head, picked model first)
             if (matchesKey(data, Key.ctrl("p"))) {
               const item = filteredItems[selectedIndex];
               if (item) {
@@ -702,7 +703,9 @@ export default function sidecarCommand(pi: ExtensionAPI) {
                 if (allInChain) {
                   clearAll(providerRefs);
                 } else {
-                  addAll(providerRefs);
+                  // The picked model goes first, so the role's primary is the one that was acted on.
+                  addAll([item.ref, ...providerRefs], "head");
+                  selectRow(item.ref);
                 }
               }
               return;
