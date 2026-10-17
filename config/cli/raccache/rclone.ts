@@ -35,6 +35,10 @@ export function syncArgs(opts: SyncOptions): string[] {
   // Mirror destinations remove excluded and vanished files; copy destinations
   // (cold replicas) never delete. Both recover through the bucket lifecycle.
   if ((opts.mode ?? "mirror") === "mirror") args.push("--delete-excluded");
+  // Store symlinks as restorable `.rclonelink` files instead of dropping them
+  // with a NOTICE: repos track them (docs, shared config), and rclone cannot
+  // recreate one it was never told about. Restore with the same flag.
+  args.push("--links");
   if (opts.bwLimit) args.push("--bwlimit", opts.bwLimit);
   if (opts.dryRun) args.push("--dry-run");
   if (opts.extraFlags) args.push(...opts.extraFlags);

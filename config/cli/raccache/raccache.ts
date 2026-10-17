@@ -7,7 +7,7 @@
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { collectDevice } from "./collect";
+import { collectDevice, RUNNER_PATTERN } from "./collect";
 import { type Device, loadMachine, paths } from "./config";
 import { computeRates, renderSide, type SideState } from "./format";
 import { generateFilter, runBackup } from "./run";
@@ -149,7 +149,7 @@ export function control(command: string, devices: Device[]): string[] {
         }
       } else if (command === "stop") {
         let matched = false;
-        for (const pattern of ["raccache[.]ts run", "rclone sync"]) {
+        for (const pattern of [RUNNER_PATTERN, "rclone sync"]) {
           try {
             execFileSync("pkill", ["-f", pattern]);
             matched = true;

@@ -71,7 +71,12 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
   const p = paths({ platform: options.platform, dir: options.configDir });
   mkdirSync(p.dir, { recursive: true });
   mkdirSync(dirname(p.log), { recursive: true });
-  const log = (line: string) => appendFileSync(p.log, `${new Date().toISOString()} ${line}\n`);
+  const log = (line: string) => {
+    const stamped = `${new Date().toISOString()} ${line}`;
+    appendFileSync(p.log, `${stamped}\n`);
+    // A manual run should say what it is doing; launchd redirects stdout anyway.
+    if (process.stdout.isTTY) process.stdout.write(`${stamped}\n`);
+  };
   const host = hostname().split(".")[0];
   const title = `raccache ${host || "run"}`;
   const machine = loadMachine(p);

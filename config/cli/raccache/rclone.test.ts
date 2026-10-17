@@ -12,6 +12,10 @@ describe("syncArgs", () => {
     expect(args).not.toContain("--dry-run");
   });
 
+  test("symlinks are stored, not dropped", () => {
+    expect(syncArgs(base)).toContain("--links");
+  });
+
   test("copy destinations do not delete", () => {
     expect(syncArgs({ ...base, mode: "copy" })).not.toContain("--delete-excluded");
     expect(syncArgs({ ...base, mode: "mirror" })).toContain("--delete-excluded");

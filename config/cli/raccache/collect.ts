@@ -98,6 +98,9 @@ export function collectRemote(device: Device): SideState {
   }
 }
 
+/** Matches the runner however it was started (`raccache.ts run` or the `~/.local/bin/raccache` symlink). */
+export const RUNNER_PATTERN = "raccache(\\.ts)? run";
+
 /** Dispatch on what the device row says it is. */
 export function collectDevice(device: Device): SideState {
   if (device.local) return collectLocal();
@@ -128,7 +131,7 @@ export function collectLocal(): SideState {
     if (active) info.push(`systemd  ${active}`);
   }
 
-  const runnerPid = run("pgrep", ["-f", "raccache[.]ts run"]);
+  const runnerPid = run("pgrep", ["-f", RUNNER_PATTERN]);
   const rclonePid = run("pgrep", ["-f", "rclone sync"]);
   if (runnerPid || rclonePid) info.push(`running  run=${runnerPid ?? "-"} rclone=${rclonePid ?? "-"}`);
 

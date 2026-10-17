@@ -49,6 +49,10 @@ target is refused and fails the run.
 the matching files from the destination; recover them through the bucket's
 hidden-file lifecycle. `mode = "copy"` never deletes.
 
+Symlinks are stored as `.rclonelink` files (`--links`), not followed or dropped:
+repos track them, and dropping one leaves a restore that is quietly incomplete.
+Restore a tree with `rclone copy --links` so they come back as links.
+
 ## Secrets
 
 `/run/secrets/rendered/raccache.env` is rendered by sops-nix from `secrets/raccache.yaml`
