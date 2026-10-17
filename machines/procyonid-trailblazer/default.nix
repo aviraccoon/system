@@ -5,6 +5,7 @@
     ../../profiles/personal.nix
     ../../modules/darwin
     ../../modules/darwin/omlx-gpu-limit.nix
+    ../../modules/darwin/raccache.nix
   ];
 
   # Machine-specific settings

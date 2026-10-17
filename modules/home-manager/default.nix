@@ -304,6 +304,10 @@ in
     ".local/bin/session-span".source =
       config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/system/config/cli/session-span/session-span.ts";
 
+    # raccache CLI (offsite backup run, status and controls; bun-run TS source)
+    ".local/bin/raccache".source =
+      config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/system/config/cli/raccache/raccache.ts";
+
     # npm: disable postinstall/preinstall scripts by default.
     # Prevents malicious or noisy lifecycle scripts from running during `npm install`.
     # Packages that genuinely need their scripts (e.g. Prisma, native modules) should
