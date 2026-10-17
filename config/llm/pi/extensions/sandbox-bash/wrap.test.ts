@@ -4,7 +4,14 @@ import { join } from "node:path";
 import { BASH_SANDBOX_ENV, isConfinedBash, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
 import { shellQuote } from "../shared/shell-quote";
 import { CONFINED_TOOL, READONLY_TOOL } from "../shared/shell-tools";
-import { formatReadonlyCall, profileParams, SANDBOX_EXEC, sandboxCommand, sandboxMode } from "./wrap";
+import {
+  formatReadonlyCall,
+  profileParams,
+  SANDBOX_EXEC,
+  sandboxCommand,
+  sandboxDenialHint,
+  sandboxMode,
+} from "./wrap";
 
 const PATHS = { home: "/Users/foo" };
 const PROFILE = join(import.meta.dir, "profile.sbpl");
@@ -122,6 +129,38 @@ describe("sandboxMode", () => {
 describe("shellQuote", () => {
   it("closes and reopens around a single quote", () => {
     expect(shellQuote("a'b")).toBe("'a'\\''b'");
+  });
+});
+
+describe("sandboxDenialHint", () => {
+  const call = (output: string, failed = true, shell?: string) => ({ output, failed, escape: shell });
+
+  it("names the sandbox when a failed call comes back with an errno", () => {
+    const hint = sandboxDenialHint(call("cat: /Users/foo/.pi/agent/roles.json: Operation not permitted", true, "bash"));
+    expect(hint).toContain("read-only sandbox");
+    expect(hint).toContain("`bash`");
+  });
+
+  it("catches the cd form, where the shell reports the refusal as ENOTDIR", () => {
+    expect(
+      sandboxDenialHint(call("/bin/sh: line 0: cd: /Users/foo/.pi/agent: Not a directory", true, "bash")),
+    ).toContain("read-only sandbox");
+  });
+
+  it("does not point a subagent at bash, which is the shell that just failed", () => {
+    const hint = sandboxDenialHint(call("cat: /Users/foo/.pi/agent/roles.json: Operation not permitted"));
+    expect(hint).not.toContain("`bash`");
+    expect(hint).toContain("report the path");
+  });
+
+  it("stays quiet when the call succeeded, however its output reads", () => {
+    // A search for the phrase prints it while exiting 0; the call was not refused.
+    expect(sandboxDenialHint(call("src/a.ts:3: Permission denied", false, "bash"))).toBeNull();
+  });
+
+  it("stays quiet on a failure with no refusal in the output", () => {
+    expect(sandboxDenialHint(call("src/a.ts:3:1 - error TS2304: Cannot find name 'foo'"))).toBeNull();
+    expect(sandboxDenialHint(call("ls: /Users/foo/nope-not-here: No such file or directory"))).toBeNull();
   });
 });
 

@@ -49,6 +49,10 @@ writable either.
 - **Off macOS, or when the profile fails its boundary probe**: nothing is registered,
   and the gate keeps confirming `bash`.
 - **Which commands run is not restricted** — only what they can touch.
+- **A refusal names itself**: when the profile denies a lookup, the result carries a
+  `[read-only sandbox]` line saying so. Without it a denied path reads as a filesystem
+  error — `Operation not permitted` from `ls`/`cat`/`stat`, or `Not a directory` from
+  `cd` — which sends the next step looking for a missing file or a broken mount.
 
 ## Files
 

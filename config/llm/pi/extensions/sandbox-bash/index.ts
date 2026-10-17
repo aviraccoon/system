@@ -41,6 +41,7 @@ import {
   SANDBOX_EXEC,
   sandboxArgs,
   sandboxCommand,
+  sandboxDenialHint,
   sandboxMode,
 } from "./wrap";
 
@@ -113,7 +114,20 @@ export default function sandboxBash(pi: ExtensionAPI) {
     onUpdate: Parameters<typeof tool.execute>[3],
     ctx: Parameters<typeof tool.execute>[4],
   ) => {
-    return tool.execute(id, args, signal, onUpdate, ctx);
+    const result = await tool.execute(id, args, signal, onUpdate, ctx);
+    // A refused lookup surfaces as the command's own error text, so the result is the
+    // first place the sandbox can name itself as the cause.
+    const first = result.content[0];
+    const output = first?.type === "text" ? first.text : "";
+    const hint = sandboxDenialHint({
+      output,
+      failed: result.isError === true,
+      // In a subagent the confined shell is registered as `bash`, so naming it would
+      // point at the tool that just failed; only the main session has an unrestricted one.
+      escape: mode === "override" ? undefined : "bash",
+    });
+    if (!hint) return result;
+    return { ...result, content: [{ type: "text" as const, text: `${output}\n\n${hint}` }] };
   };
 
   // The built-in shell renderer titles every call `$ <command>`, which is the same
@@ -142,10 +156,11 @@ export default function sandboxBash(pi: ExtensionAPI) {
     name: READONLY_TOOL,
     label: "bash (read-only)",
     description:
-      "Execute a shell command in a read-only sandbox: no writes outside the temp dir, no network, no Docker. Use it to inspect state — git log/diff/show/status, rg, find, cat, jq, wc. It cannot write, install, fetch or reach the Docker daemon (that socket is equivalent to root on the host); those need `bash`. Returns stdout and stderr, truncated to the last lines or 50KB.",
+      "Execute a shell command in a read-only sandbox: no writes outside the temp dir, no network, no Docker, and no reads inside most of `$HOME`'s dot-entries. Use it to inspect state — git log/diff/show/status, rg, find, cat, jq, wc. It cannot write, install, fetch or reach the Docker daemon (that socket is equivalent to root on the host); those need `bash`. Returns stdout and stderr, truncated to the last lines or 50KB.",
     promptSnippet: "bash_readonly: read-only shell — never prompts",
     promptGuidelines: [
       "ALWAYS reach for `bash_readonly` before `bash` when inspecting state: it is confined by the OS and never prompts, while `bash` prompts on every call. Docker is the exception — `docker ps` and friends need `bash`.",
+      "`bash_readonly` denies most dot-entries under `$HOME` (`~/.pi`, `~/.ssh`, `~/.config/gh`): an `Operation not permitted` or `Not a directory` error on one of those paths is the profile, not a missing file — use `bash` for it.",
     ],
     renderCall,
     execute,

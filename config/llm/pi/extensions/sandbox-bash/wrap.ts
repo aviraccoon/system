@@ -138,6 +138,46 @@ export interface ThemeLike {
 }
 
 /**
+ * Signatures of a lookup that was refused. A denied syscall fails and the tool reports
+ * the errno (`Operation not permitted`, `Permission denied`); `cd` is the odd one, and
+ * reports it as `Not a directory`.
+ */
+const REFUSAL_OUTPUT = /Operation not permitted|Permission denied|Not a directory/i;
+
+/** What the tool knows about the call it is judging. */
+export interface SandboxCall {
+  output: string;
+  /** pi sets `isError` when the shell exits non-zero. A command that succeeds while
+   * printing a refusal phrase — a search for one, say — was not refused. */
+  failed: boolean;
+  /** The unrestricted shell to point at, when this process has one. A subagent's
+   * confined shell *is* `bash` (`sandboxMode` "override"), so naming `bash` there
+   * would name the tool the agent is already in. */
+  escape?: string;
+}
+
+/**
+ * One line saying the sandbox may be the thing that refused this, or null.
+ *
+ * Without it a refusal reads as a filesystem error — `Operation not permitted` from
+ * `ls`/`cat`/`stat`, `Not a directory` from `cd` — which sends the next step looking
+ * for a missing file instead of reaching for `bash`. Deliberately a plain pattern over
+ * the output: anything sharper (which paths the profile reopens, whether the path is a
+ * directory) means a second copy of `profile.sbpl` in TypeScript, which drifts.
+ */
+export function sandboxDenialHint(call: SandboxCall): string | null {
+  if (!call.failed || !REFUSAL_OUTPUT.test(call.output)) return null;
+  const reach = call.escape
+    ? `Use \`${call.escape}\` for a path or operation this shell cannot reach.`
+    : "No shell in this process can reach it — report the path instead of retrying it.";
+  return (
+    "[read-only sandbox] this may be the sandbox rather than the filesystem: most " +
+    "dot-entries under $HOME are closed, writes only inside the temp dir, and there is " +
+    `no network. ${reach}`
+  );
+}
+
+/**
  * Call line for the confined shell in the main session. The built-in shell
  * renderer titles every call `$ <command>`, which is the same prompt `bash`
  * shows, so the two tools are indistinguishable in the TUI. This names the tool
