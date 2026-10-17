@@ -62,7 +62,9 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
       "TODO.md lists only unfinished, actionable work. DELETE done items entirely — the journal holds the details. " +
       "Never reword a done item or annotate it as done. If the item holds remaining work, strip the done narration " +
       "(commit hashes, landed/shipped references) and keep only what remains. " +
-      "If a flagged line is genuinely still-open work, leave it untouched.",
+      "A wishlist entry is not an item: 'watch for' needs a trigger or a check date, and 'consider'/'optional'/'if wanted' " +
+      "must name the decision and its consequence — otherwise it belongs in the journal. " +
+      "If a flagged line is genuinely still-open, actionable work, leave it untouched.",
     patterns: [
       { label: "checked checkbox", regex: "^\\s*(?:[-*+]|\\d+[.)])?\\s*\\[[xX]\\]" },
       { label: "Markdown checkbox (TODO uses plain '- item')", regex: "^\\s*(?:[-*+]|\\d+[.)])?\\s*\\[\\s?\\]" },
@@ -84,6 +86,15 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
       },
       { label: "self-deleting item (says it can be deleted)", regex: "\\bcan (?:be )?delete\\b", flags: "i" },
       { label: "already-done claim", regex: "\\balready (?:fixed|landed|shipped|merged)\\b", flags: "i" },
+      // Wishlist markers mirror the instructions' TODO rules ("a watch item is
+      // not an item", "a decision, not a wish"): the marker arrives with the
+      // policy that says what to do with it. Advisory like the rest — a feature
+      // named for watching or a config value spelled "optional" can hit — and
+      // the policy leaves genuinely actionable lines alone.
+      { label: "watch item", regex: "\\bwatch\\b", flags: "i" },
+      { label: "wishlist marker (consider)", regex: "\\bconsider\\b", flags: "i" },
+      { label: "wishlist marker (optional)", regex: "\\boptional\\b", flags: "i" },
+      { label: "wishlist marker (if wanted)", regex: "\\bif wanted\\b", flags: "i" },
     ],
   },
   {

@@ -367,7 +367,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
   }
 
   function sweepReport(result: { blocks: string[] }): string {
-    return `${result.blocks.join("\n\n")}\n\nRemove flagged lines that are done items entirely (per the rules above); leave genuinely-open lines untouched. Reply with what you removed.`;
+    return `${result.blocks.join("\n\n")}\n\nRemove flagged lines that are done items entirely (per the rules above); leave genuinely still-open, actionable lines untouched. Reply with what you removed.`;
   }
 
   function rootsFor(ctx: ExtensionContext): RuntimeRoots {
@@ -412,11 +412,11 @@ export default function editGuardExtension(pi: ExtensionAPI) {
     name: "todo_check",
     label: "TODO Check",
     description:
-      "Scan the project journal TODO.md (or a given path) for content-rule violations: done items, commit-hash narration, self-deleting lines. Run it when maintaining a TODO.md or at wrap-up.",
+      "Scan the project journal TODO.md (or a given path) for content-rule violations: done items, commit-hash narration, self-deleting lines, wishlist markers. Run it when maintaining a TODO.md or at wrap-up.",
     promptSnippet:
-      "todo_check: Scan the project journal TODO.md (or a given path) for rule violations (done items, done narration). Run when maintaining a TODO.md or at wrap-up; remove flagged lines.",
+      "todo_check: Scan the project journal TODO.md (or a given path) for rule violations (done items, done narration, wishlist markers). Run when maintaining a TODO.md or at wrap-up; remove or reword flagged lines.",
     promptGuidelines: [
-      "After finishing work a TODO.md tracks (or at wrap-up), run todo_check on it; flagged lines are either fully done (delete them) or hold leftover work (strip the done narration, keep the rest).",
+      "After finishing work a TODO.md tracks (or at wrap-up), run todo_check on it; flagged lines are either fully done (delete them), hold leftover work (strip the done narration, keep the rest), or carry a wishlist marker (give it a trigger or name the decision).",
     ],
     parameters: Type.Object({
       path: Type.Optional(

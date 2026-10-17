@@ -152,6 +152,37 @@ describe("TODO.md rule", () => {
     ]);
   });
 
+  test("flags wishlist markers (watch / consider / optional / if wanted)", () => {
+    expect(
+      labelsOf(
+        scanContent(
+          [
+            "- Watch the upstream PR for the merge",
+            "- watch for the next release",
+            "- Consider renaming the parser",
+            "- Optional: REPL mode for stepping",
+            "- add a config flag if wanted",
+            "- If wanted, keep Python",
+          ].join("\n"),
+          rules,
+        ),
+      ),
+    ).toEqual([
+      ["watch item"],
+      ["watch item"],
+      ["wishlist marker (consider)"],
+      ["wishlist marker (optional)"],
+      ["wishlist marker (if wanted)"],
+      ["wishlist marker (if wanted)"],
+    ]);
+  });
+
+  test("leaves wishlist-word lookalikes alone", () => {
+    expect(scanContent("- the watchdog restarts the daemon", rules)).toHaveLength(0);
+    expect(scanContent("- considered and rejected: the daemon route", rules)).toHaveLength(0);
+    expect(scanContent("- the optionality is handled by the caller", rules)).toHaveLength(0);
+  });
+
   test("leaves sanctioned journal links and future work alone", () => {
     expect(scanContent("- design agreed, spec: `2027-01-02-03-example-topic.md` — then implement", rules)).toHaveLength(
       0,
@@ -389,6 +420,9 @@ describe("formatViolations", () => {
     expect(block).toContain("[edit-guard TODO.md TODO.md: 1 suspect line]");
     expect(block).toContain(">> - old thing — DONE");
     expect(block).toContain(todoRule.policy);
+    // Literal, so deleting the wishlist sentence turns this pin red rather than
+    // comparing the policy object to itself.
+    expect(block).toContain("otherwise it belongs in the journal");
   });
 
   test("caps listed lines and reports the remainder", () => {
