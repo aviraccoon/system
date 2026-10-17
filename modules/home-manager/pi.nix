@@ -165,9 +165,10 @@ in
           # Category: Cloud providers
 
           # Built-in openrouter provider — tags and ZDR config for model-policy extension.
-          # No models array = keeps all built-in models, only overrides provider-level fields.
-          # Covers both main models and the sidecar (roles.local.json routes sidecar
-          # roles through this builtin provider).
+          # models entries add to the built-in catalog (an entry reusing an existing id
+          # replaces it), so listing one here does not drop the rest. Covers both main
+          # models and the sidecar (roles.local.json routes sidecar roles through this
+          # builtin provider).
           # Per-model routing tweaks (e.g. sort/throughput floors) live in modelOverrides.
           openrouter = {
             tags = [
