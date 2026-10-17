@@ -6,6 +6,7 @@ import {
   fmtIn,
   fmtRate,
   parseCollector,
+  parseRunProgress,
   parseTransferLine,
   renderSide,
   type SideState,
@@ -138,6 +139,72 @@ describe("computeRates", () => {
   test("no previous sample means no rates", () => {
     const cur: SideState = { label: "a", paused: false, targets: [], info: [], at: 0 };
     expect(computeRates(undefined, cur)).toEqual({});
+  });
+});
+
+describe("parseRunProgress", () => {
+  const plan = ["b2/dev", "b2/Documents"];
+  const start = "2026-10-17T05:00:00.000Z raccache start (2 pairs: b2/dev, b2/Documents)\n";
+
+  test("names the pair being transferred and how long the run has gone", () => {
+    const log = `${start}2026-10-17T05:00:10.000Z b2/dev ok (3 new, 0 changed, 0 deleted)\n`;
+    expect(parseRunProgress(log, plan, Date.parse("2026-10-17T05:12:00.000Z"))).toBe(
+      "2 of 2 (b2/Documents) · 12m elapsed",
+    );
+  });
+
+  test("no running pass once the run has finished", () => {
+    expect(parseRunProgress(`${start}2026-10-17T05:01:00.000Z raccache done rc=0 (0 new)\n`, plan)).toBeUndefined();
+  });
+
+  test("a skipped target is not left as the pair in progress", () => {
+    const log = `${start}2026-10-17T05:00:10.000Z b2/Documents SKIPPED (missing): /Users/example/Documents\n`;
+    const progress = parseRunProgress(log, plan, Date.parse("2026-10-17T05:02:00.000Z")) ?? "";
+    expect(progress).toContain("2 of 2");
+    expect(progress).not.toContain("Documents");
+  });
+
+  test("an aborted pair does not stay current", () => {
+    const log = `${start}2026-10-17T05:00:10.000Z b2/dev ABORTED: on battery power\n`;
+    expect(parseRunProgress(log, plan, Date.parse("2026-10-17T05:02:00.000Z"))).toContain("(b2/Documents)");
+  });
+
+  test("a narrowed pass is scored against its own start line", () => {
+    const narrowed = "2026-10-17T05:00:00.000Z raccache start (1 pair: b2/Documents)\n";
+    const log = `${narrowed}2026-10-17T05:00:10.000Z b2/Documents ok (1 new, 0 changed, 0 deleted)\n`;
+    expect(parseRunProgress(log, plan, Date.parse("2026-10-17T05:02:00.000Z"))).toBe("1 of 1 (finishing) · 2m elapsed");
+  });
+
+  test("finishing once every pair is done but the run line is not written yet", () => {
+    const log = `${start}2026-10-17T05:01:00.000Z b2/dev ok (1 new, 0 changed, 0 deleted)\n2026-10-17T05:01:30.000Z b2/Documents SKIPPED (missing)\n`;
+    expect(parseRunProgress(log, plan, Date.parse("2026-10-17T05:02:00.000Z"))).toBe("2 of 2 (finishing) · 2m elapsed");
+  });
+
+  const siblings = ["b2/dev", "r2/dev"];
+  const legacyStart = "2026-10-17T05:00:00.000Z raccache start (2 pairs: 2 targets x 1 destination)\n";
+
+  test("a target-level line does not end a sibling destination's pair when the list is present", () => {
+    const log = `${start}2026-10-17T05:00:10.000Z dev SKIPPED (missing)\n`;
+    expect(parseRunProgress(log, siblings, Date.parse("2026-10-17T05:02:00.000Z"))).toBe(
+      "1 of 2 (b2/dev) · 2m elapsed",
+    );
+  });
+
+  test("one destination's line does not end its sibling on a start line without a list", () => {
+    const log = `${legacyStart}2026-10-17T05:00:10.000Z b2/dev ok (3 new, 0 changed, 0 deleted)\n`;
+    expect(parseRunProgress(log, siblings, Date.parse("2026-10-17T05:02:00.000Z"))).toBe(
+      "2 of 2 (r2/dev) · 2m elapsed",
+    );
+  });
+
+  test("a start line without a pair list falls back to the configured pairs", () => {
+    const legacy = "2026-10-17T05:00:00.000Z raccache start (2 targets x 1 destination)\n";
+    const log = `${legacy}2026-10-17T05:00:10.000Z Documents SKIPPED (missing)\n`;
+    expect(parseRunProgress(log, plan, Date.parse("2026-10-17T05:02:00.000Z"))).toBe("2 of 2 (b2/dev) · 2m elapsed");
+  });
+
+  test("no run in the log at all", () => {
+    expect(parseRunProgress("", plan)).toBeUndefined();
   });
 });
 

@@ -57,6 +57,41 @@ export function fmtAgo(ms: number, now: number): string {
   return `${Math.floor(hours / 24)}d`;
 }
 
+/**
+ * One line for the pass running now: which destination/target pair of how many,
+ * and how long it has been going. The pair list comes from the `raccache start`
+ * line, so a narrowed pass (`--only`, `--destination`) reports its own scope; the
+ * plan is the fallback for a start line written before that list existed.
+ */
+export function parseRunProgress(text: string, plan: string[], now = Date.now()): string | undefined {
+  const starts = [...text.matchAll(/^(\S+) raccache start \(([^\n]*)\)$/gm)];
+  const last = starts.at(-1);
+  if (!last) return undefined;
+  const section = text.slice(last.index);
+  if (section.includes("raccache done")) return undefined;
+  const listed = (last[2] ?? "")
+    .slice((last[2] ?? "").indexOf(": ") + 2)
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.includes("/"));
+  const fromStartLine = listed.length > 0;
+  const pairs = fromStartLine ? listed : plan;
+  if (pairs.length === 0) return undefined;
+  // Older start lines carry only counts, so their section is written with
+  // `<target> SKIPPED|ABORTED` instead of the pair label; that loose form would
+  // match every destination sharing a target, so it is only used in the fallback.
+  const names = (label: string): string[] => (fromStartLine ? [label] : [label, label.slice(label.indexOf("/") + 1)]);
+  const done = pairs.filter((label) =>
+    names(label).some((name) =>
+      ["ok (", "FAILED", "ABORTED", "SKIPPED"].some((marker) => section.includes(` ${name} ${marker}`)),
+    ),
+  );
+  const current = pairs.find((pair) => !done.includes(pair));
+  const startedAt = Date.parse(last[1] ?? "");
+  const elapsed = Number.isFinite(startedAt) ? fmtAgo(startedAt, now) : undefined;
+  const position = current ? done.length + 1 : pairs.length;
+  return `${position} of ${pairs.length} (${current ?? "finishing"})${elapsed ? ` · ${elapsed} elapsed` : ""}`;
+}
 export function fmtIn(epochSeconds: number, now: number): string {
   const seconds = Math.round(epochSeconds - now / 1000);
   if (seconds <= 0) return "now";

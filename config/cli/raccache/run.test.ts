@@ -3,8 +3,10 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { showRunProgress } from "./collect";
 import { DEFAULT_EXCLUDE, DEFAULT_INCLUDE, paths, type Settings, type Target } from "./config";
-import { generateFilter, logLinesSince } from "./run";
+import { parseRunProgress } from "./format";
+import { generateFilter, logLinesSince, pairLabels, pairMessages, startLine } from "./run";
 
 const dirs: string[] = [];
 const tempDir = (): string => {
@@ -24,6 +26,65 @@ const settings = (): Settings => ({
   git: "git",
   include: [...DEFAULT_INCLUDE],
   exclude: [...DEFAULT_EXCLUDE],
+});
+
+describe("startLine", () => {
+  const target: Target = { dest: "dev", src: "/home/example/dev", gitignore: false };
+  const destination = { name: "b2", remote: "b2crypt:laptop", mode: "mirror" as const, flags: [] };
+
+  test("round-trips through the parser, including a narrowed pass", () => {
+    const planned = pairLabels([target], [destination]);
+    expect(planned).toEqual(["b2/dev"]);
+    const text = `2026-10-17T05:00:00.000Z ${startLine(planned, false)}\n`;
+    expect(parseRunProgress(text, [], Date.parse("2026-10-17T05:05:00.000Z"))).toBe("1 of 1 (b2/dev) · 5m elapsed");
+  });
+
+  test("keeps the dry-run marker out of the pair list", () => {
+    const planned = pairLabels([target], [destination]);
+    const text = `2026-10-17T05:00:00.000Z ${startLine(planned, true)}\n`;
+    expect(text).toContain("1 pair, dry run:");
+    expect(parseRunProgress(text, [], Date.parse("2026-10-17T05:01:00.000Z"))).toBe("1 of 1 (b2/dev) · 1m elapsed");
+  });
+});
+
+describe("pairLabels and pairMessages", () => {
+  const targets: Target[] = [
+    { dest: "dev", src: "/home/example/dev", gitignore: true },
+    { dest: "Documents", src: "/home/example/Documents", gitignore: false },
+  ];
+  const destinations = [
+    { name: "b2", remote: "b2crypt:laptop", mode: "mirror" as const, flags: [] },
+    { name: "r2", remote: "r2crypt:laptop", mode: "copy" as const, flags: [] },
+  ];
+
+  test("pairs are target-major, matching the runner's loop order", () => {
+    expect(pairLabels(targets, destinations)).toEqual(["b2/dev", "r2/dev", "b2/Documents", "r2/Documents"]);
+  });
+
+  test("every failure line the runner writes ends its pair", () => {
+    const stamped = pairMessages(destinations, "dev", "FAILED to build filters: boom").map(
+      (line) => `2026-10-17T05:00:10.000Z ${line}`,
+    );
+    const text = `2026-10-17T05:00:00.000Z ${startLine(pairLabels(targets, destinations), false)}\n${stamped.join("\n")}\n`;
+    expect(parseRunProgress(text, [], Date.parse("2026-10-17T05:03:00.000Z"))).toBe(
+      "3 of 4 (b2/Documents) · 3m elapsed",
+    );
+  });
+
+  test("a per-target failure ends that pair for every destination", () => {
+    expect(pairMessages(destinations, "dev", "ABORTED: on battery power")).toEqual([
+      "b2/dev ABORTED: on battery power",
+      "r2/dev ABORTED: on battery power",
+    ]);
+  });
+});
+
+describe("showRunProgress", () => {
+  test("needs a live runner and a plan", () => {
+    expect(showRunProgress(null, ["b2/dev"])).toBe(false);
+    expect(showRunProgress("123", [])).toBe(false);
+    expect(showRunProgress("123", ["b2/dev"])).toBe(true);
+  });
 });
 
 describe("logLinesSince", () => {

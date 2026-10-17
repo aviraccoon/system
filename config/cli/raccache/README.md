@@ -14,6 +14,27 @@ raccache filters [<target>]
 `raccache --help` is the flag reference. `run` is what the scheduler calls;
 `status` is the default command.
 
+```
+$ raccache status
+this machine (laptop) · 3s ago
+  run     3 of 6 (nas/dev) · 12m elapsed
+  running  run=4711 rclone=4712
+  live    1.2 GiB / 3.4 GiB, 35%, 8.1 MiB/s, ETA 4m35s
+  log     2026/10/17 13:41:07 INFO  : dev/foo/asset.bin: Copied (new)
+
+storage (systemd) · 3s ago
+  photos/2024                 412 GiB
+  server/volumes              88 GiB
+  units  backup-offsite=inactive  backup-services=inactive
+  next   backup-offsite in 5h12m  backup-services in 6h40m
+  log    offsite: 2026-10-17T07:02:11Z backup done rc=0
+```
+
+`run` counts the pass as destination/target pairs, so `3 of 6 (nas/dev)` is the
+third pair of six with `nas/dev` transferring now. The `live` line is rclone's own
+progress for that pair; a whole-run percentage would need every destination size,
+which costs a recursive listing per target.
+
 ## Config
 
 All of it lives in `~/.config/raccache/` and never in this repo.

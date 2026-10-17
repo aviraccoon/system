@@ -8,8 +8,9 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { type Device, paths } from "./config";
-import { fmtIn, parseCollector, parseTransferLine, type SideState } from "./format";
+import { type Device, loadMachine, paths } from "./config";
+import { fmtIn, parseCollector, parseRunProgress, parseTransferLine, type SideState } from "./format";
+import { pairLabels } from "./run";
 
 function run(command: string, args: string[], options: { input?: string; timeout?: number } = {}): string | null {
   try {
@@ -108,6 +109,11 @@ export function collectDevice(device: Device): SideState {
   return collectRemote(device);
 }
 
+/** The pass line belongs in `status` only while a runner is alive. */
+export function showRunProgress(runnerPid: string | null, plan: string[]): boolean {
+  return Boolean(runnerPid) && plan.length > 0;
+}
+
 export function collectLocal(): SideState {
   const at = Date.now();
   const p = paths();
@@ -133,6 +139,18 @@ export function collectLocal(): SideState {
 
   const runnerPid = run("pgrep", ["-f", RUNNER_PATTERN]);
   const rclonePid = run("pgrep", ["-f", "rclone sync"]);
+  const machine = loadMachine(p);
+  const plan = pairLabels(machine.targets, machine.destinations);
+  // Only while a runner is alive: a killed pass leaves no `raccache done` line, so
+  // an elapsed pair with nothing running would read as a hung backup.
+  if (showRunProgress(runnerPid, plan)) {
+    try {
+      const progress = parseRunProgress(readFileSync(p.log, "utf8"), plan);
+      if (progress) info.push(`run     ${progress}`);
+    } catch {
+      // no log yet
+    }
+  }
   if (runnerPid || rclonePid) info.push(`running  run=${runnerPid ?? "-"} rclone=${rclonePid ?? "-"}`);
 
   if (runnerPid || rclonePid) {

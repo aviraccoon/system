@@ -5,7 +5,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { loadMachine, type Paths, paths, type Settings, type Target } from "./config";
+import { type Destination, loadMachine, type Paths, paths, type Settings, type Target } from "./config";
 import { buildFilters, type FilterResult, type RepoIgnores, renderFilter } from "./filters";
 import { guardVerdict, observe } from "./guards";
 import { acquireLock, releaseLock } from "./lock";
@@ -65,6 +65,22 @@ export function logLinesSince(file: string, offset: number): string[] {
   } catch {
     return [];
   }
+}
+
+/** Destination/target pairs for a pass, in the order the runner walks them. */
+export function pairLabels(targets: Target[], destinations: Destination[]): string[] {
+  return targets.flatMap((target) => destinations.map((destination) => `${destination.name}/${target.dest}`));
+}
+
+/** One line per destination, so a per-target failure still ends every pair it covers. */
+export function pairMessages(destinations: Destination[], targetDest: string, message: string): string[] {
+  return destinations.map((destination) => `${destination.name}/${targetDest} ${message}`);
+}
+
+/** The start line carries the pass's own pairs, so a narrowed run reports its scope. */
+export function startLine(planned: string[], dryRun: boolean): string {
+  const count = `${planned.length} pair${planned.length === 1 ? "" : "s"}${dryRun ? ", dry run" : ""}`;
+  return `raccache start (${count}: ${planned.join(", ")})`;
 }
 
 export async function runBackup(options: RunOptions = {}): Promise<number> {
@@ -134,20 +150,20 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
     if (options.only && targets.length === 0) return fail(`no target named '${options.only}'`);
     if (options.destination && destinations.length === 0) return fail(`no destination named '${options.destination}'`);
 
-    const scope = `${targets.length} target${targets.length === 1 ? "" : "s"} x ${destinations.length} destination${destinations.length === 1 ? "" : "s"}`;
-    log(`raccache start (${scope}${options.dryRun ? ", dry run" : ""})`);
+    const planned = pairLabels(targets, destinations);
+    log(startLine(planned, options.dryRun === true));
     const startTs = Date.now();
     let rc = 0;
     const pairs: Array<{ label: string; counts: Counts }> = [];
 
     for (const target of targets) {
       if (!existsSync(target.src)) {
-        log(`${target.dest} SKIPPED (missing): ${target.src}`);
+        for (const line of pairMessages(destinations, target.dest, `SKIPPED (missing): ${target.src}`)) log(line);
         continue;
       }
       const midRun = guards();
       if (!midRun.ok) {
-        log(`${target.dest} ABORTED: ${midRun.reason}`);
+        for (const line of pairMessages(destinations, target.dest, `ABORTED: ${midRun.reason}`)) log(line);
         rc = 1;
         continue;
       }
@@ -156,7 +172,8 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
       try {
         filter = generateFilter(target, settings, p);
       } catch (error) {
-        log(`${target.dest} FAILED to build filters: ${error instanceof Error ? error.message : String(error)}`);
+        const detail = error instanceof Error ? error.message : String(error);
+        for (const line of pairMessages(destinations, target.dest, `FAILED to build filters: ${detail}`)) log(line);
         rc = 1;
         continue;
       }
@@ -164,7 +181,8 @@ export async function runBackup(options: RunOptions = {}): Promise<number> {
       if (filter.rules.errors.length > 0) {
         // An exclusion the config asked for cannot be honored; uploading with
         // the rules that remain would be silent data loss of intent.
-        log(`${target.dest} FAILED: ${filter.rules.errors.join("; ")}`);
+        const detail = `FAILED: ${filter.rules.errors.join("; ")}`;
+        for (const line of pairMessages(destinations, target.dest, detail)) log(line);
         rc = 1;
         continue;
       }

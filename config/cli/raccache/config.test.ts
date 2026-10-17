@@ -44,6 +44,14 @@ describe("parseDestinations", () => {
     const text = `[[destination]]\nname = "a"\nremote = "x:1"\n\n[[destination]]\nname = "a"\nremote = "y:2"\n`;
     expect(parseDestinations(text, "h").errors[0]).toContain("duplicate name");
   });
+
+  test("rejects a comma in a name, which the start line uses as its separator", () => {
+    expect(parseDestinations(`[[destination]]\nname = "b2,lon"\nremote = "x:1"\n`, "h").errors[0]).toContain("comma");
+  });
+
+  test("rejects whitespace, which the pass line uses as a field boundary", () => {
+    expect(parseDestinations(`[[destination]]\nname = "b 2"\nremote = "x:1"\n`, "h").errors[0]).toContain("whitespace");
+  });
 });
 
 describe("parseDevices", () => {
@@ -94,5 +102,21 @@ describe("loadMachine", () => {
     expect(machine.devices).toHaveLength(1);
     expect(machine.devices[0]?.local).toBe(true);
     expect(machine.targets[0]?.src).toBe("/home/example/dev");
+  });
+
+  test("a comma in a target dest is refused", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "targets.toml"), `[[target]]\ndest = "dev,tmp"\nsrc = "~/dev"\n`);
+    const machine = loadMachine(paths({ dir, home: "/home/example" }), "/home/example");
+    expect(machine.errors.join(" ")).toContain("comma");
+    expect(machine.targets).toHaveLength(0);
+  });
+
+  test("whitespace in a target dest is refused", () => {
+    const dir = tempDir();
+    writeFileSync(join(dir, "targets.toml"), `[[target]]\ndest = "my dev"\nsrc = "~/dev"\n`);
+    const machine = loadMachine(paths({ dir, home: "/home/example" }), "/home/example");
+    expect(machine.errors.join(" ")).toContain("whitespace");
+    expect(machine.targets).toHaveLength(0);
   });
 });

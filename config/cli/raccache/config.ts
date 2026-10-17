@@ -192,6 +192,8 @@ export function validateTarget(raw: unknown, home = homedir()): { target?: Targe
   }
   const dest = raw.dest;
   if (typeof dest !== "string" || !dest) return { error: "missing 'dest'" };
+  if (dest.includes(",")) return { error: "dest must not contain a comma" };
+  if (/\s/.test(dest)) return { error: "dest must not contain whitespace" };
   if (dest.startsWith("/") || dest.includes("\\")) return { error: `dest '${dest}' must be a relative path` };
   const parts = dest.split("/");
   if (parts.some((part) => !part || part === "." || part === ".."))
@@ -245,6 +247,8 @@ export function validateDestination(raw: unknown, host: string): { destination?:
   }
   const name = raw.name;
   if (typeof name !== "string" || !name) return { error: "missing 'name'" };
+  if (name.includes(",")) return { error: "name must not contain a comma" };
+  if (/\s/.test(name)) return { error: "name must not contain whitespace" };
   const remote = raw.remote;
   if (typeof remote !== "string" || !remote.includes(":"))
     return { error: `remote '${String(remote)}' must look like remote:path` };
