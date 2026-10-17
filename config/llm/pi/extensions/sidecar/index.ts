@@ -7,7 +7,8 @@
  *
  * Keybindings (role list):
  *   Enter: select role → model picker
- *   r: reset all roles to defaults
+ *   Ctrl+R: reset all roles to defaults
+ *   Ctrl+D: sync all roles to the main model
  *   Ctrl+C / Esc: cancel
  *
  * Keybindings (model picker):
@@ -18,7 +19,7 @@
  *   Ctrl+X: remove all (or all filtered) from chain
  *   Ctrl+P: toggle by provider
  *   Ctrl+S: save to roles.local.json
- *   r: reset role to defaults
+ *   Ctrl+R: reset role to defaults
  *   Ctrl+C / Esc: back to role list (or clear search)
  */
 
@@ -226,8 +227,8 @@ export default function sidecarCommand(pi: ExtensionAPI) {
 
         function updateFooter() {
           if (screen === "roles") {
-            const syncText = hasDefaultModel ? "  ·  d sync to main" : "";
-            footerText.setText(theme.fg("dim", `  Enter select  ·  r reset all${syncText}  ·  Esc cancel`.trim()));
+            const syncText = hasDefaultModel ? "  ·  ^D sync to main" : "";
+            footerText.setText(theme.fg("dim", `  Enter select  ·  ^R reset all${syncText}  ·  Esc cancel`.trim()));
             return;
           }
 
@@ -239,7 +240,7 @@ export default function sidecarCommand(pi: ExtensionAPI) {
             "^X clear",
             "^P provider",
             "Alt+↑↓ reorder",
-            "r reset",
+            "^R reset",
             `^S save`,
             `${chainCount} in chain`,
           ];
@@ -587,12 +588,12 @@ export default function sidecarCommand(pi: ExtensionAPI) {
                 switchToModels();
                 return;
               }
-              if (matchesKey(data, "r")) {
+              if (matchesKey(data, Key.ctrl("r"))) {
                 resetAllRoles();
                 return;
               }
-              // d: set all roles to use the default/main model
-              if (hasDefaultModel && matchesKey(data, "d")) {
+              // Ctrl+D: set all roles to use the default/main model
+              if (hasDefaultModel && matchesKey(data, Key.ctrl("d"))) {
                 // Find the default model in available models to get its provider
                 const match = allModels.find((m) => m.modelId === defaultModel);
                 if (!match) {
@@ -713,8 +714,8 @@ export default function sidecarCommand(pi: ExtensionAPI) {
               return;
             }
 
-            // r - Reset role to defaults
-            if (matchesKey(data, "r")) {
+            // Ctrl+R - Reset role to defaults
+            if (matchesKey(data, Key.ctrl("r"))) {
               resetRole();
               return;
             }

@@ -109,7 +109,7 @@ Per-model `requestParams` in roles.json controls thinking behavior and sampling 
 - `vision`: `thinking_budget: 1024` -- capped thinking for better image descriptions
 - All three roles also set `temperature: 0.7, top_p: 0.8, top_k: 20` for concise non-thinking output (vs global defaults of temp=0.6, top_p=0.95, top_k=20 for precise coding)
 
-The sidecar's `/sidecar-models` command has a `d` keybinding that syncs all role chains to use the same model as the main conversation (read from `settings.json` `defaultModel`). Config mutations call `reloadConfig()` to invalidate the model-roles cache so permission-gate picks up changes immediately.
+The sidecar's `/sidecar-models` command has a `Ctrl+D` keybinding that syncs all role chains to use the same model as the main conversation (read from `settings.json` `defaultModel`). Config mutations call `reloadConfig()` to invalidate the model-roles cache so permission-gate picks up changes immediately.
 
 ### oMLX model management
 

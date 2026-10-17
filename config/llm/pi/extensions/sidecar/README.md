@@ -16,7 +16,8 @@ Opens a two-screen UI:
 
 **Role list:**
 - `Enter` — select role → model picker
-- `r` — reset all roles to defaults
+- `Ctrl+R` — reset all roles to defaults
+- `Ctrl+D` — sync all roles to the main model
 - `Ctrl+C` / `Esc` — cancel
 
 **Model picker** (matches `/scoped-models` conventions):
@@ -27,11 +28,12 @@ Opens a two-screen UI:
 - `Ctrl+X` — remove all (or all filtered) from chain
 - `Ctrl+P` — toggle all models from same provider
 - `Ctrl+S` — save to `roles.local.json`
-- `r` — reset this role to defaults
+- `Ctrl+R` — reset this role to defaults
 - `Ctrl+C` — clear search or back to role list
 - `Esc` — back to role list
 
-Type in the search box to fuzzy-filter models by name, ID, or provider.
+Type in the search box to fuzzy-filter models by name, ID, or provider. Every printable character is
+free for the query: no command is on a bare printable key.
 
 ## Thinking levels
 
@@ -45,7 +47,7 @@ runs. A non-reasoning model has only `off`; `xhigh` and `max` appear only when t
 (When the model is momentarily missing from the catalog, every level is offered rather than locking
 the setting.)
 
-Adding a model reuses its saved entry, so removing and re-adding it (or `d`, which syncs every role to
+Adding a model reuses its saved entry, so removing and re-adding it (or `Ctrl+D`, which syncs every role to
 the main model) keeps its level.
 
 ### `enable_thinking: false` pins
