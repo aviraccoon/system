@@ -18,13 +18,34 @@ let
   owner = config.user.name;
 in
 {
-  sops.secrets.raccache_r2_access_key_id = { inherit sopsFile owner; key = "r2_access_key_id"; };
-  sops.secrets.raccache_r2_secret_access_key = { inherit sopsFile owner; key = "r2_secret_access_key"; };
-  sops.secrets.raccache_b2_account = { inherit sopsFile owner; key = "b2_account"; };
-  sops.secrets.raccache_b2_key = { inherit sopsFile owner; key = "b2_key"; };
-  sops.secrets.raccache_crypt_password = { inherit sopsFile owner; key = "crypt_password"; };
-  sops.secrets.raccache_crypt_password2 = { inherit sopsFile owner; key = "crypt_password2"; };
-  sops.secrets.raccache_ntfy_url = { inherit sopsFile owner; key = "ntfy_url"; };
+  sops.secrets.raccache_r2_access_key_id = {
+    inherit sopsFile owner;
+    key = "r2_access_key_id";
+  };
+  sops.secrets.raccache_r2_secret_access_key = {
+    inherit sopsFile owner;
+    key = "r2_secret_access_key";
+  };
+  sops.secrets.raccache_b2_account = {
+    inherit sopsFile owner;
+    key = "b2_account";
+  };
+  sops.secrets.raccache_b2_key = {
+    inherit sopsFile owner;
+    key = "b2_key";
+  };
+  sops.secrets.raccache_crypt_password = {
+    inherit sopsFile owner;
+    key = "crypt_password";
+  };
+  sops.secrets.raccache_crypt_password2 = {
+    inherit sopsFile owner;
+    key = "crypt_password2";
+  };
+  sops.secrets.raccache_ntfy_url = {
+    inherit sopsFile owner;
+    key = "ntfy_url";
+  };
 
   sops.templates."raccache.env" = {
     inherit owner;

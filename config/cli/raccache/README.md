@@ -25,7 +25,7 @@ All of it lives in `~/.config/raccache/` and never in this repo.
 | `destinations.toml` | `[[destination]]` rows: `name`, `remote` (`{host}` expands to the short hostname), `mode` (`mirror` deletes, `copy` only adds), `flags` (extra rclone flags for provider quirks). |
 | `devices.toml` | `[[device]]` rows: `name`, then either `local = true` or `ssh = "host"`. `units = [{ unit, log }]` marks a device whose jobs are systemd units, read through `remote.sh`. |
 | `ignore` | Whole trees excluded from every target, one `$HOME`-relative pattern per line (`dev/reference/**`). |
-| `env` | Optional `RCLONE_CONFIG_*` overrides. Read after `/run/secrets/raccache.env`. |
+| `env` | Optional `RCLONE_CONFIG_*` overrides. Read after `/run/secrets/rendered/raccache.env`. |
 | `pause` | Present = `run` skips. |
 | `ntfy-url` | Notification topic; `RACCACHE_NTFY_URL` wins over it. |
 
@@ -51,7 +51,7 @@ hidden-file lifecycle. `mode = "copy"` never deletes.
 
 ## Secrets
 
-`/run/secrets/raccache.env` is rendered by sops-nix from `secrets/raccache.yaml`
+`/run/secrets/rendered/raccache.env` is rendered by sops-nix from `secrets/raccache.yaml`
 (see `modules/darwin/raccache.nix`): the rclone credentials as
 `RCLONE_CONFIG_<REMOTE>_<KEY>` values plus `RACCACHE_NTFY_URL`. The runner passes
 them to rclone, which lets the remote's *shape* stay in `~/.config/rclone` while

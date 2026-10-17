@@ -150,7 +150,7 @@ export function loadSettings(configDirPath = configDir()): { settings: Settings;
   return { settings, warnings: parsed.warnings };
 }
 
-/** `~/.config/raccache/env`: KEY=value lines, written by sops-nix or by hand. */
+/** `~/.config/raccache/env`: KEY=value lines, written by hand. */
 export function parseEnvFile(text: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const raw of text.split("\n")) {
@@ -174,10 +174,10 @@ export function loadEnvFile(file: string): Record<string, string> {
 
 /**
  * Where sops-nix renders the rclone credentials (RCLONE_CONFIG_* values) and
- * the ntfy URL. The machine-local env file is read on top, so an unmanaged
- * machine can override any value by hand.
+ * the ntfy URL — `sops.templates` lands under `rendered/`. The machine-local
+ * env file is read on top, so an unmanaged machine can override any value.
  */
-export const SECRETS_ENV = "/run/secrets/raccache.env";
+export const SECRETS_ENV = "/run/secrets/rendered/raccache.env";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
