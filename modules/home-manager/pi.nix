@@ -169,6 +169,8 @@ in
           # replaces it), so listing one here does not drop the rest. Covers both main
           # models and the sidecar (roles.local.json routes sidecar roles through this
           # builtin provider).
+          # The ZDR policy is enforced in the OpenRouter account settings; openRouterRouting
+          # only adds the request-level assertion on top of it.
           # Per-model routing tweaks (e.g. sort/throughput floors) live in modelOverrides.
           openrouter = {
             tags = [
