@@ -31,6 +31,19 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
+import {
+  ENDPOINT_CACHE_TTL,
+  fetchModelEndpoints,
+  fetchZdrCatalog,
+  isZdrEndpoint,
+  type OREndpoint,
+  type OrCatalogLog,
+  pickRoutable,
+  readCache,
+  slugify,
+  writeCache,
+  type ZdrCatalog,
+} from "../config/llm/pi/extensions/shared/or-catalog";
 
 // ── ANSI helpers ──
 
@@ -224,28 +237,13 @@ function getAAKey(): string {
 
 // ── Data fetching (with file cache) ──
 
-const CACHE_DIR = join(homedir(), ".cache", "model-scan");
-const CACHE_TTL = 1000 * 60 * 60 * 6; // 6 hours
-const ENDPOINT_CACHE_TTL = 1000 * 60 * 15; // 15 min — endpoint perf/availability drifts fast
-
-function readCache<T>(name: string, ttlMs = CACHE_TTL): T | null {
-  const p = join(CACHE_DIR, `${name}.json`);
-  if (!existsSync(p)) return null;
-  try {
-    const fs = require("node:fs");
-    const s = fs.statSync(p);
-    if (Date.now() - s.mtimeMs > ttlMs) return null;
-    return JSON.parse(fs.readFileSync(p, "utf-8")) as T;
-  } catch {
-    return null;
-  }
-}
-
-function writeCache(name: string, data: unknown): void {
-  const fs = require("node:fs");
-  fs.mkdirSync(CACHE_DIR, { recursive: true });
-  fs.writeFileSync(join(CACHE_DIR, `${name}.json`), JSON.stringify(data));
-}
+/** Color and `-q` policy for the shared OpenRouter fetchers. */
+const orLog: OrCatalogLog = {
+  info: (m) => {
+    if (!modeQuiet) process.stderr.write(`${DIM}${m}${RESET}\n`);
+  },
+  warn: (m) => process.stderr.write(`${YELLOW}${m}${RESET}\n`),
+};
 
 async function fetchORModels(): Promise<ORModel[]> {
   const cached = readCache<ORModel[]>("or-models");
@@ -327,10 +325,7 @@ function loadPiConfig(): PiModelsFile | null {
  * and OR namespaces disagree with creator names anyway (meta vs meta-llama), so
  * it is only a preference — the coding-index match carries the misses. */
 function creatorNamespace(name: string | undefined): string {
-  return (name ?? "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "");
+  return slugify(name ?? "");
 }
 
 function buildAALookup(aaModels: AAModel[]): Map<string, AAModel> {
@@ -790,7 +785,7 @@ async function discover(): Promise<void> {
   const [orModels, zdrIds, zdrCatalog, aaModels] = await Promise.all([
     fetchORModels(),
     fetchORUserModels(orKey),
-    fetchZdrCatalog(orKey),
+    fetchZdrCatalog({ key: orKey, log: orLog }),
     fetchAAModels(aaKey),
   ]);
 
@@ -1163,37 +1158,7 @@ async function drift(): Promise<void> {
 
 // ── Endpoints mode ──
 
-interface OREndpoint {
-  name: string;
-  model_id?: string;
-  provider_name: string;
-  tag: string;
-  quantization: string | null;
-  status: number;
-  context_length: number;
-  is_byok: boolean;
-  pricing: { prompt: string; completion: string; input_cache_read?: string; input_cache_write?: string };
-  throughput_last_30m: { p50: number; p75: number; p90: number; p99: number } | null;
-  latency_last_30m: { p50: number; p75: number; p90: number; p99: number } | null;
-  uptime_last_5m: number | null;
-  uptime_last_30m: number | null;
-  uptime_last_1d: number | null;
-}
-
-interface ZdrCatalog {
-  byModel: Map<string, OREndpoint[]>;
-  zdr: Set<string>; // model_id|tag
-  tags: Set<string>; // tag-only fallback
-}
-
 type ZdrInfo = ZdrCatalog;
-
-interface EndpointFetch {
-  slug: string;
-  id: string;
-  name: string;
-  eps: OREndpoint[];
-}
 
 const RANGE_LABELS: Record<string, string> = {
   "": "today",
@@ -1273,14 +1238,6 @@ function priceStats(values: number[]): { med: number; avg: number; n: number } |
   return { med: median(finite), avg: mean(finite), n: finite.length };
 }
 
-/** Routable-for-us endpoints: up, and ZDR-compliant when the ZDR list loaded. */
-function pickRoutable(eps: OREndpoint[], zdrInfo: ZdrInfo): OREndpoint[] {
-  const zdrKnown = zdrInfo.tags.size > 0;
-  const isZdr = (e: OREndpoint): boolean =>
-    (e.model_id != null && zdrInfo.zdr.has(`${e.model_id}|${e.tag}`)) || zdrInfo.tags.has(e.tag);
-  return eps.filter((e) => e.status === 0 && (!zdrKnown || isZdr(e)));
-}
-
 /** "Effective pricing" summary lines; empty summaries = no traffic → say so. */
 function effLines(eff: EffPricing | null): string[] {
   if (!eff) return [`  ${DIM}effective pricing: unavailable${RESET}`];
@@ -1308,160 +1265,7 @@ function effLines(eff: EffPricing | null): string[] {
   return lines;
 }
 
-/** Index the catalog for ZDR checks: (model_id, tag) pairs with a tag-only
- * fallback, plus endpoints grouped by model. */
-function buildZdrCatalog(endpoints: OREndpoint[]): ZdrCatalog {
-  const zdr = new Set<string>();
-  const tags = new Set<string>();
-  const byModel = new Map<string, OREndpoint[]>();
-  for (const e of endpoints) {
-    if (e.model_id && e.tag) zdr.add(`${e.model_id}|${e.tag}`);
-    if (e.tag) tags.add(e.tag);
-    if (e.model_id) {
-      const list = byModel.get(e.model_id);
-      if (list) list.push(e);
-      else byModel.set(e.model_id, [e]);
-    }
-  }
-  return { byModel, zdr, tags };
-}
-
-// ZDR is provider-level: each endpoint's provider data policy decides whether
-// prompts are retained. /endpoints/zdr returns every endpoint that survives
-// ZDR enforcement, pricing and live status included — the default mode prices
-// from it, the endpoints mode takes its ZDR column from it.
-
-/** Catalog row shape: a non-null object with a tag and a prompt price. */
-function catalogRowOk(row: unknown): boolean {
-  const e = row as { pricing?: { prompt?: unknown }; tag?: unknown } | null | undefined;
-  return e != null && typeof e.pricing?.prompt === "string" && typeof e.tag === "string";
-}
-
-/** Non-empty array of well-formed catalog rows (cached or fetched). */
-function isZdrPayload(rows: unknown): rows is OREndpoint[] {
-  return Array.isArray(rows) && rows.length > 0 && rows.every(catalogRowOk);
-}
-
-async function fetchZdrCatalog(key: string): Promise<ZdrCatalog> {
-  const empty = (): ZdrCatalog => buildZdrCatalog([]);
-  const cached = readCache<{ endpoints?: OREndpoint[] }>("or-zdr-endpoints", ENDPOINT_CACHE_TTL);
-  const cachedEndpoints = cached?.endpoints;
-  if (isZdrPayload(cachedEndpoints)) {
-    if (!modeQuiet) process.stderr.write(`${DIM}Using cached ZDR endpoint catalog${RESET}\n`);
-    return buildZdrCatalog(cachedEndpoints);
-  }
-  if (!modeQuiet) process.stderr.write(`${DIM}Fetching ZDR-compliant endpoints...${RESET}\n`);
-  let res: Response;
-  try {
-    res = await fetch("https://openrouter.ai/api/v1/endpoints/zdr", {
-      headers: { Authorization: `Bearer ${key}` },
-    });
-  } catch {
-    process.stderr.write(`${YELLOW}Warning: could not fetch /endpoints/zdr (network) — ZDR data omitted.${RESET}\n`);
-    return empty();
-  }
-  if (!res.ok) {
-    process.stderr.write(
-      `${YELLOW}Warning: /endpoints/zdr failed (HTTP ${res.status}) — requires auth; using provided key. ZDR data omitted.${RESET}\n`,
-    );
-    return empty();
-  }
-  let data: unknown;
-  try {
-    data = (await res.json()) as { data?: unknown };
-  } catch {
-    process.stderr.write(`${YELLOW}Warning: /endpoints/zdr returned non-JSON — ZDR data omitted.${RESET}\n`);
-    return empty();
-  }
-  const arr = (data as { data?: unknown }).data;
-  if (!isZdrPayload(arr)) {
-    process.stderr.write(
-      `${YELLOW}Warning: /endpoints/zdr returned an unexpected payload — ZDR data omitted.${RESET}\n`,
-    );
-    return empty();
-  }
-  writeCache("or-zdr-endpoints", { endpoints: arr });
-  return buildZdrCatalog(arr);
-}
-
-async function fetchModelEndpoints(slug: string, key: string): Promise<EndpointFetch> {
-  const cacheKey = `or-endpoints-${slug.replace(/\//g, "__")}`;
-  const cached = readCache<EndpointFetch>(cacheKey, ENDPOINT_CACHE_TTL);
-  if (cached?.eps?.length) {
-    if (!modeQuiet) process.stderr.write(`${DIM}Using cached endpoints for ${slug}${RESET}\n`);
-    return cached;
-  }
-  const [author, model] = slug.split("/");
-  if (!author || !model) {
-    throw new Error(`-e expects "author/slug", got "${slug}" (e.g. deepseek/deepseek-v4-flash-0731)`);
-  }
-  const url = `https://openrouter.ai/api/v1/models/${encodeURIComponent(author)}/${encodeURIComponent(model)}/endpoints`;
-
-  if (!modeQuiet) process.stderr.write(`${DIM}Fetching endpoints for ${slug}...${RESET}\n`);
-  let res: Response;
-  try {
-    res = await fetch(url, { headers: { Authorization: `Bearer ${key}` } });
-  } catch (e) {
-    throw new Error(`network error fetching ${url}: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(
-      `GET ${slug}/endpoints failed: HTTP ${res.status} ${res.statusText}${body ? ` — ${body.slice(0, 300)}` : ""}`,
-    );
-  }
-  let body: unknown;
-  try {
-    body = await res.json();
-  } catch {
-    throw new Error(`GET ${slug}/endpoints returned non-JSON body`);
-  }
-
-  // Structure validation with explicit failure messages.
-  const root = body as { data?: unknown };
-  if (!root.data || typeof root.data !== "object") {
-    throw new Error(`GET ${slug}/endpoints response is missing .data (got ${typeof body})`);
-  }
-  const d = root.data as { endpoints?: unknown; id?: string; name?: string };
-  if (!Array.isArray(d.endpoints)) {
-    throw new Error(`GET ${slug}/endpoints response .data.endpoints is not an array (got ${typeof d.endpoints})`);
-  }
-  if (d.endpoints.length === 0) {
-    throw new Error(
-      `GET ${slug}/endpoints returned an empty endpoints array for ${d.id ?? slug} — model likely has no hosted endpoints`,
-    );
-  }
-
-  const required = [
-    "name",
-    "provider_name",
-    "quantization",
-    "pricing",
-    "throughput_last_30m",
-    "latency_last_30m",
-    "context_length",
-    "status",
-  ] as const;
-  const epsAll = d.endpoints as OREndpoint[];
-  for (const [i, e] of epsAll.entries()) {
-    const missing = required.filter((k) => !(k in e));
-    if (missing.length > 0) {
-      throw new Error(`endpoint[${i}] (${e.name ?? "?"}) missing fields: ${missing.join(", ")}`);
-    }
-    if (
-      typeof e.pricing !== "object" ||
-      e.pricing === null ||
-      typeof e.pricing.prompt !== "string" ||
-      typeof e.pricing.completion !== "string"
-    ) {
-      throw new Error(`endpoint[${i}] (${e.name ?? "?"}) pricing.prompt/completion missing or not strings`);
-    }
-  }
-
-  const fetched: EndpointFetch = { slug, id: d.id ?? slug, name: d.name ?? "", eps: epsAll };
-  writeCache(cacheKey, fetched);
-  return fetched;
-}
+// ── per-model endpoint detail ──
 
 interface EndpointRow {
   Provider: string;
@@ -1525,11 +1329,6 @@ function applyQuant(eps: OREndpoint[], slugForErr: string): OREndpoint[] {
   return filtered;
 }
 
-const isZdrEndpoint =
-  (zdrInfo: ZdrInfo) =>
-  (e: OREndpoint): boolean =>
-    (e.model_id != null && zdrInfo.zdr.has(`${e.model_id}|${e.tag}`)) || zdrInfo.tags.has(e.tag);
-
 interface EndpointTierSet {
   inP: (v: number) => Tier;
   outP: (v: number) => Tier;
@@ -1581,7 +1380,7 @@ function endpointRows(
   scale: number,
 ): EndpointRow[] {
   const zdrKnown = zdrInfo.tags.size > 0;
-  const isZdr = isZdrEndpoint(zdrInfo);
+  const isZdr = (e: OREndpoint) => isZdrEndpoint(zdrInfo, e);
   return filtered
     .slice()
     .sort(
@@ -1625,7 +1424,7 @@ function routingHintLines(
   scale: number,
 ): string[] {
   const zdrKnown = zdrInfo.tags.size > 0;
-  const isZdr = isZdrEndpoint(zdrInfo);
+  const isZdr = (e: OREndpoint) => isZdrEndpoint(zdrInfo, e);
   const healthyBase = filtered.filter((e) => e.status === 0 && e.throughput_last_30m != null);
   const healthy = zdrKnown ? healthyBase.filter(isZdr) : healthyBase;
   const lines: string[] = [];
@@ -1691,7 +1490,7 @@ async function endpoints(): Promise<void> {
   const wl = loadSessionWorkload();
   const wlScale = wl ? WORKLOAD_WINDOW_MS / Math.max(wl.coverMs, 86_400_000) : 1;
   const key = getOpenRouterKey();
-  const zdrInfo = await fetchZdrCatalog(key);
+  const zdrInfo = await fetchZdrCatalog({ key, log: orLog });
 
   // canonical_slug + embedded AA benchmarks come from the public models list.
   const canonBySlug = new Map<string, string>();
@@ -1710,7 +1509,7 @@ async function endpoints(): Promise<void> {
 
   const results = await Promise.all(
     slugs.map(async (s) => {
-      const r = await fetchModelEndpoints(s, key);
+      const r = await fetchModelEndpoints(s, { key, log: orLog });
       r.eps = applyQuant(r.eps, s);
       return r;
     }),
