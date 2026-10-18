@@ -14,6 +14,7 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **journal** | Journal/notes injection at session start, env var overrides |
 | **lsp** | Language server integration -- auto-diagnostics on edit/write, go-to-definition, hover, references, symbols, rename, code actions. Also runs CLI linters |
 | **model-policy** | Per-project model policies based on provider tags. Blocks non-compliant models for sensitive projects (e.g., local/ZDR only) |
+| **or-pin** | `/or-pin` -- pick the OpenRouter upstream provider to pin for the session |
 | **patch** | Tolerant file editing with Unicode/whitespace normalization, anchor disambiguation, multi-file, closest-match diagnostics, atomic all-or-nothing |
 | **permission-gate** | Confirmation dialog for tool calls with LLM-generated safety verdicts and auto-classify |
 | **sandbox-bash** | Read-only Seatbelt shell -- `bash_readonly` in the main session, `bash` replaced in agents that opt in |

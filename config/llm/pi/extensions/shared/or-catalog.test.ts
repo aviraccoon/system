@@ -152,6 +152,21 @@ describe("file cache", () => {
     expect(oc.readCache("stale", 60 * 15 * 1000)).toBeNull();
     expect(oc.readCache<{ v: number }>("stale", 60 * 120 * 1000)).toEqual({ v: 1 });
   });
+
+  test("reports an entry's age, and nothing for an absent one", () => {
+    expect(oc.cacheAgeMs("never-written")).toBeUndefined();
+    oc.writeCache("aged", { v: 1 });
+    const age = oc.cacheAgeMs("aged");
+    expect(age).toBeGreaterThanOrEqual(0);
+    expect(age).toBeLessThan(60_000);
+  });
+
+  test("an entry stamped in the future reads as zero age, not a negative one", () => {
+    oc.writeCache("future", { v: 1 });
+    const stamp = Date.now() / 1000 + 60;
+    utimesSync(join(oc.cacheDir(), "future.json"), stamp, stamp);
+    expect(oc.cacheAgeMs("future")).toBe(0);
+  });
 });
 
 describe("fetchZdrCatalog", () => {
@@ -165,7 +180,20 @@ describe("fetchZdrCatalog", () => {
     expect(warnings).toEqual([]);
   });
 
-  test("degrades to an empty catalog, with a warning, when there is no cache and no key", async () => {
+  test("fresh skips the cached copy rather than serving it", async () => {
+    oc.writeCache("or-zdr-endpoints", { endpoints: [endpoint()] });
+    const warnings: string[] = [];
+    const catalog = await oc.fetchZdrCatalog({
+      fresh: true,
+      log: { info: () => {}, warn: (m) => warnings.push(m) },
+    });
+    // With no credential a fresh read has nothing to fall back on, so the
+    // cached rows must not appear.
+    expect(catalog.tags.size).toBe(0);
+    expect(warnings).toHaveLength(1);
+  });
+
+  test("warns with the cache's age when the cached payload is unusable", async () => {
     oc.writeCache("or-zdr-endpoints", { endpoints: [] });
     const warnings: string[] = [];
     const catalog = await oc.fetchZdrCatalog({
@@ -173,7 +201,21 @@ describe("fetchZdrCatalog", () => {
     });
     expect(catalog.tags.size).toBe(0);
     expect(catalog.zdr.size).toBe(0);
-    expect(warnings).toEqual(["Warning: no OpenRouter credential for /endpoints/zdr — ZDR data omitted."]);
+    expect(warnings).toEqual([
+      "Warning: no OpenRouter credential for /endpoints/zdr — cached copy is 0 min old. ZDR data omitted.",
+    ]);
+  });
+
+  test("says there is no cached copy when the file is absent", async () => {
+    rmSync(join(oc.cacheDir(), "or-zdr-endpoints.json"), { force: true });
+    const warnings: string[] = [];
+    const catalog = await oc.fetchZdrCatalog({
+      log: { info: () => {}, warn: (m) => warnings.push(m) },
+    });
+    expect(catalog.tags.size).toBe(0);
+    expect(warnings).toEqual([
+      "Warning: no OpenRouter credential for /endpoints/zdr — no cached copy. ZDR data omitted.",
+    ]);
   });
 });
 
@@ -182,5 +224,37 @@ describe("fetchModelEndpoints", () => {
     return expect(oc.fetchModelEndpoints("deepseek", { log: silentLog })).rejects.toThrow(
       '-e expects "author/slug", got "deepseek"',
     );
+  });
+
+  test("fresh refetches instead of serving the cached endpoints", async () => {
+    const slug = "acme/model";
+    oc.writeCache(`or-endpoints-${slug.replace(/\//g, "__")}`, {
+      slug,
+      id: slug,
+      name: "cached",
+      eps: [endpoint({ provider_name: "Cached" })],
+    });
+
+    let calls = 0;
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return new Response(
+        JSON.stringify({ data: { id: slug, name: "live", endpoints: [endpoint({ provider_name: "Live" })] } }),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+    try {
+      const fetched = await oc.fetchModelEndpoints(slug, { log: silentLog, fresh: true });
+      expect(calls).toBe(1);
+      expect(fetched.name).toBe("live");
+
+      // Without `fresh` the cached copy answers and the network stays untouched.
+      const cached = await oc.fetchModelEndpoints(slug, { log: silentLog });
+      expect(calls).toBe(1);
+      expect(cached.name).toBe("live");
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

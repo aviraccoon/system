@@ -76,6 +76,20 @@ export function readCache<T>(name: string, ttlMs = CACHE_TTL): T | null {
   }
 }
 
+/** Age of a cache entry in milliseconds, or undefined when it is absent or
+ * unreadable. Lets a caller say why the cached copy is not being used. Clamped
+ * at zero: a file's mtime can sit a fraction of a millisecond ahead of
+ * `Date.now()`, and a negative age would render as "-0 min old". */
+export function cacheAgeMs(name: string): number | undefined {
+  const p = join(cacheDir(), `${name}.json`);
+  if (!existsSync(p)) return undefined;
+  try {
+    return Math.max(0, Date.now() - statSync(p).mtimeMs);
+  } catch {
+    return undefined;
+  }
+}
+
 export function writeCache(name: string, data: unknown): void {
   mkdirSync(cacheDir(), { recursive: true });
   writeFileSync(join(cacheDir(), `${name}.json`), JSON.stringify(data));
@@ -123,18 +137,21 @@ export function pickRoutable(eps: OREndpoint[], zdrInfo: ZdrCatalog): OREndpoint
 /** ZDR is provider-level: each endpoint's provider data policy decides whether
  * prompts are retained. `/endpoints/zdr` returns every endpoint that survives
  * ZDR enforcement, pricing and live status included. It needs a credential;
- * without one this serves the cached copy and degrades to an empty catalog. */
-export async function fetchZdrCatalog(opts: { key?: string; log: OrCatalogLog }): Promise<ZdrCatalog> {
-  const { key, log } = opts;
+ * without one this serves the cached copy and degrades to an empty catalog.
+ * `fresh` skips the cached copy and refetches. */
+export async function fetchZdrCatalog(opts: { key?: string; log: OrCatalogLog; fresh?: boolean }): Promise<ZdrCatalog> {
+  const { key, log, fresh } = opts;
   const empty = (): ZdrCatalog => buildZdrCatalog([]);
-  const cached = readCache<{ endpoints?: OREndpoint[] }>("or-zdr-endpoints", ENDPOINT_CACHE_TTL);
+  const cached = fresh ? null : readCache<{ endpoints?: OREndpoint[] }>("or-zdr-endpoints", ENDPOINT_CACHE_TTL);
   const cachedEndpoints = cached?.endpoints;
   if (isZdrPayload(cachedEndpoints)) {
     log.info("Using cached ZDR endpoint catalog");
     return buildZdrCatalog(cachedEndpoints);
   }
   if (!key) {
-    log.warn("Warning: no OpenRouter credential for /endpoints/zdr — ZDR data omitted.");
+    const age = cacheAgeMs("or-zdr-endpoints");
+    const why = age === undefined ? "no cached copy" : `cached copy is ${Math.round(age / 60_000)} min old`;
+    log.warn(`Warning: no OpenRouter credential for /endpoints/zdr — ${why}. ZDR data omitted.`);
     return empty();
   }
   log.info("Fetching ZDR-compliant endpoints...");
@@ -171,11 +188,11 @@ export async function fetchZdrCatalog(opts: { key?: string; log: OrCatalogLog })
 
 export async function fetchModelEndpoints(
   slug: string,
-  opts: { key?: string; log: OrCatalogLog },
+  opts: { key?: string; log: OrCatalogLog; fresh?: boolean },
 ): Promise<EndpointFetch> {
-  const { key, log } = opts;
+  const { key, log, fresh } = opts;
   const cacheKey = `or-endpoints-${slug.replace(/\//g, "__")}`;
-  const cached = readCache<EndpointFetch>(cacheKey, ENDPOINT_CACHE_TTL);
+  const cached = fresh ? null : readCache<EndpointFetch>(cacheKey, ENDPOINT_CACHE_TTL);
   if (cached?.eps?.length) {
     log.info(`Using cached endpoints for ${slug}`);
     return cached;
