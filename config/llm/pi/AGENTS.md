@@ -122,14 +122,15 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 ### UI methods (`ctx.ui.*`)
 
 - `ctx.ui.custom<T>(factory)` — show a custom keyboard-focused component. Factory receives `(tui, theme, keybindings, done)`. Return an object with `render(width)`, `invalidate()`, `handleInput(data)`. `done(result)` dismisses it. The component can be a flat object (no Container needed) or a class.
+  - **Input reaches only what the factory returns.** `Component.handleInput` is optional, so returning a bare `Container` (which has `render` and `invalidate` but no input handler) type-checks and renders fine while being completely inert — arrow keys, Enter and Esc all do nothing, with no error anywhere. To compose, return a wrapper that delegates: `render`/`invalidate` to the container, `handleInput` to the focused child, then `tui.requestRender()`. `permission-gate/confirm-ui.ts` is the worked example.
 - `ctx.ui.setStatus(key, text)` — add/update a footer status pill. Pass `undefined` as text to remove. Use `ctx.ui.theme.fg("muted", text)` for styling. Keys are unique per extension: `"sidecar"`, `"web-search"`, `"draft"`, `"lsp"`.
 - `ctx.ui.notify(message, type)` — show a toast notification. Types: `"info"`, `"warning"`, `"error"`.
-- `ctx.ui.select(title, options)`, `ctx.ui.confirm(title, message)`, `ctx.ui.input(title, placeholder)` — simple dialog methods for non-complex interactions.
+- `ctx.ui.select(title, options)`, `ctx.ui.confirm(title, message)`, `ctx.ui.input(title, placeholder)` — simple dialog methods for non-complex interactions. `select` **clamps** at both ends (no wrap) and renders every option with no window, and `ExtensionUIDialogOptions` has only `signal`/`timeout`, so neither is configurable. Past roughly a screenful, or when action rows sit at the end of the list, build the picker on `SelectList` instead.
 
 ### pi-tui components (from `@earendil-works/pi-tui`)
 
 - `Input` — single-line text input. Full Component with `render(width)` and `handleInput(data)`. Methods: `getValue()`, `setValue()`. Use directly inside `ctx.ui.custom()` for search boxes instead of hand-rolling filter state.
-- `SelectList` — scrollable selection list. `getSelectedItem()`, `onSelect`, `onCancel`, `setSelectedIndex()`. Note: `setFilter` only matches `value` with `startsWith` — for fuzzy search, use `fuzzyFilter` instead.
+- `SelectList` — scrollable selection list: wraps at both ends (unlike `ctx.ui.select`), windows to the `maxVisible` given to the constructor and shows scroll info, and handles `tui.select.up/down/confirm/cancel` itself. Constructor: `(items: SelectItem[], maxVisible, theme: SelectListTheme, layout?)`. The theme declares five slots but pi 1.3.0 reads four — `renderItem` hardcodes the arrow, so `selectedPrefix` is inert. `or-pin` maps `selectedText` to `accent`, `description` to `muted`, `scrollInfo` to `dim`, `noMatch` to `warning`; the built-in `getSelectListTheme()` maps the last three all to `muted`. Wire `onSelect`/`onCancel` to `done(...)`. `getSelectedItem()`, `setSelectedIndex()`. Note: `setFilter` only matches `value` with `startsWith` — for fuzzy search, use `fuzzyFilter` instead.
 - `Text` — static text display. `setText()`. Constructor: `(text?, paddingLeft?, paddingTop?)`.
 - `Container` — vertical layout container. `addChild()`, `removeChild()`, `clear()`.
 - `Spacer` — vertical spacer. Constructor: `(lines?)`.
@@ -145,6 +146,7 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 ### Patterns to follow
 
 - **Look at existing extensions** before building new UIs. `sidecar/` has a two-screen custom UI with search and toggle (similar to `/scoped-models`). `permission-gate/` has a confirm dialog with diff preview. `web-search/` has tool registration and status. `draft-suggestion/` has widgets and footer status.
+- **A custom component that renders but ignores keys is invisible to `tsc` and to this tree's tests** — `handleInput` is optional on `Component`, and no test drives a TUI. Any `ctx.ui.custom` change therefore needs a reviewer and a live try (`/reload`, then the keys) before it counts as done; `index.ts` wiring has no harness anywhere in this tree. The same holds for mouse: a wrapper that forwards `handleInput` but not `handleMouse` leaves clicks and wheel dead, and offsetting the list inside a bordered container is the caller's job.
 - **Use `ctx.ui.custom()` for complex UIs**, `ctx.ui.select/confirm/input` for simple ones. Don't build a custom component for a single yes/no question.
 - **Prefer `Input` + `fuzzyFilter` over `SelectList`** for searchable model/option lists. `SelectList.setFilter` is too limited for human-friendly search.
 - **Use `ExtensionContext` as the type for `ctx`** in helper functions, not ad-hoc inline types. Import from `@earendil-works/pi-coding-agent`. `ExtensionContext` has `signal: AbortSignal | undefined` for cancelling async work in event handlers.
