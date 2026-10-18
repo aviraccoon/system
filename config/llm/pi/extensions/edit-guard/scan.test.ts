@@ -177,10 +177,36 @@ describe("TODO.md rule", () => {
     ]);
   });
 
-  test("leaves wishlist-word lookalikes alone", () => {
+  test("leaves word-form lookalikes alone", () => {
     expect(scanContent("- the watchdog restarts the daemon", rules)).toHaveLength(0);
-    expect(scanContent("- considered and rejected: the daemon route", rules)).toHaveLength(0);
+    expect(scanContent("- the proposal was considered earlier", rules)).toHaveLength(0);
+    expect(scanContent("- the parser rejects malformed feeds", rules)).toHaveLength(0);
     expect(scanContent("- the optionality is handled by the caller", rules)).toHaveLength(0);
+  });
+
+  test("flags items decided against", () => {
+    expect(
+      labelsOf(
+        scanContent(
+          [
+            "- Catalog-lag overlay: rejected — maintain a provider fork instead",
+            "- decided against the nightly route",
+            "- won't fix the legacy importer",
+            "- won\u2019t fix the pasted-apostrophe case",
+            "- ruled out a separate provider id",
+            "- no-go on the third-party extension",
+          ].join("\n"),
+          rules,
+        ),
+      ),
+    ).toEqual([
+      ["rejected item"],
+      ["decision against (decided against)"],
+      ["decision against (won't do/fix/implement/support)"],
+      ["decision against (won't do/fix/implement/support)"],
+      ["decision against (ruled out)"],
+      ["decision against (no-go)"],
+    ]);
   });
 
   test("leaves sanctioned journal links and future work alone", () => {
@@ -451,6 +477,8 @@ describe("formatViolations", () => {
     // Literal, so deleting the wishlist sentence turns this pin red rather than
     // comparing the policy object to itself.
     expect(block).toContain("otherwise it belongs in the journal");
+    expect(block).toContain("A rejected option is not an item");
+    expect(block).toContain("DELETE the line");
   });
 
   test("a completed call's scan does not read as a block", () => {

@@ -64,6 +64,10 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
       "(commit hashes, landed/shipped references) and keep only what remains. " +
       "A wishlist entry is not an item: 'watch for' needs a trigger or a check date, and 'consider'/'optional'/'if wanted' " +
       "must name the decision and its consequence — otherwise it belongs in the journal. " +
+      "A rejected option is not an item: DELETE the line — a decision against something is recorded in the journal or in the " +
+      "document that owns the rule, and the line itself is neither actionable nor a decision still to make. " +
+      "(A bug report saying code rejected input, like `the parser rejected a bad feed`, is not this — leave it and " +
+      "fix the bug.) " +
       "If a flagged line is genuinely still-open, actionable work, leave it untouched.",
     patterns: [
       { label: "checked checkbox", regex: "^\\s*(?:[-*+]|\\d+[.)])?\\s*\\[[xX]\\]" },
@@ -95,6 +99,20 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
       { label: "wishlist marker (consider)", regex: "\\bconsider\\b", flags: "i" },
       { label: "wishlist marker (optional)", regex: "\\boptional\\b", flags: "i" },
       { label: "wishlist marker (if wanted)", regex: "\\bif wanted\\b", flags: "i" },
+      // Rejected items: a line recording that something was decided against,
+      // left in TODO.md as narration nobody can act on. The policy says to
+      // delete it; the notice is advisory, and a line reporting that code
+      // rejected input is the false-positive class.
+      { label: "rejected item", regex: "\\brejected\\b", flags: "i" },
+      { label: "decision against (decided against)", regex: "\\bdecided against\\b", flags: "i" },
+      {
+        label: "decision against (won't do/fix/implement/support)",
+        // Both apostrophes: agent output is as likely to carry U+2019 as ASCII.
+        regex: "\\bwon['\u2019]?t (?:do|fix|implement|support)\\b",
+        flags: "i",
+      },
+      { label: "decision against (ruled out)", regex: "\\bruled out\\b", flags: "i" },
+      { label: "decision against (no-go)", regex: "\\bno-go\\b", flags: "i" },
     ],
   },
   {
