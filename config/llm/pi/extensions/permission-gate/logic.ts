@@ -45,9 +45,18 @@ export interface GateState {
   allowedPathGlobs: string[];
   toolOverrides: Partial<Record<string, "allow" | "confirm">>;
   /** Exact-match cache: hash of (toolName + full input) -> full explanation result */
-  classifyCache: Map<string, { verdict: RiskVerdict; short: string; detail: string; advice?: number }>;
+  classifyCache: Map<string, ExplanationResult>;
   /** Audit log of auto-allowed calls */
   autoAllowLog: AutoClassifyLog[];
+}
+
+/** Classifier verdict plus the explanation lines, as cached and shown.
+ *  `advices` carries the advice nouls asked alongside the battery. */
+export interface ExplanationResult {
+  verdict: RiskVerdict;
+  short: string;
+  detail: string;
+  advices?: Record<string, number>;
 }
 
 export interface GateDecision {
@@ -473,7 +482,7 @@ export function createInitialState(): GateState {
     allowedPaths: [],
     allowedPathGlobs: [],
     toolOverrides: {},
-    classifyCache: new Map<string, { verdict: RiskVerdict; short: string; detail: string; advice?: number }>(),
+    classifyCache: new Map<string, ExplanationResult>(),
     autoAllowLog: [],
   };
 }

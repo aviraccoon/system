@@ -18,7 +18,7 @@
 
 import { writeFileSync } from "node:fs";
 import { applyEditFloor } from "../extensions/permission-gate/explain";
-import { ADVICE_QUESTION } from "../extensions/shared/advisory";
+import { adviceQuestions, SHELL_ADVICES } from "../extensions/shared/advisory";
 import {
   DEFAULT_DECISIONS_MODEL,
   type DecisionsAnswer,
@@ -57,11 +57,10 @@ const QUESTIONS: Record<string, DecisionsQuestion> = {
   severity: SEVERITY_QUESTION,
 };
 
-/** Mirror the gate: bash states (both shell tools) also answer the
- *  output-capture advisory. */
+/** Mirror the gate: shell states (both shell tools) also answer every shell advice. */
 function questionsFor(state: string): Record<string, DecisionsQuestion> {
   if (!state.startsWith("bash command:") && !state.startsWith("bash_readonly:")) return QUESTIONS;
-  return { ...QUESTIONS, advice: ADVICE_QUESTION };
+  return { ...QUESTIONS, ...adviceQuestions(SHELL_ADVICES) };
 }
 
 function matches(expected: Verdict | Verdict[], got: string): boolean {

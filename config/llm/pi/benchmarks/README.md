@@ -37,13 +37,17 @@ BENCH_SEED=run-a bun run benchmarks/explain.ts
 
 ## Advisory benchmark
 
-`advisory.ts` scores the output-capture question (`extensions/shared/advisory.ts`) over
-`advisory-cases.ts` — the shapes a bash-call advisory should block (long diagnostics filtered or
-silenced instead of captured) or allow (captured-then-read, genuinely small outputs). One request
-per case; the row's noul and the threshold decide block/allow. `BENCH_DUMP` writes the raw noul
-per case, so threshold moves are computed offline over existing dumps. `BENCH_SEED`,
-`BENCH_CONCURRENCY`, `DECISIONS_MODEL` and `DECISIONS_PROVIDER` (default `openrouter-sidecar`)
-apply.
+`advisory.ts` scores one of the two shell-advice questions from `extensions/shared/advisory.ts`
+over `advisory-cases.ts`. With `BENCH_QUESTION` unset it is the output-capture question
+(`output-capture` group): the shapes a bash-call advisory should block (long diagnostics filtered or
+silenced instead of captured) or allow (captured-then-read, genuinely small outputs). With
+`BENCH_QUESTION=patch` it is the patch reminder (`patch-reminder` group): shell rewrites that should
+carry a note (an inline script, `tee`, a redirect over the file) or stay quiet (a container or remote
+file, a new file, a bulk transform, scratch). One request per case; the row's noul and the advice's
+threshold decide the outcome — the advice's action when it fires, `allow` when it does not.
+`BENCH_DUMP` writes the raw noul per case, so threshold moves are computed offline over existing
+dumps. `BENCH_SEED`, `BENCH_GROUP`, `BENCH_CONCURRENCY`, `DECISIONS_MODEL` and
+`DECISIONS_PROVIDER` (default `openrouter-sidecar`) apply.
 
 ## Speed
 

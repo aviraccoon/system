@@ -15,7 +15,7 @@ import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, KeybindingsManager } from "@earendil-works/pi-tui";
 import { Container, Editor, matchesKey, type SelectItem, SelectList, Text, type TUI } from "@earendil-works/pi-tui";
 import { ScrollableText } from "../shared/scrollable-text";
-import type { RiskVerdict } from "./logic";
+import type { ExplanationResult, RiskVerdict } from "./logic";
 
 export interface ConfirmResult {
   choice: string | null;
@@ -27,14 +27,6 @@ export interface ConfirmResult {
 }
 
 export type ExplanationVerdict = RiskVerdict;
-
-export interface ExplanationResult {
-  verdict: ExplanationVerdict;
-  short: string;
-  detail: string;
-  /** The output-capture advisory's noul, when the call is a shell command. */
-  advice?: number;
-}
 
 export interface ExplanationProvider {
   /** Resolves with the first usable result (factor scores when available). */

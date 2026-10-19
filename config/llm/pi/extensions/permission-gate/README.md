@@ -50,13 +50,21 @@ answers a battery of independent yes/no risk factors and the verdict comes from
 thresholds in code — the factors and policy live in `shared/risk-factors.ts`,
 shared with the benchmarks that measure them. A severity `score` rides the same
 request: a call scored above 2.5 (past serious harm) is dangerous even when no
-dangerous factor fired. Shell calls (`bash`, `bash_readonly`) answer one more
-question on the same request — the output-capture advisory: a long diagnostic
-(tests, build, typecheck gate) whose output is only filtered or discarded gets
-blocked with a capture rewrite when it would have been auto-allowed; the score
-rides the classification entry either way. The `explain` role still writes
-the human sentence; both run in parallel, so the dialog shows the sentence and
-the fired factors with their probabilities on one line, and `Ctrl+E` adds the
+dangerous factor fired. Shell calls answer two more questions on the same
+request: output-capture and the patch reminder. The output-capture advisory blocks
+a long diagnostic (tests, build, typecheck gate) whose output is only filtered or
+discarded, with a capture rewrite, when it would have been auto-allowed. The
+patch reminder appends a note to the tool result when the call rewrote an
+existing file through the shell instead of the `patch` tool — an inline
+interpreter script, `tee`, a redirect over the file — unless the file is out of
+the edit tools' reach (`docker exec`, `ssh`, `kubectl exec`), or the call created
+a new file (a heredoc-written script included), ran a formatter or other bulk
+transform the edit tools cannot reproduce, wrote scratch or generated output, or
+only read. Both scores ride the classification entry. edit-guard still blocks the
+two shapes it can see in the command text (`sed -i`, `perl -i`); the question
+covers what a pattern list cannot. The `explain` role still writes the human
+sentence; both run in parallel, so the dialog shows the sentence and the fired
+factors with their probabilities on one line, and `Ctrl+E` adds the
 factor list against the thresholds plus the longer explanation.
 
 The state a classifier reads is a header plus an excerpt of what the call writes. The
@@ -217,8 +225,9 @@ Status bar shows `+tirith` when active.
 - `edit-preview.ts` — Real diff and change summary for write/edit calls, used by the dialog and the classifier
 - `edit-match.ts` — Edit matcher vendored from pi, so previews match what the edit will do
 - `tirith.ts` — Tirith verdict mapping (block/warn, coverage gaps, LLM note)
+- `result-notes.ts` — Resolves a result's note (staged text plus an in-flight classification), with no pi imports
 - `confirm-ui.ts` — Custom TUI component (SelectList + Editor note field + explanation display)
-- `index.ts` — Pi extension wrapper (UI, events, auto-classify, user-message notes, tirith tool_result injection)
+- `index.ts` — Pi extension wrapper (UI, events, auto-classify, user-message notes, tool_result note injection)
 
 ## Known limitations
 

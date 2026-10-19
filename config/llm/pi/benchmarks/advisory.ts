@@ -1,25 +1,21 @@
 /**
- * Advisory benchmark: the output-capture question over its own case group.
+ * Advisory benchmark: one typed noul per case, no risk battery.
  *
  * Run: BENCH_SEED=run-a bun run benchmarks/advisory.ts
+ *      BENCH_QUESTION=patch BENCH_SEED=patch-a bun run benchmarks/advisory.ts
  *
- * One typed noul per case — no risk battery. The answer at ADVICE_BLOCK_THRESHOLD
- * is the block decision, scored against the case's expected block/allow.
- * BENCH_DUMP writes the raw noul per case for offline threshold sweeps.
- * BENCH_GROUP selects a subset (every advisory case carries the
- * `output-capture` group).
+ * The answer at the selected advice's threshold is the decision — its own
+ * action when it fires, `allow` when it does not — scored against each case's
+ * expectation. BENCH_DUMP writes the raw noul per case for offline threshold
+ * sweeps. BENCH_GROUP selects a subset; every case carries its question's group
+ * name (`output-capture`, `patch-reminder`).
  */
 
 import { writeFileSync } from "node:fs";
-import { ADVICE_QUESTION, adviceBlocks } from "../extensions/shared/advisory";
-import {
-  DEFAULT_DECISIONS_MODEL,
-  type DecisionsAnswer,
-  type DecisionsQuestion,
-  decisionsComplete,
-} from "../extensions/shared/decisions";
-import { type AdviceOutcome, buildAdvisoryTests } from "./advisory-cases";
-import { makeFixture } from "./explain-cases";
+import { adviceByName, adviceFires, adviceQuestions } from "../extensions/shared/advisory";
+import { DEFAULT_DECISIONS_MODEL, type DecisionsAnswer, decisionsComplete } from "../extensions/shared/decisions";
+import { type AdviceOutcome, buildAdvisoryTests, buildPatchReminderTests } from "./advisory-cases";
+import { type Fixture, makeFixture } from "./explain-cases";
 import { fmt, mapWithConcurrency, resolveProviderKey, selectTests, type TestCase } from "./shared";
 
 const MODEL = process.env.DECISIONS_MODEL ?? DEFAULT_DECISIONS_MODEL;
@@ -28,7 +24,20 @@ const MODEL = process.env.DECISIONS_MODEL ?? DEFAULT_DECISIONS_MODEL;
 const PROVIDER = process.env.DECISIONS_PROVIDER ?? "openrouter-sidecar";
 const CONCURRENCY = Number(process.env.BENCH_CONCURRENCY ?? 6);
 
-const QUESTIONS: Record<string, DecisionsQuestion> = { advice: ADVICE_QUESTION };
+const PATCH = process.env.BENCH_QUESTION === "patch";
+const selected = adviceByName(PATCH ? "patch" : "advice");
+if (!selected) throw new Error(`no advice named ${PATCH ? "patch" : "advice"}`);
+const ADVICE = selected;
+const QUESTIONS = adviceQuestions([ADVICE]);
+const CASES: Record<string, (fixture: Fixture) => TestCase<AdviceOutcome>[]> = {
+  advice: buildAdvisoryTests,
+  patch: buildPatchReminderTests,
+};
+
+/** The label a noul earns: the advice's action when it fires, else `allow`. */
+function outcome(noul: number): AdviceOutcome {
+  return adviceFires(ADVICE, noul) ? ADVICE.action : "allow";
+}
 
 interface AdviceRow {
   input: string;
@@ -56,9 +65,9 @@ async function runCase(apiKey: string, test: TestCase<AdviceOutcome>): Promise<A
       { model: MODEL, state: test.input, questions: QUESTIONS },
       { apiKey, timeoutMs: 60_000 },
     );
-    const answer: DecisionsAnswer | undefined = result.answers.advice;
+    const answer: DecisionsAnswer | undefined = result.answers[ADVICE.name];
     const noul = answer?.type === "noul" ? answer.noul : null;
-    const got = noul === null ? "(none)" : adviceBlocks(noul) ? "block" : "allow";
+    const got = noul === null ? "(none)" : outcome(noul);
     return { ...base, got, noul, pass: got === test.expected, ms: result.ms, cost: result.usage.cost };
   } catch (err) {
     return { ...base, error: String(err).slice(0, 160) };
@@ -67,7 +76,8 @@ async function runCase(apiKey: string, test: TestCase<AdviceOutcome>): Promise<A
 
 const apiKey = resolveProviderKey(PROVIDER);
 const fixture = makeFixture(process.env.BENCH_SEED);
-const tests = selectTests(buildAdvisoryTests(fixture));
+const cases: TestCase<AdviceOutcome>[] = CASES[ADVICE.name](fixture);
+const tests = selectTests(cases);
 const rows = await mapWithConcurrency(tests, CONCURRENCY, (test) => runCase(apiKey, test));
 
 const GREEN = "\x1b[32m";
@@ -77,7 +87,7 @@ const BOLD = "\x1b[1m";
 const RESET = "\x1b[0m";
 
 console.log(
-  `${BOLD}${MODEL} via ${PROVIDER}${RESET}  ${DIM}${tests.length} tests, 1 noul per test, concurrency ${CONCURRENCY}${RESET}\n`,
+  `${BOLD}${MODEL} via ${PROVIDER}${RESET}  ${DIM}${tests.length} tests, 1 noul per test (${ADVICE.name}), concurrency ${CONCURRENCY}${RESET}\n`,
 );
 for (const row of rows) {
   const icon = row.pass ? `${GREEN}✓${RESET}` : `${RED}✗${RESET}`;

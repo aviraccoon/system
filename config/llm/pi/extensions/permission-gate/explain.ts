@@ -6,8 +6,8 @@
 import { randomBytes } from "node:crypto";
 import { pluralLines, splitLines } from "../shared/diff";
 import { type FactorDecision, SEVERITY_DANGEROUS } from "../shared/risk-factors";
-import type { ExplanationResult, ExplanationVerdict } from "./confirm-ui";
-import { cacheKey } from "./logic";
+import type { ExplanationVerdict } from "./confirm-ui";
+import { cacheKey, type ExplanationResult } from "./logic";
 
 // ── Tool call description ──
 
@@ -315,6 +315,7 @@ export function mergeExplanations(factors: ExplanationResult, prose: Explanation
     verdict: factors.verdict,
     short: `${prose.short} · ${factors.short}`,
     detail: [factors.detail, prose.detail].filter(Boolean).join("\n\n"),
+    ...(factors.advices === undefined ? {} : { advices: factors.advices }),
   };
 }
 
@@ -342,6 +343,7 @@ export function classificationEntry(toolName: string, toolCallId: string, result
 export function applyEditFloor(result: ExplanationResult, isEditTool: boolean): ExplanationResult {
   if (!isEditTool || result.verdict !== "safe") return result;
   return {
+    ...result,
     verdict: "risky",
     short: `${result.short} (edits files)`,
     detail: `edit-like tool: mutation assumed\n${result.detail}`,

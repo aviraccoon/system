@@ -60,6 +60,14 @@ describe("mergeExplanations", () => {
     expect(merged.detail).toContain("thresholds: risky >= 0.50");
     expect(merged.detail).toContain("The command removes the output folder.");
   });
+
+  test("carries the advisory scores, so a later cache read still has them", () => {
+    const merged = mergeExplanations(
+      { verdict: "risky", short: "jev", detail: "d", advices: { advice: 0.72, patch: 0.81 } },
+      { verdict: "risky", short: "prose", detail: "p" },
+    );
+    expect(merged.advices).toEqual({ advice: 0.72, patch: 0.81 });
+  });
 });
 
 describe("classificationEntry", () => {
@@ -88,6 +96,12 @@ describe("applyEditFloor", () => {
     expect(floored.verdict).toBe("risky");
     expect(floored.short).toContain("(edits files)");
     expect(floored.detail).toContain("mutation assumed");
+  });
+
+  test("keeps the advisory scores when it lifts a verdict", () => {
+    const floored = applyEditFloor({ ...safe, advices: { advice: 0.9, patch: 0.8 } }, true);
+    expect(floored.verdict).toBe("risky");
+    expect(floored.advices).toEqual({ advice: 0.9, patch: 0.8 });
   });
 
   test("leaves reads and higher verdicts untouched", () => {

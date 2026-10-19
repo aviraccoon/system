@@ -12,7 +12,14 @@ import {
   renderDiff,
 } from "@earendil-works/pi-coding-agent";
 import { computePatchPreview } from "../patch/preview";
-import { ADVICE_QUESTION, adviceInterception, withAdvice } from "../shared/advisory";
+import {
+  adviceInterception,
+  adviceNoteText,
+  adviceQuestions,
+  adviceScores,
+  SHELL_ADVICES,
+  withAdviceScores,
+} from "../shared/advisory";
 import { DEFAULT_DECISIONS_MODEL, decisionsComplete } from "../shared/decisions";
 import { EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { extractText, getSidecarStats, hasRole, resolveProviderAuth, sidecarComplete } from "../shared/model-roles";
@@ -20,6 +27,8 @@ import { decisionFromAnswers, RISK_FACTORS, SEVERITY_QUESTION } from "../shared/
 import { isConfinedBash } from "../shared/sandbox";
 import { isShellTool } from "../shared/shell-tools";
 import { computeEditPreview, computeWritePreview } from "./edit-preview";
+import type { ExplanationResult } from "./logic";
+import { resolveResultNote } from "./result-notes";
 
 /** Preview couldn't be computed (load/computation failure). Distinct from
  *  `undefined` (doomed edit) so the gate fails CLOSED, not silently allows. */
@@ -35,7 +44,6 @@ import {
   type DetailsBody,
   type DiffBody,
   type ExplanationProvider,
-  type ExplanationResult,
   type TirithBanner,
 } from "./confirm-ui";
 import {
@@ -105,6 +113,17 @@ export default function permissionGate(pi: ExtensionAPI) {
   /** Notes captured this turn, flushed together as one user message. */
   const pendingNotes: string[] = [];
 
+  /** The notes for a result: everything staged, plus what a dialog-path
+   *  classification still owes. They belong to this result — there is no later
+   *  one to put them on. */
+  async function resultNotesFor(toolCallId: string): Promise<string | undefined> {
+    const staged = pendingResultNotes.get(toolCallId);
+    pendingResultNotes.delete(toolCallId);
+    const inFlight = pendingAdviceNotes.get(toolCallId);
+    pendingAdviceNotes.delete(toolCallId);
+    return await resolveResultNote(staged, inFlight);
+  }
+
   /**
    * Queue a dialog note as a user message. A note embedded in a tool result
    * reads as untrusted third-party content to the model, so the user's words go
@@ -134,8 +153,11 @@ export default function permissionGate(pi: ExtensionAPI) {
   /** tirith availability (detected at session start) + verdict cache (per-command). */
   let tirithAvailable = false;
   const tirithCache = new Map<string, TirithVerdict>();
-  /** tirith LLM annotations awaiting tool_result injection (warn-and-allowed case). */
-  const pendingTirith = new Map<string, string>();
+  /** Notes the classifier and tirith stage for a call's result, keyed by call id. */
+  const pendingResultNotes = new Map<string, string[]>();
+  /** A dialog-path classification's notes, still in flight while the user answers
+   *  and the tool runs — the only way they can be computed after the fact. */
+  const pendingAdviceNotes = new Map<string, Promise<string | undefined>>();
 
   /** Run tirith on a bash command, caching verdicts for repeats (cleared per session). */
   async function runTirithCached(command: string): Promise<TirithVerdict> {
@@ -165,7 +187,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     toolName: string,
     description: string,
     timeoutMs = 5000,
-  ): Promise<import("./confirm-ui").ExplanationResult | null> {
+  ): Promise<ExplanationResult | null> {
     const factors = await classifyWithFactors(ctx, toolName, description, timeoutMs);
     if (factors) return applyEditFloor(factors, EDIT_LIKE_TOOLS.includes(toolName));
     const proseText = await askProse(ctx, description, timeoutMs);
@@ -175,6 +197,13 @@ export default function permissionGate(pi: ExtensionAPI) {
     return prose ? applyEditFloor(prose, EDIT_LIKE_TOOLS.includes(toolName)) : null;
   }
 
+  /** Stage a note for a call's result. Several sources can contribute one. */
+  function addResultNote(toolCallId: string, note: string): void {
+    const existing = pendingResultNotes.get(toolCallId);
+    if (existing) existing.push(note);
+    else pendingResultNotes.set(toolCallId, [note]);
+  }
+
   /**
    * Append what the classifier said to the session, so thresholds can be tuned
    * against real dialogs later. The user's own choice is not stored here: it is
@@ -182,6 +211,8 @@ export default function permissionGate(pi: ExtensionAPI) {
    */
   function recordClassification(toolName: string, toolCallId: string, result: ExplanationResult | null): void {
     if (!result) return;
+    const note = adviceNoteText(result);
+    if (note) addResultNote(toolCallId, note);
     pi.appendEntry("permission_gate", classificationEntry(toolName, toolCallId, result));
   }
 
@@ -219,26 +250,26 @@ export default function permissionGate(pi: ExtensionAPI) {
     description: string,
     timeoutMs: number,
     signal?: AbortSignal,
-  ): Promise<import("./confirm-ui").ExplanationResult | null> {
+  ): Promise<ExplanationResult | null> {
     if (!decisionsEnabled) return null;
     try {
       const auth = await resolveProviderAuth(DECISIONS_PROVIDER, ctx.modelRegistry);
       if (!auth?.apiKey) return null;
-      // The output-capture advisory rides the same request on shell calls: one
-      // more noul, judged separately from the risk verdict.
-      const questions: Record<string, import("../shared/decisions").DecisionsQuestion> = isShellTool(toolName)
-        ? { ...RISK_FACTORS, severity: SEVERITY_QUESTION, advice: ADVICE_QUESTION }
-        : { ...RISK_FACTORS, severity: SEVERITY_QUESTION };
+      // The shell advices ride the same request: one extra noul each, judged
+      // separately from the risk verdict.
+      const advices = isShellTool(toolName) ? SHELL_ADVICES : [];
+      const questions: Record<string, import("../shared/decisions").DecisionsQuestion> = {
+        ...RISK_FACTORS,
+        severity: SEVERITY_QUESTION,
+        ...adviceQuestions(advices),
+      };
       const result = await decisionsComplete(
         { model: DECISIONS_MODEL, state: description, questions },
         { apiKey: auth.apiKey, headers: auth.headers, timeoutMs, signal },
       );
       const decision = decisionFromAnswers(result.answers);
       if (!decision) return null;
-      const explanation = factorsToExplanation(decision);
-      const advice = result.answers.advice;
-      if (advice?.type !== "noul") return explanation;
-      return withAdvice({ ...explanation, advice: advice.noul }, advice.noul);
+      return withAdviceScores(factorsToExplanation(decision), adviceScores(result.answers, advices));
     } catch {
       return null;
     }
@@ -284,10 +315,7 @@ export default function permissionGate(pi: ExtensionAPI) {
           const prose = text ? parseExplanation(text) : null;
           if (!prose) return;
           const merged = mergeExplanations(floored, prose);
-          // mergeExplanations builds a fresh literal — carry the advice noul
-          // over, or a dialog-path entry loses it and the cached branch's
-          // interception never fires for the identical repeat call.
-          state.classifyCache.set(key, { ...merged, advice: floored.advice });
+          state.classifyCache.set(key, merged);
           for (const listener of listeners) listener(merged);
         });
         return floored;
@@ -391,7 +419,8 @@ export default function permissionGate(pi: ExtensionAPI) {
     explainEnabled = classifierAvailable;
     tirithAvailable = await detectTirith();
     tirithCache.clear();
-    pendingTirith.clear();
+    pendingResultNotes.clear();
+    pendingAdviceNotes.clear();
     pendingNotes.length = 0;
     updateStatus(ctx);
   });
@@ -651,6 +680,16 @@ export default function permissionGate(pi: ExtensionAPI) {
     explanation?.promise
       .then((result) => recordClassification(event.toolName, event.toolCallId, result))
       .catch(() => {});
+    // The notes are computed from this promise; a fast answer can run the tool
+    // before it settles, so hand it to the tool_result consumer instead of
+    // relying on the `.then` above having run first. Shell calls only: the
+    // advices ride the shell battery, so any other tool would wait for nothing.
+    if (explanation && isShellTool(event.toolName)) {
+      pendingAdviceNotes.set(
+        event.toolCallId,
+        explanation.promise.then(adviceNoteText, () => undefined),
+      );
+    }
     if (decision.confirmType === "bash") {
       const prefix = decision.suggestedPrefix ?? "";
       const command = decision.displayPath ?? "";
@@ -680,7 +719,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         ctx.ui.notify("Bash allowed for this session", "warning");
       }
       if (note) queueNote(note, event);
-      if (tirith?.note) pendingTirith.set(event.toolCallId, tirith.note);
+      if (tirith?.note) addResultNote(event.toolCallId, tirith.note);
       return undefined;
     }
 
@@ -880,7 +919,7 @@ export default function permissionGate(pi: ExtensionAPI) {
 
       if (cached) {
         const resolution = resolve(cached);
-        const advised = adviceInterception(cached.advice, resolution.action);
+        const advised = adviceInterception(cached.advices, resolution.action);
         if (advised) {
           recordClassification(event.toolName, event.toolCallId, cached);
           return { block: true, reason: advised.reason };
@@ -908,7 +947,7 @@ export default function permissionGate(pi: ExtensionAPI) {
       if (explResult) {
         state.classifyCache.set(key, { ...explResult });
         const resolution = resolve(explResult);
-        const advised = adviceInterception(explResult.advice, resolution.action);
+        const advised = adviceInterception(explResult.advices, resolution.action);
         if (advised) {
           recordClassification(event.toolName, event.toolCallId, explResult);
           return { block: true, reason: advised.reason };
@@ -946,6 +985,10 @@ export default function permissionGate(pi: ExtensionAPI) {
   // the turn's tool results and before the next LLM call, so every note from a
   // turn lands together instead of one per assistant turn.
   pi.on("turn_end", async () => {
+    // Leftovers belong to a blocked or interrupted call. Keyed by call id, they
+    // cannot reach another result, so this is only about not growing the maps.
+    pendingResultNotes.clear();
+    pendingAdviceNotes.clear();
     flushNotes();
   });
 
@@ -956,16 +999,16 @@ export default function permissionGate(pi: ExtensionAPI) {
     updateWidget(ctx);
   });
 
-  // Append tirith annotations to tool results so the model sees them. User
-  // notes are not handled here — they are delivered as user messages.
+  // Append tirith annotations and advisory notes to tool results so the model
+  // sees them. User notes are not handled here — they are delivered as user
+  // messages.
   // Also refresh status bar (sidecar cost may have changed).
   pi.on("tool_result", async (event, ctx) => {
     if (explainEnabled) updateStatus(ctx);
-    const tirith = pendingTirith.get(event.toolCallId);
-    if (!tirith) return undefined;
-    pendingTirith.delete(event.toolCallId);
+    const note = await resultNotesFor(event.toolCallId);
+    if (!note) return undefined;
     return {
-      content: [...event.content, { type: "text" as const, text: `\n\n${tirith}` }],
+      content: [...event.content, { type: "text" as const, text: `\n\n${note}` }],
     };
   });
 }
