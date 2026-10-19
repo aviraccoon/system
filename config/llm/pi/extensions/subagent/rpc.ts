@@ -184,26 +184,91 @@ export function getFinalOutput(messages: Message[]): string {
 }
 
 /**
- * Text of the last assistant message's own parts. Unlike getFinalOutput this
- * does not walk back to earlier messages: narration from a previous turn is
- * not the answer to the run that stopped without one.
+ * Text of the newest assistant message's own parts, skipping trailing tool
+ * results a retry may have appended. Unlike getFinalOutput this does not walk
+ * back to earlier messages: narration from a previous turn is not the answer to
+ * the run that stopped without one.
  */
 export function finalAnswerText(messages: Message[]): string {
-  const msg = messages[messages.length - 1];
-  if (msg?.role !== "assistant") return "";
-  return msg.content
-    .filter((part) => part.type === "text")
-    .map((part) => part.text)
-    .join("");
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (msg.role !== "assistant") continue;
+    return msg.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("");
+  }
+  return "";
 }
 
-/** A run that did not deliver an answer: spawn failure, error, abort, turn
- * budget, or a stop whose final message carries no text. */
+/** A run that did not deliver an answer: spawn failure, a stop whose final
+ * message carries no text, an abort, or the turn budget. An errored stream that
+ * still produced the answer counts as delivered — the report is the product. */
 export function resultFailed(r: SingleResult): boolean {
   if (r.exitCode === -1) return false; // still running
   if (r.exitCode !== 0) return true;
-  if (r.stopReason === "error" || r.stopReason === "aborted" || r.stopReason === "max_turns_exceeded") return true;
+  if (r.stopReason === "aborted" || r.stopReason === "max_turns_exceeded") return true;
   return finalAnswerText(r.messages).trim() === "";
+}
+
+/**
+ * Messages to keep after an agent_end. Each batch is one run's own messages, so an
+ * in-place retry that produced no answer must not wipe the answer an earlier
+ * attempt delivered: the answer is the product, whatever the next attempt did.
+ */
+export function mergeAttemptMessages(current: Message[], incoming: Message[]): Message[] {
+  if (incoming.length === 0) return current;
+  if (finalAnswerText(incoming).trim() !== "") return incoming;
+  if (finalAnswerText(current).trim() !== "") return current;
+  return incoming;
+}
+
+/**
+ * A run that produced its answer and then lost the stream: delivered, but the text
+ * may be cut off. Keyed on the stop reason, not the message — a provider can report
+ * an error with no words of its own.
+ */
+export function deliveredStreamError(r: SingleResult): boolean {
+  return !resultFailed(r) && r.stopReason === "error";
+}
+
+/** The words for a delivered stream error, with a stand-in when the provider gave none. */
+export function streamErrorReason(r: SingleResult): string {
+  return r.errorMessage || "the provider reported an error";
+}
+
+/**
+ * Suffix for a delivered answer whose stream errored at the end: the text is the
+ * product and stays, but the consumer has to be able to tell it may be truncated.
+ * Empty for every other result.
+ */
+export function streamErrorSuffix(r: SingleResult): string {
+  if (!deliveredStreamError(r)) return "";
+  return `\n\n[stream ended early: ${streamErrorReason(r)} — the answer above may be truncated]`;
+}
+
+/**
+ * One line per chain step whose stream ended early, naming the step and the reason.
+ * The chain still completes; the caller reads this to know which handoffs were cut.
+ */
+export function chainStreamWarning(results: readonly SingleResult[]): string {
+  return results
+    .map((r, i) =>
+      deliveredStreamError(r) ? `[step ${i + 1} (${r.agent}) stream ended early: ${streamErrorReason(r)}]` : "",
+    )
+    .filter((line) => line !== "")
+    .join("\n");
+}
+
+/** A block of text with a delivered stream warning appended under it. */
+export function withStreamWarning(text: string, r: SingleResult): string {
+  return `${text}${streamErrorSuffix(r)}`;
+}
+
+/** A block of text with the per-step stream warnings appended under it. */
+export function withChainWarnings(text: string, results: readonly SingleResult[]): string {
+  const warnings = chainStreamWarning(results);
+  return warnings ? `${text}\n\n${warnings}` : text;
 }
 
 /** Attempt outcome for the retry policy. */
@@ -446,6 +511,15 @@ export async function runSingleAgent(
   }
   cleanupHandle?.();
   return result as SingleResult;
+}
+
+/**
+ * Whether this agent_end is followed by pi's own in-place retry (the failed turn
+ * is omitted from context and the run continues in the same session). Only an
+ * explicit `true` counts: a child that does not report the field is finished.
+ */
+export function childRetryPending(event: Record<string, unknown>): boolean {
+  return event.willRetry === true;
 }
 
 /**
@@ -877,13 +951,18 @@ async function runSingleAgentAttempt(
 
         // ── Agent end (source of truth — pi provides complete messages) ──
         if (eventType === "agent_end") {
-          agentEndReceived = true;
+          // pi retries a transient provider error in place: it emits this event with
+          // willRetry, omits the failed turn from context, and continues the same
+          // session. Aborting here would cancel that retry (and pi's backoff) and
+          // force a whole-run restart, so this is not the run's end: keep what the
+          // failed attempt produced and keep listening.
+          const childWillRetry = childRetryPending(event);
+          if (!childWillRetry) agentEndReceived = true;
           const agentMessages = event.messages as Record<string, unknown>[] | undefined;
           if (agentMessages && agentMessages.length > 0) {
-            // Rebuild from pi's complete messages. No post-hoc truncation: the
-            // run is bounded by the live maxTurns abort (turn_end handler), so a
-            // completed run's full report is preserved.
-            currentResult.messages = [];
+            // Each agent_end reports that run's own messages, so an in-place retry
+            // arrives as a second batch rather than an addition to the first.
+            const incoming: Message[] = [];
 
             for (const rawMsg of agentMessages) {
               const role = rawMsg.role as string;
@@ -892,7 +971,7 @@ async function runSingleAgentAttempt(
                 // Cast from Record to Message — pi constructs these internally
                 const msg = rawMsg as unknown as Message;
                 if (msg.role === "assistant") {
-                  currentResult.messages.push(msg);
+                  incoming.push(msg);
                   // Track model from last assistant message. A resolved target already
                   // names the ref the child was started with; the child's own id is the
                   // fallback for a run that used pi's default model.
@@ -901,10 +980,11 @@ async function runSingleAgentAttempt(
               } else if (role === "toolResult") {
                 const msg = rawMsg as unknown as Message;
                 if (msg.role === "toolResult") {
-                  currentResult.messages.push(msg);
+                  incoming.push(msg);
                 }
               }
             }
+            currentResult.messages = mergeAttemptMessages(currentResult.messages, incoming);
 
             // Real outcome from pi's last assistant message (stop/aborted/error),
             // not a fabricated count. The maxTurns override happens after the run.
@@ -913,6 +993,7 @@ async function runSingleAgentAttempt(
               currentResult.stopReason = lastAssistant.stopReason;
               // The provider's own words beat "no output" when the caller reports the failure.
               if (lastAssistant.errorMessage) currentResult.errorMessage = lastAssistant.errorMessage;
+              else delete currentResult.errorMessage;
             }
 
             // Update usage from agent_end stats
@@ -928,6 +1009,14 @@ async function runSingleAgentAttempt(
             }
 
             emitUpdate();
+            if (childWillRetry) {
+              debugLog("agentRetry", 0, {
+                agent: agentName,
+                stopReason: currentResult.stopReason ?? null,
+                error: currentResult.errorMessage ?? null,
+              });
+              return;
+            }
             // Clear footer status on completion
             ctx.ui.setStatus("subagent", undefined);
             // Pi's RPC mode runs `return new Promise(() => {})` to keep alive forever —

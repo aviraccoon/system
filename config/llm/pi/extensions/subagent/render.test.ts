@@ -327,6 +327,25 @@ describe("renderResult", () => {
     expect(text).toContain("(user)");
   });
 
+  test("an errored stream that delivered its answer keeps the text and names the error", () => {
+    const details: SubagentDetails = {
+      mode: "single",
+      agentScope: "user",
+      results: [makeSingleResult({ stopReason: "error", errorMessage: "Network connection lost." })],
+    };
+    const text = renderResult(
+      { content: [{ type: "text", text: "done" }], details },
+      { expanded: false, isPartial: false },
+      theme,
+      {},
+    )
+      .render(80)
+      .join("\n");
+    expect(text).toContain("✓");
+    expect(text).toContain("findings");
+    expect(text).toContain("[stream error: Network connection lost.]");
+  });
+
   test("names the model and level in the result header", () => {
     const details: SubagentDetails = {
       mode: "single",
@@ -488,6 +507,28 @@ describe("renderResult", () => {
     expect(text).toContain("2/2 steps");
     expect(text).toContain("Step 1");
     expect(text).toContain("Step 2");
+  });
+
+  test("a chain step whose stream died is marked in the step body", () => {
+    const details: SubagentDetails = {
+      mode: "chain",
+      agentScope: "user",
+      results: [
+        makeSingleResult({ agent: "step1", step: 1, stopReason: "error", errorMessage: "Network connection lost." }),
+        makeSingleResult({ agent: "step2", step: 2 }),
+      ],
+    };
+    const text = renderResult(
+      { content: [{ type: "text", text: "" }], details },
+      { expanded: false, isPartial: false },
+      theme,
+      {},
+    )
+      .render(80)
+      .join("\n");
+    expect(text).toContain("[stream error: Network connection lost.]");
+    // A delivered step does not halt the chain, so both steps are counted.
+    expect(text).toContain("2/2 steps");
   });
 
   test("renders partial streaming result", () => {

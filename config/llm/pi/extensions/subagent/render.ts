@@ -13,6 +13,7 @@ import { resolveMode } from "./mode";
 import {
   type DisplayItem,
   type DisplayTurn,
+  deliveredStreamError,
   formatToolCall,
   formatUsageStats,
   getDisplayTurns,
@@ -21,6 +22,7 @@ import {
   resultFailed,
   type SingleResult,
   type SubagentDetails,
+  streamErrorReason,
   type UsageStats,
   type UserInput,
 } from "./rpc";
@@ -184,6 +186,13 @@ function targetLabel(target: Pick<LiveTarget, "model" | "role" | "thinking">, th
   return theme.fg("muted", ` · ${name}${level}`);
 }
 
+/** A delivered answer whose stream errored at the end: the text is kept and the
+ * error is named, so a truncated report cannot pass for a clean one. */
+function streamErrorNote(r: SingleResult, theme: Theme): string | undefined {
+  if (!deliveredStreamError(r)) return undefined;
+  return theme.fg("warning", `[stream error: ${streamErrorReason(r)}]`);
+}
+
 function statusHeader(r: SingleResult, theme: Theme): string {
   const isError = resultFailed(r);
   const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
@@ -260,6 +269,8 @@ function renderSingle(r: SingleResult, expanded: boolean, theme: Theme): string 
     }
   }
 
+  const note = streamErrorNote(r, theme);
+  if (note) parts.push(note);
   const usage = usageLine(r, theme);
   if (usage) parts.push(usage);
   // Hint whenever expanded would reveal something collapsed hides: earlier turns,
@@ -294,6 +305,8 @@ function renderResultSummary(
     if (!text && !showPreview) lines.push(theme.fg("muted", opts.running ? "(running...)" : "(no output)"));
   }
 
+  const note = streamErrorNote(r, theme);
+  if (note) lines.push(note);
   const usage = formatUsageStats(r.usage);
   if (usage) lines.push(theme.fg("dim", usage));
   return lines.join("\n");

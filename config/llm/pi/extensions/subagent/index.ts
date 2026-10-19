@@ -42,6 +42,8 @@ import {
   type SingleResult,
   type SubagentDetails,
   type SubagentHandle,
+  withChainWarnings,
+  withStreamWarning,
 } from "./rpc";
 import { DEFAULT_SUBAGENT_ROLE } from "./target";
 import { AcceptedRoots, PROJECT_TRUST_ENTRY } from "./trust";
@@ -299,7 +301,10 @@ export default function subagentExtension(pi: ExtensionAPI) {
                   {
                     type: "text",
                     text: withSessionPaths(
-                      `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}${attemptsNote}`,
+                      withChainWarnings(
+                        `Chain stopped at step ${i + 1} (${step.agent}): ${errorMsg}${attemptsNote}`,
+                        results,
+                      ),
                       [{ path: result.sessionFile, pid: result.pid }],
                     ),
                   },
@@ -308,14 +313,17 @@ export default function subagentExtension(pi: ExtensionAPI) {
                 isError: true,
               };
             }
-            previousOutput = getFinalOutput(result.messages);
+            // The next step's input is this step's output, so a stream that died
+            // after the answer travels with the handoff as a warning.
+            previousOutput = withStreamWarning(getFinalOutput(result.messages), result);
           }
+          const last = results[results.length - 1];
           return {
             content: [
               {
                 type: "text",
-                text: withSessionPaths(getFinalOutput(results[results.length - 1].messages) || "(no output)", [
-                  { path: results[results.length - 1].sessionFile, pid: results[results.length - 1].pid },
+                text: withSessionPaths(withChainWarnings(getFinalOutput(last.messages) || "(no output)", results), [
+                  { path: last.sessionFile, pid: last.pid },
                 ]),
               },
             ],
@@ -401,7 +409,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
           const successCount = results.filter((r) => !resultFailed(r)).length;
           const summaries = results.map((r) => {
             const output = getFinalOutput(r.messages) || r.errorMessage || r.stderr;
-            return `[${r.agent}] ${resultFailed(r) ? "failed" : "completed"}:\n${output || "(no output)"}`;
+            return `[${r.agent}] ${resultFailed(r) ? "failed" : "completed"}:\n${withStreamWarning(output || "(no output)", r)}`;
           });
           return {
             content: [
@@ -461,7 +469,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: withSessionPaths(getFinalOutput(result.messages) || "(no output)", [
+                text: withSessionPaths(withStreamWarning(getFinalOutput(result.messages) || "(no output)", result), [
                   { path: result.sessionFile, pid: result.pid },
                 ]),
               },

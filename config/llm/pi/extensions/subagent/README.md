@@ -104,16 +104,30 @@ the result both show why the child wrapped up early.
 
 ### Retries
 
-A provider-side failure — `stopReason: "error"`, or a child that exited non-zero
-without producing a message — is retried: the first model twice, then the next entry
+A provider-side failure is retried **only when the attempt carries no answer**:
+`stopReason: "error"` with an empty final message, or a child that exited non-zero
+without producing a message. The plan is the first model twice, then the next entry
 in the agent's role chain, up to 3 attempts. When the chain is short, the plan repeats
 the last candidate (a retry can land on a different upstream even for the same model).
 A dispatch without a role has no chain and gets one attempt. User aborts and turn-budget
-stops are not retried. A retried failure line names the attempt count. A user abort
-returns the partial result (stopReason `aborted`) with whatever stderr, exit code and
-session path the run collected, instead of discarding them. Every attempt logs spawn,
-close and spawn errors to `/tmp/pi-subagent-debug/debug-<pid>.log` (the log file is per
-pi process, cleared at the start of each dispatch; files stay until /tmp is cleaned).
+stops are not retried.
+
+A retry is a new child process repeating the whole task, so it is taken only when
+there is nothing to deliver. An attempt that wrote its answer and then lost the
+stream keeps the answer, and the result names the stream error beside it. In a
+chain the warning travels with the handoff to the next step, and the result names
+every step whose stream ended early.
+
+The child gets pi's own in-place retry first: pi emits `agent_end` with
+`willRetry: true`, omits the failed turn from context, and continues the same
+session. The extension waits for that and finalizes on any `agent_end` whose
+`willRetry` is not `true`.
+
+A retried failure line names the attempt count. A user abort returns the partial
+result (stopReason `aborted`) with whatever stderr, exit code and session path the
+run collected, instead of discarding them. Every attempt logs spawn, close and spawn
+errors to `/tmp/pi-subagent-debug/debug-<pid>.log` (the log file is per pi process,
+cleared at the start of each dispatch; files stay until /tmp is cleaned).
 
 ### Streaming
 

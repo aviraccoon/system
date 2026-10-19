@@ -2,8 +2,12 @@ import { describe, expect, test } from "bun:test";
 import { attemptPlan, isRetryable, MAX_ATTEMPTS } from "./retry";
 
 describe("isRetryable", () => {
-  test("retries a provider error even when output was produced", () => {
-    expect(isRetryable({ stopReason: "error", exitCode: 1, messageCount: 4 })).toBe(true);
+  test("does not retry a provider error over a delivered answer", () => {
+    expect(isRetryable({ stopReason: "error", exitCode: 1, messageCount: 4, outputEmpty: false })).toBe(false);
+  });
+
+  test("retries a provider error that produced no answer", () => {
+    expect(isRetryable({ stopReason: "error", exitCode: 1, messageCount: 4, outputEmpty: true })).toBe(true);
   });
 
   test("retries a child that never produced a message", () => {
@@ -33,6 +37,7 @@ describe("isRetryable", () => {
 
   test("outcomes without the flag keep the old verdict", () => {
     expect(isRetryable({ stopReason: "stop", exitCode: 0, messageCount: 3, outputEmpty: undefined })).toBe(false);
+    expect(isRetryable({ stopReason: "error", exitCode: 1, messageCount: 3, outputEmpty: undefined })).toBe(true);
   });
 });
 

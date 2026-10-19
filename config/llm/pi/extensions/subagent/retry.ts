@@ -1,13 +1,16 @@
 /**
  * Retry policy for subagent runs.
  *
- * A provider-side failure — the model returned an error, or the child never
- * produced a single message — is worth another attempt: the next model in the
- * role chain is a different upstream, and even the same model can be routed to
- * a different provider on retry. A user abort or a turn-budget stop is not:
- * the run did what it was told. A natural stop with no usable answer is the
- * sneaky third case: the model reasons, narrates a plan, and stops without
- * acting or answering — the run claims success while carrying nothing.
+ * A provider-side failure that left the run with no answer — the model returned
+ * an error before producing one, or the child never produced a single message —
+ * is worth another attempt: the next model in the role chain is a different
+ * upstream, and even the same model can be routed to a different provider on
+ * retry. A run that delivered an answer is not retried, whatever the stream did
+ * at the end: the answer is the product, and a retry restarts the run and repeats
+ * every tool call. A user abort or a turn-budget stop is not retried: the run did
+ * what it was told. A natural stop with no usable answer is the sneaky third
+ * case: the model reasons, narrates a plan, and stops without acting or
+ * answering — the run claims success while carrying nothing.
  */
 
 export const MAX_ATTEMPTS = 3;
@@ -24,8 +27,11 @@ export interface AttemptOutcome {
 }
 
 export function isRetryable(outcome: AttemptOutcome): boolean {
-  if (outcome.stopReason === "error") return true;
   if (outcome.stopReason === "aborted" || outcome.stopReason === "max_turns_exceeded") return false;
+  // The answer is the product: an error after it arrived (a dropped stream at the
+  // end) is reported with the answer, not bought again with a full re-run.
+  if (outcome.outputEmpty === false) return false;
+  if (outcome.stopReason === "error") return true;
   // A natural stop with no answer is a model failure, not a completed run.
   if (outcome.outputEmpty) return true;
   // Non-zero exit with nothing produced means the child never came up
