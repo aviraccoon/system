@@ -66,3 +66,5 @@ Include natural language patterns users might say:
 **Vague verbs**: "Helps with", "deals with", "handles" → be specific: "extracts", "generates", "analyzes", "validates".
 
 **No triggers**: A description that says what the skill does but never says when to use it. The agent needs both pieces.
+
+**Unquoted colon**: `description: Exports: CSV and JSON` is invalid YAML — the loader skips the skill and warns at startup. A ` #` in an unquoted value truncates the text with no warning at all. Quote the value when it contains either.
