@@ -1,6 +1,6 @@
 ---
 name: live-verify
-description: Proves a change by running the product when no test can reach the behavior. Two modes: a repeatable journey and a time-boxed exploratory charter. Use when a change touches a TUI, web page, mobile screen, desktop app, API, service, VM or generated artifact, and when asked to smoke test, walk through, or manually check that a change works.
+description: "Proves a change by running the product when no test can reach the behavior. Two modes: a repeatable journey and a time-boxed exploratory charter. Use when a change touches a TUI, web page, mobile screen, desktop app, API, service, VM or generated artifact, and when asked to smoke test, walk through, or manually check that a change works."
 ---
 
 # Verify by running it
