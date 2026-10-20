@@ -476,7 +476,7 @@ describe("formatViolations", () => {
     expect(block).toContain(todoRule.policy);
     // Literal, so deleting the wishlist sentence turns this pin red rather than
     // comparing the policy object to itself.
-    expect(block).toContain("otherwise it belongs in the journal");
+    expect(block).toContain("an undecided proposal belongs in the journal");
     expect(block).toContain("A rejected option is not an item");
     expect(block).toContain("DELETE the line");
   });
