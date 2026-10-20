@@ -109,7 +109,7 @@ TODO.md rules:
 - **Never add completed items.** Delete done items entirely; if part of an item remains, keep only what remains — a line narrating finished work keeps just the leftover.
 - **Claims about the world go stale: date the check.** "Config still excludes it" is true until someone changes it; write `checked YYYY-MM-DD: …` when you verify one, and when reviewing the file verify each claim against the machine rather than re-reading it.
 - **A watch item is not an item.** "Watch for X", "re-run Y if it looks stale" — nobody records the watching, so it reads as undone work forever. Give it a trigger or a check date, or journal it.
-- **A decision, not a wish.** "Consider X", "optional", "if wanted" mark a wishlist entry; name the decision and its consequence.
+- **A decision, not a wish.** Only Avi's decision puts work in TODO.md: options, ladders and "this could be useful someday" stay in the journal or the reply until one is picked, and a picked item names the decision and its consequence.
 - **A rejected option is not an item.** Once something is decided against, remove it and record the decision in the journal or the document that owns the rule — never as a "rejected"/"won't do" line here.
 - **One decision, one TODO.** A decision copied into two projects' TODOs leaves a second copy to go stale; keep it where it is owned and point at it from the other.
 - **No design docs.** If a feature needs design spec, write a journal entry and link it from TODO with one line.
