@@ -40,6 +40,7 @@ If the failure is intermittent, it is not "flaky": either the scenario has a tim
 Worse than a failure, because it ends the check.
 
 - **The action's own success taken as the postcondition.** A click returning without error proves a click. A toast proves a toast. Read the state that follows, or re-read it after a reload.
+- **An echo test.** A check whose expected answer was supplied by the check itself passes whether the artifact loaded or the prompt was answered as plain text; ask for a value only the loaded artifact can supply.
 - **A capture nobody read.** Producing `shot.png` is not evidence; the assertion is.
 - **A screenshot from before the change.** Fresh capture, named by time, in a directory keyed by the run.
 - **An optimistic UI.** The row appears instantly and the request fails silently. Check the request, not the list.
