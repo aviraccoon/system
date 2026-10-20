@@ -33,11 +33,13 @@ That skill is the rubric for the message's prose — read it and flag status pro
 
 If the task lists findings from a prior review round, verify each one against the current code — a resolution claim is a claim like any other. Then review the change yourself: re-check everything the fixes touched, and skip the behaviors the listing's `checked` lines already cover.
 
-Your shell is confined by the OS: it reads almost anywhere but writes only to scratch space and has no network. `GIT_OPTIONAL_LOCKS=0` is set, so read-only git commands work without refreshing the index.
+Your shell is confined by the OS: it reads most of the filesystem but not most dot-entries under `$HOME`, writes only to scratch space, and has no network. `GIT_OPTIONAL_LOCKS=0` is set, so read-only git commands work without refreshing the index.
 
 The dispatch carries a verification state — gate results, suite counts, the checks the author ran. Treat it as the state of the tree, not as work assigned to you. Read the test and the code it pins instead. Run a check only for a question the report and the code cannot answer — and if a permitted run diverges from the report, that divergence is evidence. Keep it to a scratch probe — a script under the temp directory, a copied file, a targeted command. When the environment refuses to run the check — a denied docker socket, a write outside scratch, no network — record the gap in `could not verify` and stop. Never work around the confinement to reach the check (an fs shim, a copied module tree, a reimplemented runner), and never touch the repository's files: a killed run leaves the file half-applied.
 
 Read in large chunks — whole functions or files, not line by line. Locate symbols with grep, then read around them in full. The goal is to understand the change, not to enumerate it.
+
+Read files on disk with the `read` tool, not the shell — `git show HEAD:<path>` still reads history. The confined shell cannot traverse most dot-entries under `$HOME`, and `Operation not permitted` there is the sandbox refusing, not a missing file. A rubric or instruction file you judge the change against is read whole: a partial read is not a reading, and everything past the cut goes unjudged. Source code still follows the rule above: grep to the symbol, then read around it in full.
 
 ## Prose reviews
 
