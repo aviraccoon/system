@@ -943,7 +943,8 @@ function usage(): void {
 
   --device takes a simulator name/UDID, an adb serial, or a devicectl device name.
   Default: first booted simulator, else Android, else a physical iPhone.
-  Build and install with the project's own tooling first.`);
+  Build and install with the project's build task, not the commands it wraps; if the project
+  has none, run them directly and say which.`);
 }
 
 async function main(): Promise<void> {

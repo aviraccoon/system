@@ -112,10 +112,10 @@ bun $M shot --out "$D/x.png"
 bun $M logs --grep ERROR
 ```
 
-Build and install with the project's own tooling first; this driver never builds. Gotchas: a sheet and the
-screen behind it both appear in the outline, so the same area can hold two elements (the focused field is
-marked). Physical iPhones are screenshot-only. Native permissions dialogs belong to the environment
-bucket, not the app bucket.
+Build and install with the project's build task, not the individual commands it wraps; without one, run
+the commands directly. This driver never builds. Gotchas: a sheet and the screen behind it both appear in
+the outline, so the same area can hold two elements (the focused field is marked). Physical iPhones are
+screenshot-only. Native permissions dialogs belong to the environment bucket, not the app bucket.
 
 ## Desktop
 

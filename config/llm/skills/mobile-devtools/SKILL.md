@@ -1,6 +1,6 @@
 ---
 name: mobile-devtools
-description: Observe and act on iOS simulators, Android emulators/devices, and physical iPhones from the command line - screen outlines with @N refs, taps, and screenshots. Use when verifying or debugging app behavior on a simulator, emulator, or phone; tapping through a flow; capturing device screenshots as evidence; or reporting a UI bug found on a device.
+description: "Drives iOS simulators, Android emulators/devices and physical iPhones (screenshot only) from the command line: screen outline with @N refs, taps, typing, swipes, screenshots, logs. Use when acting on or inspecting a device, tapping through a flow, capturing a screenshot, reading the app's logs, or reporting a UI bug. For proving a change end to end - launch, drive, capture, report - use the live-verify skill, which drives the device through this CLI."
 ---
 
 # Mobile Devtools
@@ -48,7 +48,14 @@ bun $M sim end                                     # close the session
 
 ## Before the first call
 
-Build and install with the project's own tooling (`mise` tasks, `xcodebuild` + `xcrun simctl`, `gradlew` + `adb`, or the Capacitor CLI). This CLI never builds, and every foreground call is capped at ~10 s — run long builds outside `$M`.
+Build and install with the project's build task — a task-runner entry, a package script, a Makefile target —
+not the individual commands it wraps (`xcodebuild`, `gradlew`, `cap sync`). A task usually also runs
+what a raw build leaves out (asset build, native sync, backend or dev server, certificate trust), so a
+hand-assembled build can install a different app: an app packaged with missing or stale web assets can
+show a white screen, which reads as a bug in the app. If the project has no build task (check its task
+list, package scripts and Makefile first), build with the commands directly and say which one you used.
+
+This CLI never builds, and every foreground call is capped at ~10 s — run long builds outside `$M`.
 
 `bun $M sim start` is needed once per session per project; `ui`/`tap`/`shot` auto-start it when a project is on record in `state.json`. An iOS simulator session also needs the project open in Xcode's MCP service and an approved agent. When the listing refuses because the agent isn't approved, the CLI launches Xcode if it is closed, calls XcodeOpenWorkspace (the invocation that makes the approval dialog appear), and prints a hint for the person at the keyboard to click Allow in Xcode (the grant lives in Settings > Intelligence > Model Context Protocol) — then re-run. Any other refusal or denial surfaces Xcode's own message with no auto-recovery; `xcrun mcp-server status` lists agents awaiting approval and `xcrun mcp-server approve <id>` records a decision. If a call answers `Xcode did not answer`, retry after a moment.
 
