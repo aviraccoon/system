@@ -1,13 +1,14 @@
 ---
 name: live-verify
-description: "Verifies that a change works in the running product: launch it, drive it, capture what changed, report the evidence. Use when a change touches a TUI, web page, mobile screen, desktop app, API, service, VM or generated artifact; when verifying a change needs a simulator, emulator, device, port or service; when asked to smoke test, walk through, manually check, or confirm that it works; and before claiming or committing a change that only a run can show. Reading the code is not the check, and a test only covers what it can pin."
+description: "Verifies behavior that only a run reveals, or explores a running product for defects: launch it, drive it, capture and report the evidence. Use when a change touches a TUI, web page, mobile screen, desktop app, API, service, VM or generated artifact; when the check is live rather than a test: a simulator, emulator, device, port or service; when asked to smoke test, walk through, manually check, confirm it works, or to audit, explore or sweep the running product for defects (an accessibility pass, finding pain points, clicking through a flow); and before claiming or committing a change that only a run can show. Reading the code is not the check, and a test only covers what it can pin."
 ---
 
 # Verify by running it
 
-Use this when a test cannot see the change: key handling, focus, layout, a request actually reaching a
-provider, an installed artifact, a device. If the behavior can be pinned in a test, write the test
-instead.
+Use this when a test cannot see the behavior, or when the job is to find out what is broken rather than
+confirm a known change. A test cannot see key handling, focus, layout, a request actually reaching a
+provider, an installed artifact, or a device. If the behavior can be pinned in a test, write the test
+instead. A defect hunt runs as a charter, not a journey (see Two modes below).
 
 ## When to propose it
 
@@ -117,6 +118,9 @@ artifact:  <commit or build id, launch path, instance and port>
 seen:      <the observable delta, quoted from the capture>
 evidence:  <run temp dir>/<capture file>
 ```
+
+A charter reports one entry per finding: the finding in place of the claim, with its own seen and
+evidence lines.
 
 On a failure, name the bucket before proposing a cause: app, scenario, or environment. Read
 [references/triage.md](references/triage.md) rather than guessing; the same three buckets cover nearly
