@@ -54,10 +54,11 @@ instance removes the conflict instead of managing it, so prefer one whenever the
 3. **Record the spin-up once**, in `~/notes/llm/<project>/.agents/verify/instance.md`: launch command,
    ports, data dir, reset, teardown, and what to do when a step is unavailable. Read it before
    launching; update it after a run that needed a new step.
-4. **Temp data stays in the run's temp directory.** A `mktemp -d` directory per run, captures inside,
-   cleaned by the OS and not worth keeping. The journal entry carries the claim, the delta and the
-   finding; the path only has to survive the session, so copy anything worth keeping into the journal as
-   text.
+4. **Temp data and probe scripts stay in the run's temp directory.** A `mktemp -d` directory per run,
+   captures inside, cleaned by the OS and not worth keeping. The journal entry carries the claim, the
+   delta and the finding; the path only has to survive the session, so copy anything worth keeping into
+   the journal as text. A walk worth repeating becomes a journey file (see Where journeys live), not an
+   ad-hoc harness in the repo.
 5. **Never kill what you did not start.** Confirm teardown: instance gone, port free, the instance's data
    directory removed. A leftover instance is how the next run gets a false result.
 6. **Sentinel data and a trap.** `-10`, `999999`, `1970-01-01` for rows or records the check inserts,

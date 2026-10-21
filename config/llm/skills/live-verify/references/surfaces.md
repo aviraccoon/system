@@ -91,9 +91,27 @@ Assert semantically (`find role button click --name "Save"`, `get value`, `is vi
 coordinates. For persistence, round trip it: submit, wait for the completion signal, `reload`, then read
 the value from the newly rendered page.
 
-Gotchas: a toast or a disabled button proves the UI reacted, not that the operation landed. Check the
-request and the re-read state. `screenshot` answers layout and clipping, not correctness. Cookies and
-logins live per session, so a fresh session may need a setup step.
+The role+name query covers exposure as a control: a node exposed only as generic cannot be reached as a
+control, while a role with no name still matches its role query. It says nothing about focusability —
+check that focus reaches the control before calling it reachable. Contrast, and whether landmarks and
+table structure are right, sit outside that query; audit those with `agent-browser a11y`. Whether a name
+fits its control is a judgement no rule makes — read it from the snapshot.
+
+Gotchas:
+
+- A toast or a disabled button proves the UI reacted, not that the operation landed. Check the request
+  and the re-read state.
+- `screenshot` answers layout and clipping, not correctness.
+- Cookies and logins live per session, so a fresh session may need a setup step.
+- The accessible-name filter is a flag (`--name`); a trailing positional is the action's text argument,
+  so `find role button click "Save"` drops it and clicks the first button of that role instead of
+  failing.
+- A snapshot taken straight after navigation, a viewport change or a hot reload can come back partial;
+  take it again before reading an empty page as empty.
+- Offline emulation and a stopped server both leave service-worker and HTTP-cache responses available,
+  so a call that succeeds proves nothing. An uncached call must fail, or the server's own log decides;
+  a listed request does not prove the network answered.
+- Give captures absolute paths; a relative one lands in the browser daemon's directory, not the shell's.
 
 ## Mobile
 
