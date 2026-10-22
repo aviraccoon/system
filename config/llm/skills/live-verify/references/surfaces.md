@@ -108,6 +108,9 @@ Gotchas:
   failing.
 - A snapshot taken straight after navigation, a viewport change or a hot reload can come back partial;
   take it again before reading an empty page as empty.
+- An open menu, popover or focus ring is a live state. A resting screenshot never sees it, and a DOM-only
+  harness sees the nodes and where focus goes but not the geometry or appearance. Open the overlay, or
+  focus the control the way a keyboard user would, then check it.
 - Offline emulation and a stopped server both leave service-worker and HTTP-cache responses available,
   so a call that succeeds proves nothing. An uncached call must fail, or the server's own log decides;
   a listed request does not prove the network answered.
