@@ -95,15 +95,23 @@ export const MODE_SHORT: Record<Mode, string> = {
 
 export const MODE_CYCLE: Mode[] = ["careful", "trust-project", "allow-all"];
 
-/** Tools that only read, never mutate. Built-ins plus extension tools whose
- *  execute only inspects. A read-only tool that is missing here falls through
- *  to the unknown-tool branch and confirms on every call in Careful mode, which
- *  is pure friction — add new read-only tools here.
+/** Tools whose call runs without confirmation. A tool that is missing here
+ *  falls through to the unknown-tool branch and confirms on every call in
+ *  Careful mode.
  *
- *  `web_fetch` is a network read (no local side effect); its one blind spot
- *  (data smuggled in a URL) is accepted the same way Claude Code accepts it for
- *  WebFetch. */
-export const READ_ONLY_TOOLS = [
+ *  Most entries only read: built-ins, plus extension tools whose execute only
+ *  inspects. `web_fetch` is a network read (no local side effect); its one blind
+ *  spot (data smuggled in a URL) is accepted the same way Claude Code accepts
+ *  it for WebFetch.
+ *
+ *  `review` is the exception: it writes a tree object, dispatches the read-only
+ *  reviewer, and writes the gate's own ledger. Those effects are confined to the
+ *  repository's object store and the gate's state, and in Careful mode its
+ *  nested `subagent` call still confirms — that is the veto point worth keeping,
+ *  and the outer prompt is pure friction on a review round. A new entry with side effects
+ *  beyond inspection needs the same argument and names the confirmation it
+ *  leaves in place. */
+export const AUTO_ALLOWED_TOOLS = [
   "read",
   "ls",
   "grep",
@@ -112,6 +120,7 @@ export const READ_ONLY_TOOLS = [
   "web_fetch",
   "todo_check",
   "describe_image",
+  "review",
 ];
 
 // `subagent` is deliberately NOT in any allowlist above. Its confirmation is
@@ -670,8 +679,8 @@ export function decide(toolName: string, input: Record<string, unknown>, cwd: st
     return { action: "allow" };
   }
 
-  // Read-only tools: always allow
-  if (READ_ONLY_TOOLS.includes(toolName)) {
+  // Tools whose call needs no confirmation: see AUTO_ALLOWED_TOOLS.
+  if (AUTO_ALLOWED_TOOLS.includes(toolName)) {
     return { action: "allow" };
   }
 

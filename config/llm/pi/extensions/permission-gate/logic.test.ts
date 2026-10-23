@@ -644,8 +644,8 @@ describe("decide", () => {
     expect(decide("write", { path: "/etc/passwd" }, cwd, state).action).toBe("allow");
   });
 
-  // Read-only tools
-  test("read-only tools always allowed", () => {
+  // Auto-allowed tools
+  test("auto-allowed tools are never confirmed", () => {
     const state = stateWith({ mode: "careful" });
     expect(decide("read", { path: "src/main.ts" }, cwd, state).action).toBe("allow");
     expect(decide("grep", { pattern: "foo" }, cwd, state).action).toBe("allow");
@@ -658,6 +658,9 @@ describe("decide", () => {
     // unknown-tool branch and confirm on every call in Careful mode.
     expect(decide("todo_check", {}, cwd, state).action).toBe("allow");
     expect(decide("describe_image", { path: "shot.png" }, cwd, state).action).toBe("allow");
+    // The review tool writes the gate's ledger; its nested `subagent` call is the
+    // confirmation that stays.
+    expect(decide("review", { task: "t", proposedMessage: "m" }, cwd, state).action).toBe("allow");
   });
 
   // `read` and `grep` execute in the agent process, so the seatbelt profile does not
