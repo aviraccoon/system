@@ -19,18 +19,27 @@ export interface ReviewVerdictRecord {
   probabilities: Record<string, number>;
 }
 
+/** A user decision that lets one tree commit despite a blocking verdict. */
+export interface ReviewOverride {
+  reason: string;
+  at: string;
+  sessionId?: string;
+}
+
 export interface ReviewLedgerEntry {
   /** Absolute repository path (the worktree root). */
   repo: string;
   /** git tree object the reviewer saw. */
   tree: string;
-  /** The proposed commit message, normalized with `git stripspace -s`. */
+  /** The proposed commit message, normalized with `git stripspace`. */
   message: string;
   /** ISO timestamp of the round. */
   reviewedAt: string;
   sessionId?: string;
   model?: string;
   verdict: ReviewVerdictRecord;
+  /** Present only when the user overrode this tree; never written by a verdict. */
+  override?: ReviewOverride;
 }
 
 export interface ReviewLedgerFile {
@@ -115,7 +124,46 @@ export function pruneLedger(ledger: ReviewLedgerFile, options: PruneOptions = {}
  */
 export function recordReview(path: string, entry: ReviewLedgerEntry, options: PruneOptions = {}): ReviewLedgerFile {
   const ledger = loadLedger(path);
-  ledger.entries[reviewKey(entry.repo, entry.tree)] = entry;
+  // A round replaces the verdict but never erases a user's override of that tree.
+  const previous = ledger.entries[reviewKey(entry.repo, entry.tree)];
+  ledger.entries[reviewKey(entry.repo, entry.tree)] = previous?.override
+    ? { ...entry, override: previous.override }
+    : entry;
+  return savePruned(path, ledger, options);
+}
+
+/**
+ * Record a user override for one tree. When the tree has no review, the entry
+ * keeps a blocking verdict: the override is what authorizes the commit, not a
+ * clean verdict that was never reached.
+ */
+export function setOverride(
+  path: string,
+  params: { repo: string; tree: string; reason: string; sessionId?: string; now: Date },
+  options: PruneOptions = {},
+): ReviewLedgerFile {
+  const ledger = loadLedger(path);
+  const key = reviewKey(params.repo, params.tree);
+  const existing = ledger.entries[key];
+  const at = params.now.toISOString();
+  ledger.entries[key] = {
+    repo: params.repo,
+    tree: params.tree,
+    message: existing?.message ?? "",
+    reviewedAt: existing?.reviewedAt ?? at,
+    ...(existing?.sessionId === undefined ? {} : { sessionId: existing.sessionId }),
+    ...(existing?.model === undefined ? {} : { model: existing.model }),
+    verdict: existing?.verdict ?? {
+      blocking: true,
+      reasons: ["no reviewer verdict was recorded for this tree"],
+      probabilities: {},
+    },
+    override: { reason: params.reason, at, ...(params.sessionId === undefined ? {} : { sessionId: params.sessionId }) },
+  };
+  return savePruned(path, ledger, options);
+}
+
+function savePruned(path: string, ledger: ReviewLedgerFile, options: PruneOptions): ReviewLedgerFile {
   const pruned = pruneLedger(ledger, options);
   saveLedger(path, pruned);
   return pruned;

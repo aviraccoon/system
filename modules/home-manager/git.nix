@@ -1,5 +1,9 @@
 # Git configuration with 1Password SSH signing
-{ pkgs-unstable, ... }:
+{
+  config,
+  pkgs-unstable,
+  ...
+}:
 {
   programs.git = {
     enable = true;
@@ -29,6 +33,10 @@
       branch.sort = "-committerdate";
       help.autocorrect = "prompt";
       core.pager = "delta";
+      # Review-gate hooks; the scripts are deployed by ./git-hooks. A repository
+      # that sets its own core.hooksPath shadows them, and /review-gate status
+      # reports the gate inactive there.
+      core.hooksPath = "${config.home.homeDirectory}/.config/git/hooks";
       interactive.diffFilter = "delta --color-only";
       delta = {
         dark = true;

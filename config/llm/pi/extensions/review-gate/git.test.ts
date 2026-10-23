@@ -6,11 +6,11 @@ import { join } from "node:path";
 import {
   expandTilde,
   GATE_HOOKS_PATH,
-  hasCommentLines,
   hooksInactiveReason,
   hooksPath,
   localHooksPath,
   normalizeMessage,
+  repoHooks,
   repoToplevel,
   writeTree,
 } from "./git";
@@ -70,16 +70,10 @@ describe("git plumbing", () => {
     expect(repoToplevel(nested)).toBe(root);
   });
 
-  test("message normalization drops comment lines and edge blanks", () => {
+  test("message normalization drops edge blanks and keeps a comment line", () => {
     const dir = repoWithStagedFile();
     const message = "feat(x): subject\n\nbody line\n\n# a comment\n\n";
-    expect(normalizeMessage(message, dir)).toBe("feat(x): subject\n\nbody line");
-  });
-
-  test("a message with a comment line is detected", () => {
-    const dir = repoWithStagedFile();
-    expect(hasCommentLines("feat(x): subject\n\n# a comment\n", dir)).toBe(true);
-    expect(hasCommentLines("feat(x): subject\n\nbody\n\n", dir)).toBe(false);
+    expect(normalizeMessage(message, dir)).toBe("feat(x): subject\n\nbody line\n\n# a comment");
   });
 
   test("a subject-only message is unchanged", () => {
@@ -103,6 +97,20 @@ describe("git plumbing", () => {
     expect(expandTilde("~/.config/git/hooks")).toBe(join(homedir(), ".config/git/hooks"));
     expect(expandTilde("/absolute/path")).toBe("/absolute/path");
     expect(expandTilde("relative/path")).toBe("relative/path");
+  });
+
+  test("repository hooks are listed with their content hash, samples excluded", () => {
+    const dir = repoWithStagedFile();
+    const hooksDir = join(dir, ".git", "hooks");
+    mkdirSync(hooksDir, { recursive: true });
+    writeFileSync(join(hooksDir, "pre-commit"), "#!/bin/sh\necho hi\n", { mode: 0o755 });
+    writeFileSync(join(hooksDir, "pre-commit.sample"), "#!/bin/sh\necho sample\n", { mode: 0o755 });
+    writeFileSync(join(hooksDir, "notes.txt"), "not a hook\n", { mode: 0o644 });
+    const hooks = repoHooks(dir);
+    expect(hooks).toHaveLength(1);
+    expect(hooks[0]?.name).toBe("pre-commit");
+    expect(hooks[0]?.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(hooks[0]?.sha256).not.toBe("");
   });
 
   test("the gate's hook path is recognized as active", () => {

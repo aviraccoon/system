@@ -17,7 +17,7 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **or-pin** | `/or-pin` -- pick the OpenRouter upstream provider to pin for the session |
 | **patch** | Tolerant file editing with Unicode/whitespace normalization, anchor disambiguation, multi-file, closest-match diagnostics, atomic all-or-nothing |
 | **permission-gate** | Confirmation dialog for tool calls with LLM-generated safety verdicts and auto-classify |
-| **review-gate** | The `review` tool: dispatch the reviewer for the staged change and record the tree, message and classifier verdict the commit gate checks |
+| **review-gate** | The `review` tool and `/review-gate`: dispatch the reviewer for the staged change and record the tree, message and classifier verdict the commit gate checks |
 | **sandbox-bash** | Read-only Seatbelt shell -- `bash_readonly` in the main session, `bash` replaced in agents that opt in |
 | **sidecar** | `/sidecar-models` command -- pick models for sidecar roles (explain, draft, vision) |
 | **stats** | Live throughput readouts in the footer, per-message annotations, `/stats` totals |

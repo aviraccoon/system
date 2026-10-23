@@ -1,0 +1,21 @@
+#!/bin/sh
+# Review gate: refuse a commit whose staged tree has no clean recorded review.
+# The message is compared in reference-transaction, which reads the commit
+# object; this hook runs before git cleans the message file.
+# Runs after the repository's own commit-msg hook, which may still edit it.
+set -eu
+. "$(dirname "$0")/_lib.sh"
+
+message_file=$1
+run_repo_hook commit-msg "$message_file"
+
+gate_active || exit 0
+repo=$(repo_root) || exit 0
+if repo_exempt "$repo"; then exit 0; fi
+if history_in_progress; then exit 0; fi
+
+tree=$(git write-tree) || refuse_unreadable_index
+# Only the tree is checked here. This file is the message before git applies
+# cleanup, so a comparison against the reviewed message belongs in
+# reference-transaction, which reads the commit object.
+require_review "$repo" "$tree"

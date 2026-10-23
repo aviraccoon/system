@@ -9,6 +9,7 @@ import {
   type ReviewLedgerEntry,
   recordReview,
   reviewKey,
+  setOverride,
 } from "./review-ledger";
 
 const dirs: string[] = [];
@@ -114,6 +115,48 @@ describe("review ledger", () => {
     expect(pruned.entries[reviewKey("/tmp/c", c.tree)]).toBeDefined();
     expect(pruned.entries[reviewKey("/tmp/b", b.tree)]).toBeDefined();
     expect(pruned.entries[reviewKey("/tmp/a", a.tree)]).toBeUndefined();
+  });
+
+  test("an override authorizes a tree that no round reviewed", () => {
+    const path = ledgerPath();
+    setOverride(
+      path,
+      { repo: "/tmp/example", tree: "a".repeat(40), reason: "reviewer finding was wrong", now: new Date(NOW) },
+      { now: NOW },
+    );
+    const stored = lookupReview(path, "/tmp/example", "a".repeat(40));
+    expect(stored?.override?.reason).toBe("reviewer finding was wrong");
+    // The verdict stays blocking: the override, not a verdict, is the authorization.
+    expect(stored?.verdict.blocking).toBe(true);
+  });
+
+  test("an override keeps the verdict it was placed on", () => {
+    const path = ledgerPath();
+    recordReview(
+      path,
+      entry({ verdict: { blocking: true, reasons: ["severity 0.96 ≥ 0.85"], probabilities: { severity: 0.96 } } }),
+      { now: NOW },
+    );
+    setOverride(
+      path,
+      { repo: "/tmp/example", tree: "a".repeat(40), reason: "quoted, not a finding", now: new Date(NOW) },
+      { now: NOW },
+    );
+    const stored = lookupReview(path, "/tmp/example", "a".repeat(40));
+    expect(stored?.verdict.reasons).toEqual(["severity 0.96 ≥ 0.85"]);
+    expect(stored?.message).toBe("feat(example): add a thing");
+    expect(stored?.override?.reason).toBe("quoted, not a finding");
+  });
+
+  test("a later round for the overridden tree keeps the override", () => {
+    const path = ledgerPath();
+    setOverride(
+      path,
+      { repo: "/tmp/example", tree: "a".repeat(40), reason: "fixed instead", now: new Date(NOW) },
+      { now: NOW },
+    );
+    recordReview(path, entry({ reviewedAt: "2026-10-23T12:05:00.000Z" }), { now: NOW });
+    expect(lookupReview(path, "/tmp/example", "a".repeat(40))?.override?.reason).toBe("fixed instead");
   });
 
   test("pruning drops old entries and keeps the newest per repo", () => {

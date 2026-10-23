@@ -91,6 +91,7 @@ in
     ./1password.nix
     ./direnv.nix
     ./fonts.nix
+    ./git-hooks
     ./git.nix
     ./iterm2.nix
     ./lazygit.nix

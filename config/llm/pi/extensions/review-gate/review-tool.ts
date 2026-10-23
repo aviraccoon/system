@@ -15,7 +15,7 @@ import type { AgentToolResult, AgentToolUpdateCallback, ExtensionToolContext } f
 import { Type } from "typebox";
 import type { ReviewLedgerEntry } from "../shared/review-ledger";
 import { formatGateNote, type GateOutcome } from "./gate";
-import { hasCommentLines, hooksInactiveReason, normalizeMessage, repoToplevel, writeTree } from "./git";
+import { hooksInactiveReason, normalizeMessage, repoToplevel, writeTree } from "./git";
 
 export const ReviewParams = Type.Object({
   task: Type.String({
@@ -132,14 +132,6 @@ export async function runReview(
       true,
     );
   }
-  if (hasCommentLines(params.proposedMessage, cwd)) {
-    return textResult(
-      "review: proposedMessage has a comment line (it starts with #); git commit -m keeps it but the gate's normalization drops it, so the reviewer would never see that line. Remove it.",
-      undefined,
-      true,
-    );
-  }
-
   // Outside a repository there is no ref to gate, but the review is still
   // useful; run it and record nothing.
   const repo = repoToplevel(cwd);
@@ -174,13 +166,17 @@ export async function runReview(
   if (dispatched.isError || !completedReview(dispatched.details)) {
     return noteResult(
       report,
-      "gate: the reviewer did not complete a review run; nothing recorded. Re-dispatch.",
+      "gate: the reviewer did not complete a review run; nothing recorded. Call the `review` tool again.",
       undefined,
       true,
     );
   }
   if (!report) {
-    return textResult("gate: the review returned no report; nothing recorded. Re-dispatch.", undefined, true);
+    return textResult(
+      "gate: the review returned no report; nothing recorded. Call the `review` tool again.",
+      undefined,
+      true,
+    );
   }
   if (!repo || !tree) {
     return noteResult(
@@ -204,7 +200,7 @@ export async function runReview(
   if (after !== tree) {
     return noteResult(
       report,
-      `gate: the staged tree changed during the review (${tree.slice(0, 8)} → ${after.slice(0, 8)}); nothing recorded. Re-stage and re-dispatch.`,
+      `gate: the staged tree changed during the review (${tree.slice(0, 8)} → ${after.slice(0, 8)}); nothing recorded. Re-stage and call the \`review\` tool again.`,
       undefined,
       true,
     );
@@ -216,7 +212,7 @@ export async function runReview(
   } catch (err) {
     return noteResult(
       report,
-      `gate: blocked — the classifier failed (${String(err)}); fail-closed, nothing recorded. Re-dispatch.`,
+      `gate: blocked — the classifier failed (${String(err)}); fail-closed, nothing recorded. Call the \`review\` tool again.`,
       undefined,
       true,
     );

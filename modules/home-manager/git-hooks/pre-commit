@@ -1,0 +1,16 @@
+#!/bin/sh
+# Review gate: refuse a commit whose staged tree has no clean recorded review.
+# Runs after the repository's own pre-commit hook, so a formatter it runs is
+# part of the tree this checks.
+set -eu
+. "$(dirname "$0")/_lib.sh"
+
+run_repo_hook pre-commit
+
+gate_active || exit 0
+repo=$(repo_root) || exit 0
+if repo_exempt "$repo"; then exit 0; fi
+if history_in_progress; then exit 0; fi
+
+tree=$(git write-tree) || refuse_unreadable_index
+require_review "$repo" "$tree"

@@ -161,7 +161,7 @@ describe("review tool", () => {
         return report();
       },
     });
-    const result = await runReview({ task: "review", proposedMessage: " \n# comment\n" }, ctxAt(dir), d);
+    const result = await runReview({ task: "review", proposedMessage: " \n \n" }, ctxAt(dir), d);
     expect(ran).toBe(false);
     expect(d.entries).toHaveLength(0);
     expect(text(result)).toContain("proposedMessage is empty");
@@ -207,25 +207,6 @@ describe("review tool", () => {
       expect(d.entries).toHaveLength(0);
       expect(text(outcome)).toContain("did not complete a review run");
     }
-  });
-
-  test("a proposed message with a comment line fails before the reviewer runs", async () => {
-    const dir = repo();
-    let ran = false;
-    const d = deps({
-      dispatch: async () => {
-        ran = true;
-        return report();
-      },
-    });
-    const result = await runReview(
-      { task: "review", proposedMessage: `${MESSAGE}\n\n# not part of the commit\n` },
-      ctxAt(dir),
-      d,
-    );
-    expect(ran).toBe(false);
-    expect(d.entries).toHaveLength(0);
-    expect(text(result)).toContain("comment line");
   });
 
   test("an empty report records nothing", async () => {

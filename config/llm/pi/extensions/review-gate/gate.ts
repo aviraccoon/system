@@ -80,7 +80,7 @@ export function gateFromAnswers(
 export function formatGateNote(outcome: GateOutcome | null, tree?: string): string {
   const where = tree ? ` for tree ${tree.slice(0, 8)}` : "";
   if (!outcome) {
-    return `gate: blocked${where} — the classifier did not answer every question; fail-closed, no review recorded. Re-dispatch.`;
+    return `gate: blocked${where} — the classifier did not answer every question; fail-closed, no review recorded. Call the \`review\` tool again.`;
   }
   const numbers = [
     `${MESSAGE_QUESTION_NAME} ${outcome.message.probability.toFixed(2)} < ${outcome.message.threshold.toFixed(2)}`,
@@ -89,5 +89,5 @@ export function formatGateNote(outcome: GateOutcome | null, tree?: string): stri
     ),
   ].join(", ");
   if (!outcome.blocking) return `gate: clean${where} (${numbers}).`;
-  return `gate: blocked${where} — ${outcome.reasons.join("; ")}. Address it and re-dispatch; this tree is not reviewed.`;
+  return `gate: blocked${where} — ${outcome.reasons.join("; ")}. Fix the findings and call the \`review\` tool again; a commit of this tree is refused until a round records no blocking finding.`;
 }

@@ -61,9 +61,9 @@ if [ -n "${1:-}" ]; then
   trees="$1"
 else
   # Every tree with a tsconfig gets its own tsc scope; bun-types resolves from the root.
-  trees=$(fd -t f -g 'tsconfig.json' config | xargs -n1 dirname | sort)
+  trees=$(fd -t f -g 'tsconfig.json' config modules | xargs -n1 dirname | sort)
 fi
-[ -n "$trees" ] || { echo "no TypeScript trees found under config/" >&2; exit 1; }
+[ -n "$trees" ] || { echo "no TypeScript trees found under config/ or modules/" >&2; exit 1; }
 for dir in $trees; do
   echo "==> $dir: tsc --noEmit"
   (cd "$dir" && tsc --noEmit)

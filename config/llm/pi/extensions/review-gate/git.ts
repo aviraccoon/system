@@ -7,6 +7,8 @@
  */
 
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -46,22 +48,14 @@ export function writeTree(cwd: string): string {
 }
 
 /**
- * The reviewed message and the committed message must compare equal, so both
- * sides normalize with this, and the comparison cannot drift. `stripspace -s`
- * drops comment lines and blank edges; `git commit -m` uses a weaker cleanup
- * that keeps a `#` line, which is why `hasCommentLines` refuses one.
+ * The reviewed message and the committed message must compare equal. Both sides
+ * normalize with plain `stripspace` (edge blanks and runs of blank lines), so
+ * a comment line is compared as written: `commit-msg` never sees the message
+ * git finally records, and the backstop reads the commit object, where git has
+ * already applied whatever cleanup mode the commit used.
  */
 export function normalizeMessage(message: string, cwd: string): string {
-  return git(["stripspace", "-s"], cwd, message).trimEnd();
-}
-
-/**
- * True when `stripspace -s` would drop a line that `git commit -m` keeps: a
- * `#`-prefixed line. Normalizing both sides would compare the message without
- * it while the commit ships it, so the tool refuses such a message.
- */
-export function hasCommentLines(message: string, cwd: string): boolean {
-  return git(["stripspace"], cwd, message).trimEnd() !== git(["stripspace", "-s"], cwd, message).trimEnd();
+  return git(["stripspace"], cwd, message).trimEnd();
 }
 
 /** A repository-local hooks path shadows the global gate: any non-empty value. */
@@ -89,6 +83,41 @@ export function expandTilde(value: string): string {
   if (value === "~") return homedir();
   if (value.startsWith("~/")) return join(homedir(), value.slice(2));
   return value;
+}
+
+/**
+ * Hooks a repository ships itself. A global `core.hooksPath` shadows them, so
+ * the gate chains them back in; a worktree's hooks live in the common dir.
+ * Only executable files are hooks, and `.sample` files are git's templates.
+ */
+export interface RepoHook {
+  name: string;
+  path: string;
+  sha256: string;
+}
+
+export function repoHooks(cwd: string): RepoHook[] {
+  const common = git(["rev-parse", "--git-common-dir"], cwd).trim();
+  const dir = resolve(cwd, common, "hooks");
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const hooks: RepoHook[] = [];
+  for (const name of names.sort()) {
+    if (name.endsWith(".sample")) continue;
+    const path = join(dir, name);
+    try {
+      // Only an executable file is something git would run as a hook.
+      if ((statSync(path).mode & 0o111) === 0) continue;
+      hooks.push({ name, path, sha256: createHash("sha256").update(readFileSync(path)).digest("hex") });
+    } catch {
+      // An unreadable entry cannot be trusted either; leave it out of the list.
+    }
+  }
+  return hooks;
 }
 
 /**

@@ -83,7 +83,8 @@ describe("gate note", () => {
     if (!outcome) throw new Error("expected a verdict");
     const note = formatGateNote(outcome, "c".repeat(40));
     expect(note).toContain(`message 0.91 ≥ ${DEFAULT_MESSAGE_THRESHOLD.toFixed(2)}`);
-    expect(note).toContain("re-dispatch");
+    expect(note).toContain("`review` tool");
+    expect(note).toContain("refused");
     expect(note).not.toContain("clean");
   });
 });

@@ -18,16 +18,21 @@ import { Container, SelectList, Spacer, Text } from "@earendil-works/pi-tui";
 import { DEFAULT_DECISIONS_MODEL, decisionsComplete } from "../shared/decisions";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { resolveProviderAuth } from "../shared/model-roles";
-import { loadLedger, type ReviewLedgerEntry, recordReview } from "../shared/review-ledger";
+import { loadLedger, type ReviewLedgerEntry, recordReview, setOverride } from "../shared/review-ledger";
 import { isShellTool } from "../shared/shell-tools";
+import { shellDenialReason } from "./denials";
+import { isExempt, loadExemptions, removeExemption, setExemption } from "./exempt";
 import { GATE_QUESTIONS, type GateOutcome, gateFromAnswers } from "./gate";
-import { GATE_HOOKS_PATH, hooksInactiveReason, hooksPath, repoToplevel, writeTree } from "./git";
+import { GATE_HOOKS_PATH, hooksInactiveReason, hooksPath, repoHooks, repoToplevel, writeTree } from "./git";
+import { isHookTrusted, loadHookTrust, trustHook } from "./hook-trust";
 import { renderReviewResult } from "./render";
 import { ReviewParams, runReview } from "./review-tool";
 
 const STATE_DIR = join(homedir(), ".pi", "agent", "state");
 const LEDGER_PATH = join(STATE_DIR, "review-ledger.json");
 const OFF_PATH = join(STATE_DIR, "review-gate-off");
+const EXEMPT_PATH = join(STATE_DIR, "review-gate-exempt.json");
+const TRUST_PATH = join(STATE_DIR, "review-hooks-trust.json");
 
 const CLASSIFIER_PROVIDER = process.env.PI_REVIEW_PROVIDER ?? "openrouter";
 const CLASSIFIER_MODEL = process.env.PI_REVIEW_CLASSIFIER ?? DEFAULT_DECISIONS_MODEL;
@@ -83,9 +88,10 @@ export function dropStatusHeading(text: string): string {
 export interface StatusPaths {
   ledgerPath: string;
   offPath: string;
+  exemptPath: string;
 }
 
-const DEFAULT_STATUS_PATHS: StatusPaths = { ledgerPath: LEDGER_PATH, offPath: OFF_PATH };
+const DEFAULT_STATUS_PATHS: StatusPaths = { ledgerPath: LEDGER_PATH, offPath: OFF_PATH, exemptPath: EXEMPT_PATH };
 
 export function statusText(ctx: ExtensionContext, paths: StatusPaths = DEFAULT_STATUS_PATHS): string {
   const repo = repoToplevel(ctx.cwd);
@@ -93,7 +99,7 @@ export function statusText(ctx: ExtensionContext, paths: StatusPaths = DEFAULT_S
   const lines = [
     "review gate",
     `  hooks: ${hooks.label} (${hooks.detail})`,
-    `  controls: ${gateDisabled(paths.offPath) ? "disabled" : "enabled"}`,
+    `  controls: ${gateDisabled(paths.offPath) ? "disabled" : "enabled"} (agent sessions only)`,
   ];
   const allEntries = Object.values(loadLedger(paths.ledgerPath).entries);
   const repos = new Set(allEntries.map((entry) => entry.repo)).size;
@@ -116,6 +122,7 @@ export function statusText(ctx: ExtensionContext, paths: StatusPaths = DEFAULT_S
   const entries = allEntries.filter((entry) => entry.repo === repo);
   const latest = entries.sort((a, b) => Date.parse(b.reviewedAt) - Date.parse(a.reviewedAt))[0];
   lines.push(`  repo: ${repo}`);
+  lines.push(`  exempt: ${isExempt(loadExemptions(paths.exemptPath), repo) ? "yes" : "no"}`);
   lines.push(`  staged tree: ${staged ? staged.slice(0, 8) : "unreadable"}`);
   if (latest) {
     const state = latest.verdict.blocking ? "blocked" : "clean";
@@ -142,16 +149,136 @@ interface GateAction {
   detail: string;
 }
 
-function actions(): GateAction[] {
-  return [
-    { value: "status", label: "Status", detail: "hooks, the staged tree, and the last recorded review" },
-    { value: "off", label: "Disable the gate", detail: "writes the user-only off switch the hooks read" },
-    { value: "on", label: "Enable the gate", detail: "removes the off switch" },
-  ];
+const ACTIONS: GateAction[] = [
+  { value: "status", label: "Status", detail: "hooks, the staged tree, and the last recorded review" },
+  { value: "override", label: "Override this tree", detail: "let the staged tree commit despite a blocking review" },
+  { value: "exempt", label: "Exempt this repository", detail: "commits here no longer need a recorded review" },
+  { value: "unexempt", label: "Remove the exemption", detail: "commits here need a recorded review again" },
+  {
+    value: "trust-hooks",
+    label: "Trust repository hooks",
+    detail: "allow this repository's own hooks to run",
+  },
+  { value: "off", label: "Disable the gate", detail: "writes the user-only off switch the hooks read" },
+  { value: "on", label: "Enable the gate", detail: "removes the off switch" },
+];
+
+function needsUI(ui: ExtensionUIContext, action: string): void {
+  ui.notify(`review-gate: ${action} needs an interactive session`, "warning");
+}
+
+interface CommitTarget {
+  repo: string;
+  tree: string;
+}
+
+function commitTarget(ctx: ExtensionContext, ui: ExtensionUIContext): CommitTarget | null {
+  const repo = repoToplevel(ctx.cwd);
+  if (!repo) {
+    ui.notify("review-gate: this directory is not a git repository", "warning");
+    return null;
+  }
+  try {
+    return { repo, tree: writeTree(ctx.cwd) };
+  } catch (err) {
+    ui.notify(`review-gate: cannot read the staged tree (${String(err)})`, "error");
+    return null;
+  }
+}
+
+async function overrideAction(ctx: ExtensionContext, ui: ExtensionUIContext): Promise<void> {
+  if (!ctx.hasUI) return needsUI(ui, "override");
+  const target = commitTarget(ctx, ui);
+  if (!target) return;
+  const reason = await ctx.ui.input(
+    "Override the review gate",
+    "Why this tree may commit without a clean review (recorded in the ledger)",
+  );
+  if (!reason?.trim()) {
+    ui.notify("review-gate: override cancelled; a reason is required", "warning");
+    return;
+  }
+  const confirmed = await ctx.ui.confirm(
+    "Override the gate for this tree?",
+    `${target.repo}\ntree ${target.tree.slice(0, 8)}\n\n${reason.trim()}`,
+  );
+  if (!confirmed) return;
+  setOverride(LEDGER_PATH, {
+    repo: target.repo,
+    tree: target.tree,
+    reason: reason.trim(),
+    sessionId: ctx.sessionManager.getSessionId(),
+    now: new Date(),
+  });
+  ui.notify(`review-gate: override recorded for tree ${target.tree.slice(0, 8)}`);
+}
+
+async function exemptionAction(ctx: ExtensionContext, ui: ExtensionUIContext, exempt: boolean): Promise<void> {
+  const repo = repoToplevel(ctx.cwd);
+  if (!repo) {
+    ui.notify("review-gate: this directory is not a git repository", "warning");
+    return;
+  }
+  if (!ctx.hasUI) return needsUI(ui, exempt ? "exempt" : "unexempt");
+  const confirmed = await ctx.ui.confirm(
+    exempt ? "Exempt this repository from the gate?" : "Remove the repository's exemption?",
+    `${repo}\n\n${
+      exempt
+        ? "Commits in this repository no longer need a recorded review."
+        : "Commits in this repository need a recorded review again."
+    }`,
+  );
+  if (!confirmed) return;
+  if (exempt) {
+    setExemption(EXEMPT_PATH, {
+      repo,
+      at: new Date().toISOString(),
+      sessionId: ctx.sessionManager.getSessionId(),
+    });
+    ui.notify("review-gate: repository exempted; /review-gate unexempt reverses it");
+    return;
+  }
+  removeExemption(EXEMPT_PATH, repo);
+  ui.notify("review-gate: repository exemption removed");
+}
+
+async function trustHooksAction(ctx: ExtensionContext, ui: ExtensionUIContext): Promise<void> {
+  const repo = repoToplevel(ctx.cwd);
+  if (!repo) {
+    ui.notify("review-gate: this directory is not a git repository", "warning");
+    return;
+  }
+  const hooks = repoHooks(ctx.cwd);
+  if (hooks.length === 0) {
+    ui.notify("review-gate: this repository ships no hooks of its own");
+    return;
+  }
+  const trust = loadHookTrust(TRUST_PATH);
+  const pending = hooks.filter((hook) => !isHookTrusted(trust, repo, hook.name, hook.sha256));
+  if (pending.length === 0) {
+    ui.notify("review-gate: every repository hook is trusted at its current content");
+    return;
+  }
+  if (!ctx.hasUI) {
+    ui.notify(
+      `review-gate: ${pending.length} untrusted hook(s): ${pending.map((hook) => hook.name).join(", ")}; trust-hooks needs an interactive session`,
+      "warning",
+    );
+    return;
+  }
+  const trustAll = "Trust all";
+  const labels = pending.map((hook) => `${hook.name} (${hook.sha256.slice(0, 12)})`);
+  const choice = await ctx.ui.select("Trust repository hooks", [...labels, trustAll]);
+  if (!choice) return;
+  const chosen =
+    choice === trustAll ? pending : pending.filter((hook) => choice === `${hook.name} (${hook.sha256.slice(0, 12)})`);
+  const at = new Date().toISOString();
+  for (const hook of chosen) trustHook(TRUST_PATH, { repo, hook: hook.name, sha256: hook.sha256, at });
+  ui.notify(`review-gate: trusted ${chosen.map((hook) => hook.name).join(", ")}`);
 }
 
 async function pickAction(ctx: ExtensionContext): Promise<string | undefined> {
-  const items = actions();
+  const items = ACTIONS;
   const status = statusText(ctx);
   return ctx.ui.custom<string | undefined>((tui, theme, _keybindings, done) => {
     const container = new Container();
@@ -201,17 +328,37 @@ async function runAction(value: string, ctx: ExtensionContext, ui: ExtensionUICo
     showStatus(ctx);
     return;
   }
-  if (value === "off") {
-    setGateDisabled(true);
-    ui.notify("review gate disabled; the hooks allow commits until /review-gate on", "warning");
+  if (value === "override") {
+    await overrideAction(ctx, ui);
     return;
   }
-  if (value === "on") {
-    setGateDisabled(false);
-    ui.notify("review gate enabled");
+  if (value === "exempt" || value === "unexempt") {
+    await exemptionAction(ctx, ui, value === "exempt");
     return;
   }
-  ui.notify(`review-gate: unknown action "${value}" (status, off, on)`, "warning");
+  if (value === "trust-hooks") {
+    await trustHooksAction(ctx, ui);
+    return;
+  }
+  if (value === "off" || value === "on") {
+    const disable = value === "off";
+    if (ctx.hasUI) {
+      const confirmed = await ctx.ui.confirm(
+        disable ? "Disable the review gate?" : "Enable the review gate?",
+        disable
+          ? "Commits from agent sessions will not need a recorded review until /review-gate on."
+          : "Commits from agent sessions need a recorded review again.",
+      );
+      if (!confirmed) return;
+    }
+    setGateDisabled(disable);
+    ui.notify(
+      disable ? "review gate disabled; the hooks allow commits until /review-gate on" : "review gate enabled",
+      disable ? "warning" : "info",
+    );
+    return;
+  }
+  ui.notify(`review-gate: unknown action "${value}" (${ACTIONS.map((action) => action.value).join(", ")})`, "warning");
 }
 
 // ── Dispatch note for reviewer runs outside the gate ──
@@ -231,7 +378,7 @@ function reviewerNames(input: Record<string, unknown>): string[] {
 }
 
 const OUTSIDE_GATE_NOTE =
-  "review-gate: no commit coverage was recorded for this dispatch. If this was a pre-commit review, re-dispatch with the `review` tool.";
+  "review-gate: no commit coverage was recorded for this dispatch. If this was a pre-commit review, call the `review` tool instead.";
 
 function gateStatePath(path: string): boolean {
   return path.startsWith(`${STATE_DIR}${sep}`) && path.slice(STATE_DIR.length + 1).startsWith("review-");
@@ -295,14 +442,9 @@ export default function reviewGateExtension(pi: ExtensionAPI) {
     }
     if (isShellTool(event.toolName)) {
       const command = (event.input as { command?: unknown }).command;
-      // Best-effort text match, not a boundary: a command that reaches the same
-      // file another way is not caught.
-      if (typeof command === "string" && (command.includes(STATE_DIR) || command.includes(".pi/agent/state"))) {
-        return {
-          block: true,
-          reason: "review-gate state is written only by the extension; use /review-gate status to read it.",
-        };
-      }
+      if (typeof command !== "string") return;
+      const denied = shellDenialReason(command, STATE_DIR);
+      if (denied) return { block: true, reason: denied };
     }
   });
 
@@ -313,9 +455,9 @@ export default function reviewGateExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("review-gate", {
-    description: "Review gate: status and controls",
+    description: "Review gate: status, override, exempt, trust-hooks, off/on",
     getArgumentCompletions: (prefix) =>
-      ["status", "off", "on"]
+      ACTIONS.map((action) => action.value)
         .filter((name) => name.startsWith(prefix))
         .map((name) => ({ value: `${name} `, label: name })),
     handler: async (args, ctx) => {

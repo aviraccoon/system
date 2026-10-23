@@ -3,8 +3,8 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { dropStatusHeading, statusText } from "./index";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import reviewGateExtension, { dropStatusHeading, statusText } from "./index";
 import { isolateGitConfig } from "./test-git-config";
 
 const dirs: string[] = [];
@@ -48,6 +48,30 @@ function writeLedger(
   writeFileSync(path, `${JSON.stringify({ version: 1, entries: map }, null, 2)}\n`);
 }
 
+/** Only the registration surface the tool_call handler needs. */
+function fakePlugin(): (event: unknown) => Promise<unknown> {
+  const handlers = new Map<string, (event: unknown) => Promise<unknown>>();
+  const api = {
+    registerTool: () => {},
+    registerCommand: () => {},
+    on: (name: string, handler: (event: unknown) => Promise<unknown>) => handlers.set(name, handler),
+  } as unknown as ExtensionAPI;
+  reviewGateExtension(api);
+  const toolCall = handlers.get("tool_call");
+  if (!toolCall) throw new Error("review-gate registered no tool_call handler");
+  return toolCall;
+}
+
+describe("review-gate shell denials in the tool_call handler", () => {
+  test("a shell command naming core.hooksPath is blocked, case-insensitively", async () => {
+    const toolCall = fakePlugin();
+    const denied = await toolCall({ toolName: "bash", input: { command: "git -c core.hookspath=/tmp/x commit" } });
+    expect(denied).toMatchObject({ block: true });
+    const allowed = await toolCall({ toolName: "bash", input: { command: "git status --short" } });
+    expect(allowed).toBeUndefined();
+  });
+});
+
 describe("review-gate status", () => {
   test("the status/picker helpers are pinned; the picker wiring is live-verified only", () => {
     expect(dropStatusHeading("review gate\n  hooks: not installed")).toBe("  hooks: not installed");
@@ -60,7 +84,11 @@ describe("review-gate status", () => {
     const root = realpathSync(dir);
     const state = mkdtempSync(join(tmpdir(), "review-gate-state-"));
     dirs.push(state);
-    const paths = { ledgerPath: join(state, "review-ledger.json"), offPath: join(state, "review-gate-off") };
+    const paths = {
+      ledgerPath: join(state, "review-ledger.json"),
+      offPath: join(state, "review-gate-off"),
+      exemptPath: join(state, "review-gate-exempt.json"),
+    };
     const ctx = { cwd: dir } as ExtensionContext;
     const tree = "a".repeat(40);
     const newerTree = "b".repeat(40);
@@ -86,6 +114,7 @@ describe("review-gate status", () => {
     expect(picker).toContain("hooks:");
     expect(picker).toContain("repo:");
     expect(status).toContain("controls: enabled");
+    expect(status).toContain("exempt: no");
     expect(status).toContain("ledger: 3 entries across 2 repos");
     expect(status).toContain(`latest review: ${newerTree.slice(0, 8)} clean`);
     writeFileSync(paths.offPath, "{}\n");
