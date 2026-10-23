@@ -12,11 +12,11 @@ let
   # Custom macOS packages not in nixpkgs (only evaluated on Darwin)
   applaymidi = if isDarwin then pkgs.callPackage ../../packages/applaymidi.nix { } else null;
   trenchbroom = if isDarwin then pkgs.callPackage ../../packages/trenchbroom.nix { } else null;
-  godot-4-6 =
+  godot-4-7 =
     if isDarwin then
       pkgs.callPackage ../../packages/godot.nix {
-        version = "4.6.2";
-        sha256 = "01q8nlkrghbcpv971s309ryynwpbi2w0ailpwjq9vidmwij2lsv6";
+        version = "4.7.2";
+        sha256 = "0gm67cxrmancr4dzw30vy9rgp5g6qhkmdjv05zbfj2vj3pij92n5";
       }
     else
       null;
@@ -64,7 +64,7 @@ let
   customApps = lib.optionals isDarwin [
     applaymidi
     trenchbroom
-    godot-4-6
+    godot-4-7
     vkquake
   ];
 
