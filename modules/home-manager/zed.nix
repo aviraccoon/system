@@ -30,7 +30,10 @@ let
   };
 
   zedSettings = {
-    git_panel.tree_view = true;
+    git_panel = {
+      group_by = "staging";
+      tree_view = true;
+    };
     colorize_brackets = true;
     auto_update = false;
 
