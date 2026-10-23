@@ -24,6 +24,8 @@ export interface ReviewLedgerEntry {
   repo: string;
   /** git tree object the reviewer saw. */
   tree: string;
+  /** The proposed commit message, normalized with `git stripspace -s`. */
+  message: string;
   /** ISO timestamp of the round. */
   reviewedAt: string;
   sessionId?: string;
@@ -40,10 +42,13 @@ export interface PruneOptions {
   now?: number;
   maxAgeDays?: number;
   maxPerRepo?: number;
+  /** Whole-file cap, so many repositories cannot grow the file without bound. */
+  maxEntries?: number;
 }
 
 const DEFAULT_MAX_AGE_DAYS = 30;
 const DEFAULT_MAX_PER_REPO = 50;
+const DEFAULT_MAX_ENTRIES = 500;
 
 export function reviewKey(repo: string, tree: string): string {
   // A NUL cannot appear in either path or object id, so it cannot merge two keys.
@@ -75,7 +80,8 @@ export function pruneLedger(ledger: ReviewLedgerFile, options: PruneOptions = {}
   const now = options.now ?? Date.now();
   const maxAgeMs = (options.maxAgeDays ?? DEFAULT_MAX_AGE_DAYS) * 24 * 60 * 60 * 1000;
   const maxPerRepo = options.maxPerRepo ?? DEFAULT_MAX_PER_REPO;
-  const kept: Record<string, ReviewLedgerEntry> = {};
+  const maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
+  const kept: ReviewLedgerEntry[] = [];
   const byRepo = new Map<string, ReviewLedgerEntry[]>();
   for (const entry of Object.values(ledger.entries)) {
     const age = now - Date.parse(entry.reviewedAt);
@@ -85,14 +91,20 @@ export function pruneLedger(ledger: ReviewLedgerFile, options: PruneOptions = {}
     byRepo.set(entry.repo, list);
   }
   for (const entries of byRepo.values()) {
-    entries
+    for (const entry of entries
       .sort((a, b) => Date.parse(b.reviewedAt) - Date.parse(a.reviewedAt))
-      .slice(0, maxPerRepo)
-      .forEach((entry) => {
-        kept[reviewKey(entry.repo, entry.tree)] = entry;
-      });
+      .slice(0, maxPerRepo)) {
+      kept.push(entry);
+    }
   }
-  return { version: 1, entries: kept };
+  const out: Record<string, ReviewLedgerEntry> = {};
+  kept
+    .sort((a, b) => Date.parse(b.reviewedAt) - Date.parse(a.reviewedAt))
+    .slice(0, maxEntries)
+    .forEach((entry) => {
+      out[reviewKey(entry.repo, entry.tree)] = entry;
+    });
+  return { version: 1, entries: out };
 }
 
 /**

@@ -10,6 +10,7 @@
  * resolved finding that a later round quotes are all non-blocking.
  */
 
+import type { MessageGroup } from "./message-cases";
 import type { TestCase } from "./shared";
 
 export type VerdictGroup = "clean" | "nit" | "blocking" | "quoted" | "out-of-scope" | "behavior" | "incomplete";
@@ -452,7 +453,7 @@ export const VERDICT_CASES: VerdictCase[] = [
 
 export interface VerdictRow {
   id: string;
-  group: VerdictGroup;
+  group: VerdictGroup | MessageGroup;
   expected: boolean;
   /** The gate's decision at the configured per-question thresholds. */
   blocking?: boolean;

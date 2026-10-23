@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import type { DecisionsAnswer } from "./decisions";
 import {
   DEFAULT_VERDICT_THRESHOLDS,
-  formatVerdictNote,
   hasAllVerdictAnswers,
   REVIEW_VERDICT_QUESTIONS,
   type VerdictQuestionName,
@@ -22,7 +21,6 @@ describe("verdict policy", () => {
     delete partial.behavior;
     expect(hasAllVerdictAnswers(partial)).toBe(false);
     expect(verdictFromAnswers(partial)).toBeNull();
-    expect(formatVerdictNote(null)).toContain("fail-closed");
   });
 
   test("a custom threshold can flip the decision", () => {
@@ -30,10 +28,7 @@ describe("verdict policy", () => {
     expect(verdictFromAnswers(severity)?.blocking).toBe(true);
     const high = { severity: 0.95, behavior: 0.95, unfinished: 0.95 };
     expect(verdictFromAnswers(severity, high)?.blocking).toBe(false);
-    const blocking = verdictFromAnswers(answers({ severity: noul(0.98) }), high);
-    expect(formatVerdictNote(blocking)).toContain("0.95");
-    const clean = verdictFromAnswers(answers({}), high);
-    expect(formatVerdictNote(clean)).toContain("severity 0.02 < 0.95");
+    expect(verdictFromAnswers(answers({ severity: noul(0.98) }), high)?.blocking).toBe(true);
   });
 
   test("the threshold is inclusive", () => {
@@ -42,25 +37,14 @@ describe("verdict policy", () => {
     expect(verdict?.reasons.map((reason) => reason.name)).toEqual(["severity"]);
   });
 
-  test("a clean note names every probability and never reads as blocked", () => {
+  test("a clean verdict names no reasons", () => {
     const verdict = verdictFromAnswers(answers({}));
     expect(verdict?.blocking).toBe(false);
-    const note = formatVerdictNote(verdict);
-    expect(note).not.toContain("blocked");
-    for (const name of Object.keys(REVIEW_VERDICT_QUESTIONS)) expect(note).toContain(`${name} 0.02`);
+    expect(verdict?.reasons).toEqual([]);
   });
 
-  test("a blocking note names the condition and its probability", () => {
-    const verdict = verdictFromAnswers(answers({ behavior: noul(0.96) }));
-    const note = formatVerdictNote(verdict);
-    expect(note).toContain("behavior 0.96 ≥ 0.85");
-    expect(note).toContain("no pin that can fail");
-    expect(note).toContain("not reviewed");
-  });
-
-  test("several firing questions are all named", () => {
+  test("several firing questions are all named, in battery order", () => {
     const verdict = verdictFromAnswers(answers({ severity: noul(0.98), unfinished: noul(0.97) }));
     expect(verdict?.reasons.map((reason) => reason.name)).toEqual(["severity", "unfinished"]);
-    expect(formatVerdictNote(verdict)).toContain("did not finish");
   });
 });

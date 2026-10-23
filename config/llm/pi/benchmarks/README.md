@@ -61,6 +61,15 @@ three typed nouls per case; any answer at its threshold blocks.
 the decisions pin in `extensions/shared/decisions.ts`. `VERDICT_THRESHOLD` sets one threshold for all
 three questions.
 
+## Message-judgment benchmark
+
+`message.ts` scores the gate's fourth question over `{proposedMessage, report}`: did the report judge
+the proposed commit message at all, or only quote an earlier round's verdict? One noul per case
+(`message-cases.ts`), synthetic; an answer at the threshold blocks the commit on its own.
+`BENCH_GROUP` selects `judged`, `unjudged`, `quoted`, or `partial`; `MESSAGE_MODEL`,
+`MESSAGE_PROVIDER`, and `MESSAGE_THRESHOLD` override the defaults from
+`extensions/shared/review-message.ts`.
+
 ## Speed
 
 Cases are independent requests, so they run concurrently — `BENCH_CONCURRENCY` (default 6) sets the cap. Lower it for a local endpoint that should not be hit in parallel; raise it for a hosted provider.
@@ -116,6 +125,8 @@ All benchmarks use the same `TestCase` type and runner from `shared.ts`.
 | `factor-report.ts` | Shared table and summary for factor runs |
 | `verdict.ts` | Review-verdict runner (synthetic cases) |
 | `verdict-cases.ts` | Synthetic verdict cases and threshold scoring |
+| `message.ts` | Message-judgment runner (synthetic cases) |
+| `message-cases.ts` | Synthetic message-judgment cases |
 | `jev.ts` | Jev (TypeSafe decisions-model) factor runner |
 | `factors.ts` | Chat-model factor runner |
 | `explain.ts` | Explain role benchmark |

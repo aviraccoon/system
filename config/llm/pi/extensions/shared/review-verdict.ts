@@ -111,25 +111,7 @@ const REASON_LABELS: Record<VerdictQuestionName, string> = {
   unfinished: "a review that did not finish",
 };
 
-/**
- * The one-line note the gate returns to the main agent. It names the condition
- * that fired and the probability behind it, not a synthesized finding: the
- * reviewer's report already holds the finding, and a paraphrase would send the
- * agent after the wrong text. A null verdict is reported as fail-closed, never
- * as clean.
- */
-export function formatVerdictNote(verdict: ReviewVerdict | null): string {
-  if (!verdict)
-    return "gate: blocked — the classifier did not answer every question; fail-closed, re-dispatch the review.";
-  const probabilities = QUESTION_NAMES.map(
-    (name) => `${name} ${verdict.probabilities[name].toFixed(2)} < ${verdict.thresholds[name].toFixed(2)}`,
-  ).join(", ");
-  if (!verdict.blocking) return `gate: clean (${probabilities}).`;
-  const reasons = verdict.reasons
-    .map(
-      ({ name, probability, threshold }) =>
-        `${REASON_LABELS[name]} (${name} ${probability.toFixed(2)} ≥ ${threshold.toFixed(2)})`,
-    )
-    .join("; ");
-  return `gate: blocked — ${reasons}. Address it and re-dispatch the review; this tree is not reviewed.`;
+/** The human label for a question, for callers that compose their own note. */
+export function reviewReasonLabel(name: VerdictQuestionName): string {
+  return REASON_LABELS[name];
 }

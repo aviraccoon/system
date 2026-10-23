@@ -28,6 +28,7 @@ function entry(overrides: Partial<ReviewLedgerEntry> = {}): ReviewLedgerEntry {
   return {
     repo: "/tmp/example",
     tree: "a".repeat(40),
+    message: "feat(example): add a thing",
     reviewedAt: "2026-10-23T12:00:00.000Z",
     verdict: { blocking: false, reasons: [], probabilities: { severity: 0.02, behavior: 0.02, unfinished: 0.01 } },
     ...overrides,
@@ -94,6 +95,25 @@ describe("review ledger", () => {
     });
     expect(lookupReview(path, "/tmp/example", "1".repeat(40))).toBeUndefined();
     expect(lookupReview(path, "/tmp/example", "2".repeat(40))).toBeDefined();
+  });
+
+  test("pruning honors the whole-file cap with the newest entries", () => {
+    const a = entry({ repo: "/tmp/a", tree: "1".repeat(40), reviewedAt: "2026-10-23T12:00:00.000Z" });
+    const b = entry({ repo: "/tmp/b", tree: "2".repeat(40), reviewedAt: "2026-10-23T12:01:00.000Z" });
+    const c = entry({ repo: "/tmp/c", tree: "3".repeat(40), reviewedAt: "2026-10-23T12:02:00.000Z" });
+    const ledger = {
+      version: 1 as const,
+      entries: {
+        [reviewKey(a.repo, a.tree)]: a,
+        [reviewKey(b.repo, b.tree)]: b,
+        [reviewKey(c.repo, c.tree)]: c,
+      },
+    };
+    const pruned = pruneLedger(ledger, { now: Date.parse("2026-10-23T12:03:00.000Z"), maxEntries: 2 });
+    expect(Object.keys(pruned.entries)).toHaveLength(2);
+    expect(pruned.entries[reviewKey("/tmp/c", c.tree)]).toBeDefined();
+    expect(pruned.entries[reviewKey("/tmp/b", b.tree)]).toBeDefined();
+    expect(pruned.entries[reviewKey("/tmp/a", a.tree)]).toBeUndefined();
   });
 
   test("pruning drops old entries and keeps the newest per repo", () => {
