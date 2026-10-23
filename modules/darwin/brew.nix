@@ -32,31 +32,11 @@
 
     taps = [
       {
-        name = "android/tap";
+        name = "f/mcptools"; # mcp
         trusted = true;
       }
       {
-        name = "anomalyco/tap";
-        trusted = true;
-      }
-      {
-        name = "f/mcptools";
-        trusted = true;
-      }
-      {
-        name = "lzhgus/tap";
-        trusted = true;
-      }
-      {
-        name = "steamre/tools";
-        trusted = true;
-      }
-      {
-        name = "stripe/stripe-cli";
-        trusted = true;
-      }
-      {
-        name = "ungive/music-presence";
+        name = "steamre/tools"; # depotdownloader
         trusted = true;
       }
     ];
@@ -73,11 +53,11 @@
         name = "jundot/omlx/omlx"; # MLX inference server CLI (tap: brew tap jundot/omlx https://github.com/jundot/omlx). Auto-starts as brew service.
         start_service = true;
       }
-      "ollama" # LLM runtime (nixpkgs build broken)
-      "anomalyco/tap/opencode" # AI coding assistant
-      "openfortivpn" # FortiClient VPN CLI
-      "stripe/stripe-cli/stripe" # Stripe CLI (homebrew has newer version)
       "mise" # Runtime manager (updates frequently, avoid recompiling Rust)
+      "ollama" # LLM runtime (nixpkgs build broken)
+      "opencode" # AI coding assistant
+      "openfortivpn" # FortiClient VPN CLI
+      "stripe" # Stripe CLI (homebrew has newer version)
       "pi-coding-agent" # AI coding assistant (not in nixpkgs)
       "tectonic" # Modern LaTeX engine (not in nixpkgs for darwin)
       "uv" # Python package manager (updates frequently, avoid recompiling Rust)
@@ -107,7 +87,7 @@
         greedy = true;
       }
       {
-        name = "android/tap/android-cli"; # Android developer CLI tools
+        name = "android-cli"; # Android developer CLI tools
         greedy = true;
       }
       {
@@ -116,10 +96,6 @@
       }
       {
         name = "appcleaner"; # Uninstall apps
-        greedy = true;
-      }
-      {
-        name = "arc"; # Browser
         greedy = true;
       }
       {
@@ -295,14 +271,6 @@
         greedy = true;
       }
       {
-        name = "warp"; # Terminal
-        greedy = true;
-      }
-      {
-        name = "wave"; # Wave Terminal
-        greedy = true;
-      }
-      {
         name = "wireshark-app"; # Network protocol analyzer
         greedy = true;
       }
@@ -333,7 +301,6 @@
       "Pages" = 409201541; # Word processor
 
       # Third-party
-      # "BARQ!" = 1526984545; # Furry social app # Disabled as iPad apps aren't supported
       "Flighty – Live Flight Tracker" = 1358823008; # Flight tracker
       "Mona for Mastodon" = 1659154653; # Mastodon client
       "NextDNS" = 1464122853; # DNS client
