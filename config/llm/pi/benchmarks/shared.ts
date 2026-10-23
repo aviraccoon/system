@@ -276,7 +276,7 @@ export interface TestCase<T = string> {
  * everything. Unknown names are an error, not an empty run — a typo would
  * otherwise report a perfect score over zero cases.
  */
-export function selectTests<T>(tests: TestCase<T>[]): TestCase<T>[] {
+export function selectTests<T, C extends TestCase<T>>(tests: C[]): C[] {
   const raw = process.env.BENCH_GROUP?.trim();
   if (!raw || raw === "all") return tests;
   const wanted = raw.split(/[\s,]+/).filter(Boolean);
@@ -428,11 +428,15 @@ export async function mapWithConcurrency<I, O>(
   return results;
 }
 
-/** Resolve the apiKey of a models.json provider, failing loudly. */
-export function resolveProviderKey(name: string): string {
-  const key = resolveApiKey(loadProviders()[name]?.apiKey as string | undefined);
-  if (!key) throw new Error(`No apiKey for provider "${name}" in models.json`);
-  return key;
+/** Provider key: auth.json first (pi's priority), then models.json, then the environment. */
+export function resolveProviderKey(name: string, options?: { authPath?: string; providersPath?: string }): string {
+  const authKey = loadAuthKey(name, options?.authPath);
+  if (authKey) return authKey;
+  const modelsKey = resolveApiKey(loadProviders(options?.providersPath)[name]?.apiKey as string | undefined);
+  if (modelsKey) return modelsKey;
+  const envKey = getEnvApiKey(name);
+  if (envKey) return envKey;
+  throw new Error(`No API key for provider "${name}" (auth.json, models.json, or env)`);
 }
 
 /** Concurrency for case execution. Cases are independent requests, so the run

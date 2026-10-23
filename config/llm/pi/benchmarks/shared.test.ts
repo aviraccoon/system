@@ -9,6 +9,7 @@ import {
   mapWithConcurrency,
   parseModelArgs,
   resolveApiKey,
+  resolveProviderKey,
   resolveRoleModels,
   selectTests,
   type TestCase,
@@ -594,6 +595,51 @@ describe("loadAuthKey", () => {
     const dirAsAuth = join(dir, "auth-dir");
     mkdirSync(dirAsAuth, { recursive: true });
     expect(() => loadAuthKey("openrouter", dirAsAuth)).toThrow("unreadable");
+  });
+});
+
+// ── resolveProviderKey ──
+
+describe("resolveProviderKey", () => {
+  const dir = join(tmpdir(), `resolveproviderkey-test-${process.pid}`);
+  const authPath = join(dir, "auth-fixture.json");
+  const providersPath = join(dir, "models.json");
+  const previous = process.env.OPENROUTER_API_KEY;
+
+  afterAll(() => {
+    if (previous === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = previous;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function write(auth: Record<string, unknown>, providers: Record<string, unknown>): void {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(authPath, JSON.stringify(auth));
+    writeFileSync(providersPath, JSON.stringify({ providers }));
+  }
+
+  test("auth.json wins over models.json and the environment", () => {
+    write({ openrouter: { key: "from-auth", type: "api_key" } }, { openrouter: { apiKey: "from-models" } });
+    process.env.OPENROUTER_API_KEY = "from-env";
+    expect(resolveProviderKey("openrouter", { authPath, providersPath })).toBe("from-auth");
+  });
+
+  test("models.json wins when auth.json has no entry", () => {
+    write({}, { openrouter: { apiKey: "from-models" } });
+    process.env.OPENROUTER_API_KEY = "from-env";
+    expect(resolveProviderKey("openrouter", { authPath, providersPath })).toBe("from-models");
+  });
+
+  test("the environment is the last source", () => {
+    write({}, {});
+    process.env.OPENROUTER_API_KEY = "from-env";
+    expect(resolveProviderKey("openrouter", { authPath, providersPath })).toBe("from-env");
+  });
+
+  test("no key anywhere throws instead of sending an empty credential", () => {
+    write({}, {});
+    delete process.env.OPENROUTER_API_KEY;
+    expect(() => resolveProviderKey("openrouter", { authPath, providersPath })).toThrow("No API key");
   });
 });
 

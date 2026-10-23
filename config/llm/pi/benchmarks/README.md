@@ -49,6 +49,18 @@ threshold decide the outcome — the advice's action when it fires, `allow` when
 dumps. `BENCH_SEED`, `BENCH_GROUP`, `BENCH_CONCURRENCY`, `DECISIONS_MODEL` and
 `DECISIONS_PROVIDER` (default `openrouter-sidecar`) apply.
 
+## Review-verdict benchmark
+
+`verdict.ts` scores the questions the commit gate asks: does a reviewer report carry an unresolved,
+in-scope CRITICAL/MAJOR, an in-scope behavior finding (a wrong result, a broken invariant, or changed
+behavior with no pin that can fail), or an unfinished review? Cases are synthetic (`verdict-cases.ts`),
+three typed nouls per case; any answer at its threshold blocks.
+`BENCH_GROUP` selects case groups (`clean`, `nit`, `blocking`, `quoted`, `out-of-scope`, `behavior`,
+`incomplete`); `BENCH_DUMP` writes the raw probabilities per case for offline threshold sweeps.
+`VERDICT_MODEL` and `VERDICT_PROVIDER` (default `openrouter`) select the model; the model default is
+the decisions pin in `extensions/shared/decisions.ts`. `VERDICT_THRESHOLD` sets one threshold for all
+three questions.
+
 ## Speed
 
 Cases are independent requests, so they run concurrently — `BENCH_CONCURRENCY` (default 6) sets the cap. Lower it for a local endpoint that should not be hit in parallel; raise it for a hosted provider.
@@ -102,6 +114,8 @@ All benchmarks use the same `TestCase` type and runner from `shared.ts`.
 | `explain-cases.ts` | Explain cases and fixture generation, shared by runners |
 | `../extensions/shared/risk-factors.ts` | Factor battery, threshold policy, prompt and parser |
 | `factor-report.ts` | Shared table and summary for factor runs |
+| `verdict.ts` | Review-verdict runner (synthetic cases) |
+| `verdict-cases.ts` | Synthetic verdict cases and threshold scoring |
 | `jev.ts` | Jev (TypeSafe decisions-model) factor runner |
 | `factors.ts` | Chat-model factor runner |
 | `explain.ts` | Explain role benchmark |
