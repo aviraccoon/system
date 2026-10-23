@@ -69,10 +69,12 @@ let
     pkgs.gnused
   ];
 
-  wrapper = name: pkgs.writeShellScript name ''
-    export PATH=${hookPath}
-    exec ${scripts}/${name} "$@"
-  '';
+  wrapper =
+    name:
+    pkgs.writeShellScript name ''
+      export PATH=${hookPath}
+      exec ${scripts}/${name} "$@"
+    '';
 in
 {
   home.file = lib.listToAttrs (
