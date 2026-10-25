@@ -157,19 +157,19 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 **The problem**: A later reader sees the current tree, never the version it replaced, so a delta is unreadable there; re-running the measurement moves the numbers, so an effect size goes stale; a verification claim or a test count cannot be checked from the file it sits in and has to be re-run anyway; and work narration describes a process the reader never needed. Correct at the spot, useless to every reader after it — and the boast asserts importance instead of showing it.
 
-**Instead**: State the rule or invariant the code encodes, or the failure the change prevents. The one measurement that belongs in the change's record — commit message, journal, design note — is the justification: what was probed before building and what it showed, a property of the problem rather than of the fix. Name what was measured so it can be re-run (a command, a file, a test), never the occasion that produced it. Numbers the code's own value depends on (a calibration constant, the measured reference a scaling factor derives from) stay in the code. A test count is never a justification: the tests show what they cover.
+**Instead**: State the rule or invariant the code encodes, or the failure the change prevents. Where a rule or a constant rests on a measurement, name the probe that produces it so it can be re-run (a command, a file, a test), never the occasion that produced it, and never the number itself — not in a comment, a doc, an error string, or a commit body. Numbers the code's own value depends on (a calibration constant, the measured reference a scaling factor derives from) stay in the code. A test count is never a justification: the tests show what they cover.
 
 ### Change-Relative Prose
 
 **Patterns to avoid**: *as before*, *previously*, *used to*, *no longer*, *which is where it ran before*, *as it did*, *the old path* — any comparison of the text's subject to its own earlier form.
 
-**The problem**: Docs and comments describe the code as it is. A reader with only the current tree cannot place "before", and the comparison turns a fact into a diff. Old and new belong in the change's own record — the commit message, the journal, a design note — and only as the failure the change prevents.
+**The problem**: Docs and comments describe the code as it is. A reader with only the current tree cannot place "before", and the comparison turns a fact into a diff. A comparison of earlier and current behavior belongs in the change's own record — the journal or a design note — and only as the failure the change prevents.
 
-**Instead**: State the current behavior on its own terms. If the earlier behavior explains why the code is shaped the way it is, it belongs in the commit message, the journal, or a design note.
+**Instead**: State the current behavior on its own terms. If the earlier behavior explains why the code is shaped the way it is, it belongs in the journal or a design note. The commit message may still name the artifact it replaces, when that artifact exists in a commit (see *Predecessor Framing*).
 
 ### Predecessor Framing
 
-**Patterns to avoid**: *replaces the old X*, *removes the legacy Y* — the change's own record describing it against an artifact no commit contains.
+**Patterns to avoid**: *replaces the old X*, *removes the legacy Y* — the **commit message** describing it against an artifact no commit contains.
 
 **The problem**: When the history dropped the predecessor (a rebase, a squash, a file that never existed in a commit), the message rests on something the repository cannot show, and the reader cannot check the sentence that names it.
 
