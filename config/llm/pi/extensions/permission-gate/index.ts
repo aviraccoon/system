@@ -5,12 +5,8 @@
  * See the README for details.
  */
 
-import {
-  type ExtensionAPI,
-  type ExtensionContext,
-  type ExtensionUIContext,
-  renderDiff,
-} from "@earendil-works/pi-coding-agent";
+import { homedir } from "node:os";
+import { type ExtensionAPI, type ExtensionContext, renderDiff } from "@earendil-works/pi-coding-agent";
 import { computePatchPreview } from "../patch/preview";
 import {
   adviceInterception,
@@ -72,10 +68,19 @@ import {
   MODE_LABELS,
   MODE_SHORT,
   sensitiveReadDecision,
+  statusText,
   stripShellPreamble,
   suggestPrefix,
 } from "./logic";
 import { EXPLAIN_SYSTEM_PROMPT } from "./prompts";
+import {
+  applySettings,
+  currentSettings,
+  loadSettings,
+  type PersistedSettings,
+  saveSettings,
+  settingsPath,
+} from "./settings";
 import { checkCommand, detectTirith, formatFindingSummary, type TirithReport, tirithFact, tirithFloor } from "./tirith";
 
 /**
@@ -90,8 +95,28 @@ const DECISIONS_PROVIDER = process.env.PI_JEV_PROVIDER ?? "openrouter";
 const DECISIONS_MODEL = process.env.PI_JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
 const decisionsEnabled = process.env.PI_JEV !== "off";
 
+/** Mode and auto-classify live here between runs; everything else stays in memory. */
+const SETTINGS_PATH = settingsPath(homedir());
+
 export default function permissionGate(pi: ExtensionAPI) {
   const state: GateState = createInitialState();
+  // A missing, unreadable or malformed file leaves the fresh defaults. The read
+  // happens once per process; session_start keeps the pair on purpose, since it is
+  // a preference rather than a session rule.
+  applySettings(state, loadSettings(SETTINGS_PATH));
+
+  /**
+   * Change a preference and record it. The write lives here rather than at each call
+   * site: a toggle that forgets it would work until the next start with nothing to
+   * show for it. A failed write leaves the session's choice in force.
+   */
+  function setPreferences(ctx: ExtensionContext, patch: PersistedSettings) {
+    applySettings(state, patch);
+    if (!saveSettings(SETTINGS_PATH, currentSettings(state))) {
+      ctx.ui.notify("Permission settings were not saved; this session keeps them", "warning");
+    }
+  }
+
   /** Notes captured this turn, flushed together as one user message. */
   const pendingNotes: string[] = [];
 
@@ -150,7 +175,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     return report;
   }
 
-  function updateWidget(ctx: { ui: ExtensionUIContext }) {
+  function updateWidget(ctx: ExtensionContext) {
     if (state.autoClassify !== "on" || !lastVerdict) {
       ctx.ui.setWidget("permission-gate", undefined);
       return;
@@ -373,36 +398,33 @@ export default function permissionGate(pi: ExtensionAPI) {
   }
 
   /** Process auto-classify toggle from dialog result. */
-  function handleDialogAutoToggle(
-    result: ConfirmResult,
-    ctx: {
-      ui: {
-        setStatus: (id: string, msg: string | undefined) => void;
-        notify: (msg: string, level?: "info" | "warning" | "error") => void;
-      };
-    },
-  ) {
+  function handleDialogAutoToggle(result: ConfirmResult, ctx: ExtensionContext) {
     if (result.toggledAutoClassify) {
-      state.autoClassify = state.autoClassify === "on" ? "off" : "on";
+      setPreferences(ctx, { autoClassify: state.autoClassify === "on" ? "off" : "on" });
       ctx.ui.notify(`Auto-classify: ${state.autoClassify}`, "info");
       updateStatus(ctx);
     }
   }
 
-  function updateStatus(ctx: { ui: { setStatus: (id: string, msg: string | undefined) => void } }) {
+  function updateStatus(ctx: ExtensionContext) {
     const stats = getSidecarStats();
-    const costStr = stats.calls > 0 ? ` ($${stats.cost.toFixed(4)})` : "";
-    const explainStr = explainEnabled ? " +explain" : "";
-    const tirithStr = tirithAvailable ? " +tirith" : "";
-    const autoStr = state.autoClassify === "on" ? " +auto" : "";
-    const autoCount = state.autoAllowLog.length > 0 ? ` [${state.autoAllowLog.length} auto]` : "";
     ctx.ui.setStatus(
       "permission-gate",
-      `${MODE_LABELS[state.mode]}${autoStr}${explainStr}${tirithStr}${autoCount}${costStr}`,
+      statusText({
+        mode: state.mode,
+        autoClassify: state.autoClassify,
+        classifierAvailable,
+        explainEnabled,
+        tirithAvailable,
+        autoAllowed: state.autoAllowLog.length,
+        cost: stats.cost,
+      }),
     );
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    // Mode and auto-classify are a preference, restored when the extension loaded;
+    // the rules below are session state and start empty.
     state.gitRoot = findGitRoot(ctx.cwd);
     state.allowedBashPrefixes = [];
     state.allowedPaths = [];
@@ -428,7 +450,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         ctx.ui.notify("No classifier: decisions path disabled and no 'explain' role configured", "warning");
         return;
       }
-      state.autoClassify = state.autoClassify === "on" ? "off" : "on";
+      setPreferences(ctx, { autoClassify: state.autoClassify === "on" ? "off" : "on" });
       updateStatus(ctx);
       ctx.ui.notify(`Auto-classify: ${state.autoClassify}`, "info");
     },
@@ -439,7 +461,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     description: "Cycle permission mode",
     handler: async (ctx) => {
       const idx = MODE_CYCLE.indexOf(state.mode);
-      state.mode = MODE_CYCLE[(idx + 1) % MODE_CYCLE.length];
+      setPreferences(ctx, { mode: MODE_CYCLE[(idx + 1) % MODE_CYCLE.length] });
       updateStatus(ctx);
       ctx.ui.notify(`Permissions: ${MODE_LABELS[state.mode]} - ${MODE_SHORT[state.mode]}`, "info");
     },
@@ -515,7 +537,7 @@ export default function permissionGate(pi: ExtensionAPI) {
 
         if (choice?.startsWith("Toggle auto-classify")) {
           if (classifierAvailable) {
-            state.autoClassify = state.autoClassify === "on" ? "off" : "on";
+            setPreferences(ctx, { autoClassify: state.autoClassify === "on" ? "off" : "on" });
             if (state.autoClassify === "off") {
               lastVerdict = null;
               updateWidget(ctx);
@@ -573,8 +595,7 @@ export default function permissionGate(pi: ExtensionAPI) {
           state.toolOverrides = {};
           ctx.ui.notify("Session allows cleared", "info");
         } else if (choice === "Reset to Careful") {
-          state.mode = "careful";
-          state.autoClassify = "off";
+          setPreferences(ctx, { mode: "careful", autoClassify: "off" });
           state.allowedBashPrefixes = [];
           state.allowedPaths = [];
           state.allowedPathGlobs = [];

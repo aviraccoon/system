@@ -20,12 +20,15 @@ import {
   isPathAllowed,
   isReadSensitivePath,
   isSensitivePath,
+  MODE_LABELS,
   matchGlob,
   recordAllow,
   recordDenial,
   resolveFilePath,
+  type StatusFacts,
   sensitiveReadDecision,
   shouldAutoAllow,
+  statusText,
   stripShellPreamble,
   suggestPrefix,
 } from "./logic";
@@ -293,6 +296,19 @@ describe("isSensitivePath", () => {
     expect(isSensitivePath("src/main.ts")).toBe(false);
     expect(isSensitivePath("package.json")).toBe(false);
     expect(isSensitivePath("README.md")).toBe(false);
+  });
+
+  // The gates' own state: the permission pair, the review gate's off switch,
+  // exemptions, hook trust and ledger. A write there changes what the gates do.
+  test("the agent state directory is sensitive", () => {
+    expect(isSensitivePath("../../.pi/agent/state/permission-gate.json")).toBe(true);
+    expect(isSensitivePath("../../.pi/agent/state/review-gate-off")).toBe(true);
+    expect(isSensitivePath("/Users/acme/.pi/agent/state/review-ledger.json")).toBe(true);
+  });
+
+  test("a project's own .pi directory is not sensitive", () => {
+    expect(isSensitivePath("../../acme/project/.pi/settings.json")).toBe(false);
+    expect(isSensitivePath(".pi/agent/notes.md")).toBe(false);
   });
 
   test("environment.ts is not sensitive (no dot prefix)", () => {
@@ -1003,6 +1019,48 @@ describe("createInitialState auto-classify", () => {
   test("autoAllowLog is empty array", () => {
     const s = createInitialState();
     expect(s.autoAllowLog).toEqual([]);
+  });
+});
+
+// ── statusText ──
+
+const pill = (overrides: Partial<StatusFacts> = {}) =>
+  statusText({
+    mode: "careful",
+    autoClassify: "off",
+    classifierAvailable: true,
+    explainEnabled: false,
+    tirithAvailable: false,
+    autoAllowed: 0,
+    cost: 0,
+    ...overrides,
+  });
+
+describe("statusText", () => {
+  test("shows the mode alone when nothing else is live", () => {
+    expect(pill()).toBe("\u{1f512} Careful");
+  });
+
+  test("+auto needs a configured classifier, not just the stored preference", () => {
+    expect(pill({ autoClassify: "on", classifierAvailable: true })).toContain("+auto");
+    expect(pill({ autoClassify: "on", classifierAvailable: false })).not.toContain("+auto");
+    expect(pill({ autoClassify: "off", classifierAvailable: true })).not.toContain("+auto");
+  });
+
+  test("the live features and the audit count follow their own flags", () => {
+    expect(pill({ explainEnabled: true })).toContain("+explain");
+    expect(pill({ tirithAvailable: true })).toContain("+tirith");
+    expect(pill({ autoAllowed: 3 })).toContain("[3 auto]");
+    expect(pill({ autoAllowed: 0 })).not.toContain("auto]");
+  });
+
+  test("spend appears only once something was spent", () => {
+    expect(pill({ cost: 0.018 })).toContain("($0.0180)");
+    expect(pill({ cost: 0 })).not.toContain("$");
+  });
+
+  test("the mode's own label leads the line", () => {
+    expect(pill({ mode: "trust-project" })).toBe(MODE_LABELS["trust-project"]);
   });
 });
 

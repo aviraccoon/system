@@ -620,9 +620,11 @@ async function runSingleAgentAttempt(
   //
   // Default extensions for all subagents:
   //   agents-loader — provides AGENTS.local.md context, lightweight
-  //   permission-gate — gates tool calls; in no-UI mode it auto-allows SAFE
-  //                     (auto-classify mode) or silently blocks (careful mode).
-  //                     Useful as a safety net even without UI.
+  //   permission-gate — gates tool calls, starting in the mode saved under
+  //                     ~/.pi/agent/state/permission-gate.json. RPC mode gives it
+  //                     a UI context, so its confirms are relayed to the parent
+  //                     and resolve to a refusal when the parent has no UI.
+  //                     Useful as a safety net even without a terminal.
   //
   // Agent-specific extensions come from the `extensions` frontmatter field.
   args.push("--no-extensions");

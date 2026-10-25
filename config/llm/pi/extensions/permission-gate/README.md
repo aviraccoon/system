@@ -106,7 +106,8 @@ the display degrades, never the fail-closed behavior. The model is pinned in
 factor benchmark before bumping the pin. `PI_JEV=off` disables the decisions
 path; `PI_JEV_MODEL` and `PI_JEV_PROVIDER` point it elsewhere.
 
-Status bar shows `+auto [N auto]` with count of auto-allowed calls.
+Status bar shows `+auto` while auto-classify is on and a classifier is configured, and
+the count of auto-allowed calls once one has been auto-allowed this session.
 `/permissions` > View auto-allow log shows recent auto-allowed calls.
 Widget below editor shows the latest auto-allow verdict during a turn.
 
@@ -122,6 +123,13 @@ auto-classify and vice versa.
 | Allow all | allow | allow | allow | allow |
 
 Cycle modes with `Ctrl+Shift+A`. Open settings with `/permissions`.
+
+Mode and auto-classify are saved to `~/.pi/agent/state/permission-gate.json` and
+restored on the next start, so a preference is entered once per machine rather than
+once per session. With no readable state file the gate starts in Careful with
+auto-classify off; a malformed one leaves those defaults. A save that cannot land
+keeps the session's choice and warns. A subagent process reads the same file, so a
+delegated agent starts in the saved mode too.
 
 ## Keyboard shortcuts
 
@@ -181,9 +189,15 @@ repo root. Falls back to cwd if not in a git repo.
 
 ## Sensitive files
 
-Always confirmed (except in Allow All mode), even with tool overrides:
+A write tool aimed at one of these confirms in Careful and Trust project. A session
+path rule for the path lets the write through, and an allow-all tool override forces
+the confirm anyway:
 `.env*`, `*.pem`, `*.key`, `*.p12`, `secrets/`, `.ssh/`, `.gnupg/`,
-`id_rsa*`, `id_ed25519*`
+`id_rsa*`, `id_ed25519*`, `.pi/agent/state/`
+
+The last one is the two gates' own state: this gate's settings, the review gate's off
+switch, exemptions, hook trust and ledger. A write there changes what a gate does,
+which is why the classifier never resolves it.
 
 For a subagent, `read` and `grep` on those paths confirm too — they run in the agent
 process, where the confined shell's profile does not reach. `.env` is exempt: the shell
@@ -242,6 +256,8 @@ Status bar shows `+tirith` when active.
 - `facts.ts` — Facts collected from the machine for the classifier state (`docker inspect` for a container the command names)
 - `facts.test.ts` — Tests for command detection, inspect parsing, the rendered block and the collector
 - `result-notes.ts` — Resolves a result's note (staged text plus an in-flight classification), with no pi imports
+- `settings.ts` — Mode and auto-classify, persisted across starts (parse, load, atomic save)
+- `settings.test.ts` — Tests for the settings file and its defaults
 - `confirm-ui.ts` — Custom TUI component (SelectList + Editor note field + explanation display)
 - `index.ts` — Pi extension wrapper (UI, events, auto-classify, user-message notes, tool_result note injection)
 

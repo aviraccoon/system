@@ -95,6 +95,34 @@ export const MODE_SHORT: Record<Mode, string> = {
 
 export const MODE_CYCLE: Mode[] = ["careful", "trust-project", "allow-all"];
 
+/** Everything the footer pill reports, as data so the line itself is testable. */
+export interface StatusFacts {
+  mode: Mode;
+  autoClassify: AutoClassifyMode;
+  /** Whether a classifier is configured at all; without one auto cannot resolve. */
+  classifierAvailable: boolean;
+  explainEnabled: boolean;
+  tirithAvailable: boolean;
+  autoAllowed: number;
+  /** Spend so far this session, in dollars. */
+  cost: number;
+}
+
+/**
+ * The footer pill: the mode, then each feature that is actually live, the count of
+ * auto-allowed calls and the spend. `+auto` follows `classifierAvailable` rather
+ * than the stored preference, so a saved `on` with no classifier shows nothing
+ * instead of promising decisions nothing can make.
+ */
+export function statusText(facts: StatusFacts): string {
+  const auto = facts.autoClassify === "on" && facts.classifierAvailable ? " +auto" : "";
+  const explain = facts.explainEnabled ? " +explain" : "";
+  const tirith = facts.tirithAvailable ? " +tirith" : "";
+  const autoCount = facts.autoAllowed > 0 ? ` [${facts.autoAllowed} auto]` : "";
+  const cost = facts.cost > 0 ? ` ($${facts.cost.toFixed(4)})` : "";
+  return `${MODE_LABELS[facts.mode]}${auto}${explain}${tirith}${autoCount}${cost}`;
+}
+
 /** Tools whose call runs without confirmation. A tool that is missing here
  *  falls through to the unknown-tool branch and confirms on every call in
  *  Careful mode.
@@ -141,6 +169,7 @@ export const SENSITIVE_PATTERNS: RegExp[] = [
   /secret/i,
   /(^|\/)\.ssh\//,
   /(^|\/)\.gnupg\//,
+  /(^|\/)\.pi\/agent\/state\//,
   /(^|\/)id_rsa/,
   /(^|\/)id_ed25519/,
 ];
