@@ -570,6 +570,13 @@ describe("isPathAllowed", () => {
 describe("isBashAllowed", () => {
   const baseState = createInitialState();
 
+  test("an empty prefix allows nothing", () => {
+    // `Allow "" for this session` would otherwise match every command.
+    const state: GateState = { ...baseState, allowedBashPrefixes: [""] };
+    expect(isBashAllowed("rm -rf /", state)).toBe(false);
+    expect(isBashAllowed("bun test", state)).toBe(false);
+  });
+
   test("prefix match", () => {
     const state: GateState = { ...baseState, allowedBashPrefixes: ["bun"] };
     expect(isBashAllowed("bun test --filter=pro", state)).toBe(true);

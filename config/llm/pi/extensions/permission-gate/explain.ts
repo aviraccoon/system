@@ -232,14 +232,18 @@ export function classifierInput(
   toolName: string,
   input: Record<string, unknown>,
   preview?: DescribeOptions,
+  facts?: string,
 ): { description: string; key: string } {
   const plain = describeToolCall(toolName, input, { ...preview, writesOnly: true });
-  const description = describeToolCall(toolName, input, {
+  const described = describeToolCall(toolName, input, {
     ...preview,
     writesOnly: true,
     frameToken: randomBytes(4).toString("hex"),
   });
-  return { description, key: cacheKey(toolName, input, plain) };
+  // The facts are evidence about the world, not part of the call's text, so they ride after
+  // the description; the key covers everything the classifier saw, including them.
+  const description = facts ? `${described}\n\n${facts}` : described;
+  return { description, key: cacheKey(toolName, input, facts ? `${plain}\n\n${facts}` : plain) };
 }
 
 /** First per-edit path for a patch-style input (no top-level path). */
@@ -442,7 +446,7 @@ export function parseExplanation(text: string, strict?: boolean): ExplanationRes
 /** Build a block reason from the sidecar explanation. User notes are delivered
  * separately as user messages — instructions inside a tool result read as
  * untrusted to the model. */
-export function blockReason(explanation: ExplanationResult | null, toolName?: string, tirithNote?: string): string {
+export function blockReason(explanation: ExplanationResult | null, toolName?: string): string {
   const verb =
     toolName === "bash"
       ? "The command was NOT executed."
@@ -455,7 +459,6 @@ export function blockReason(explanation: ExplanationResult | null, toolName?: st
   if (explanation) {
     lines.push(`[Automated command classification: ${explanation.verdict.toUpperCase()} — ${explanation.short}]`);
   }
-  if (tirithNote) lines.push(tirithNote);
   return lines.join("\n");
 }
 

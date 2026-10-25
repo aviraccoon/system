@@ -5,9 +5,10 @@
  * A dialog-path classification can outlive the tool it classified — the user
  * answers before the decisions model does — so its note is resolved here, under
  * a bound, instead of being appended when the classification happens to land.
- * Both sources can have something to say about the same call (tirith's finding
- * and an advice note), and the same note can arrive from both once the classifier
- * finishes before the result does, so identical notes are not repeated.
+ * Both sources can have something to say about the same call (a staged note — tirith's
+ * fact for an allowed call, or an advice note — and an in-flight classification), and the
+ * same note can arrive from both once the classifier finishes before the result does, so
+ * identical notes are not repeated.
  * No pi imports: the resolution is testable without the extension.
  */
 

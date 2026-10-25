@@ -1,281 +1,119 @@
 import { describe, expect, it } from "bun:test";
-import {
-  formatBlockReason,
-  formatFindingSummary,
-  formatVerdictSummary,
-  mapTirithResult,
-  type TirithFinding,
-  tirithAnnotation,
-  tirithForcesReview,
-  tirithNote,
-} from "./tirith";
+import { formatFindingSummary, parseTirith, tirithFact, tirithFloor } from "./tirith";
 
-// Captured from real tirith 0.3.1 `check --format json` output (schema v3).
+// Trimmed from real tirith `check --format json` output (schema v3).
 const blockJson = {
-  schema_version: 3,
   action: "block",
   findings: [
     {
       rule_id: "curl_pipe_shell",
       severity: "HIGH",
       title: "Pipe to interpreter: curl | bash",
-      description:
-        "Command pipes output from 'curl' directly to interpreter 'bash'.\n  Safer: tirith run https://evil.example/install.sh",
-      evidence: [],
-      mitre_id: "T1059.004",
+      description: "Command pipes output from 'curl' directly to interpreter 'bash'.",
     },
   ],
 };
 
-const multiJson = {
-  schema_version: 3,
+const criticalJson = {
   action: "block",
   findings: [
     {
-      rule_id: "pipe_to_interpreter",
-      severity: "HIGH",
-      title: "Pipe to interpreter: base64 | bash",
-      description: "d1",
-    },
-    {
-      rule_id: "base64_decode_execute",
-      severity: "HIGH",
-      title: "Base64 decode piped to interpreter",
-      description: "d2",
+      rule_id: "unicode_tags",
+      severity: "Critical",
+      title: "Unicode Tag characters",
+      description: "Tag characters encode hidden ASCII.",
     },
   ],
 };
 
 const warnJson = {
-  schema_version: 3,
   action: "warn",
-  findings: [
-    { rule_id: "shortened_url", severity: "MEDIUM", title: "Shortened URL", description: "Resolve before trusting." },
-  ],
+  findings: [{ rule_id: "lookalike_tld", severity: "MEDIUM", title: "Lookalike TLD", description: "d" }],
 };
 
-// Trimmed from tirith 0.4.2 output for `pip install somepkg`: a warn whose only
-// finding is a runtime package-intel lookup gap.
-const warnCoverageGapJson = {
-  schema_version: 3,
-  action: "warn",
-  findings: [
-    {
-      rule_id: "analysis_incomplete",
-      severity: "MEDIUM",
-      title: "Package threat intelligence could not be completed",
-      description: "This is incomplete verification, not evidence that the package is malicious.",
-    },
-  ],
-};
+const allowJson = { action: "allow", findings: [] };
 
-const allowJson = { schema_version: 3, action: "allow", findings: [] };
-
-// Trimmed from tirith 0.4.2 output for `for d in …; do n=$(rg …); done`.
-// `analysis_incomplete` means "could not prove it", which is not a detection;
-// blocking it rejects shell whose body is right there in the source.
-const coverageGapJson = {
-  schema_version: 3,
-  action: "block",
-  tier_reached: 3,
-  findings: [
-    {
-      rule_id: "analysis_incomplete",
+describe("parseTirith", () => {
+  it("maps a block and carries the rule fields", () => {
+    const report = parseTirith(blockJson, 1);
+    expect(report.action).toBe("block");
+    expect(report.findings[0]).toEqual({
       severity: "HIGH",
-      title: "Nested executable body could not be resolved",
-      description: "The command is blocked instead of trusting its benign-looking outer leader.",
-    },
-    { rule_id: "analysis_incomplete", severity: "HIGH", title: "nested command analysis was incomplete" },
-  ],
-};
-
-describe("mapTirithResult", () => {
-  it("downgrades a coverage-gap-only block to a warning (tirith #260)", () => {
-    const v = mapTirithResult(coverageGapJson, 1);
-    expect(v.action).toBe("warn");
-    if (v.action !== "warn") throw new Error("unreachable");
-    expect(v.findings).toHaveLength(2);
-    // The downgrade has to be visible downstream: the findings keep HIGH
-    // severity, so consumers must read the flag, not the text.
-    expect(v.coverageGap).toBe(true);
+      ruleId: "curl_pipe_shell",
+      title: "Pipe to interpreter: curl | bash",
+      description: "Command pipes output from 'curl' directly to interpreter 'bash'.",
+    });
   });
 
-  it("keeps the block when a real detection accompanies a coverage gap", () => {
-    const v = mapTirithResult(
-      {
-        action: "block",
-        findings: [
-          { rule_id: "analysis_incomplete", severity: "HIGH", title: "coverage gap" },
-          { rule_id: "curl_pipe_shell", severity: "HIGH", title: "Pipe to interpreter" },
-        ],
-      },
-      1,
-    );
-    expect(v.action).toBe("block");
-    if (v.action !== "block") throw new Error("unreachable");
-    expect(v.reason).toContain("curl_pipe_shell");
-  });
-
-  it("keeps a block that carries no findings (cannot classify, stay fail-closed)", () => {
-    expect(mapTirithResult({ action: "block", findings: [] }, 1).action).toBe("block");
-  });
-
-  it("maps a block action, carrying rule + remedy into the reason", () => {
-    const v = mapTirithResult(blockJson, 1);
-    expect(v.action).toBe("block");
-    if (v.action !== "block") throw new Error("unreachable");
-    expect(v.reason).toContain("curl_pipe_shell");
-    expect(v.reason).toContain("[HIGH]");
-    expect(v.reason).toContain("Safer: tirith run");
-    expect(v.findings[0].severity).toBe("HIGH");
-    expect(v.findings[0].ruleId).toBe("curl_pipe_shell");
-  });
-
-  it("joins multiple findings in the reason", () => {
-    const v = mapTirithResult(multiJson, 1);
-    expect(v.action).toBe("block");
-    if (v.action !== "block") throw new Error("unreachable");
-    expect(v.reason).toContain("pipe_to_interpreter");
-    expect(v.reason).toContain("base64_decode_execute");
-    expect(v.findings).toHaveLength(2);
-  });
-
-  it("maps a warn action (the force-confirm case)", () => {
-    const v = mapTirithResult(warnJson, 2);
-    expect(v.action).toBe("warn");
-    if (v.action !== "warn") throw new Error("unreachable");
-    expect(v.findings[0].ruleId).toBe("shortened_url");
-    // Not a downgrade: tirith itself said warn.
-    expect(v.coverageGap).toBeUndefined();
-  });
-
-  it("marks a warn whose findings are all coverage gaps", () => {
-    const v = mapTirithResult(warnCoverageGapJson, 2);
-    expect(v.action).toBe("warn");
-    if (v.action !== "warn") throw new Error("unreachable");
-    expect(v.coverageGap).toBe(true);
-  });
-
-  it("maps allow → pass", () => {
-    expect(mapTirithResult(allowJson, 0).action).toBe("pass");
+  it("maps a warn and an allow", () => {
+    expect(parseTirith(warnJson, 2).action).toBe("warn");
+    expect(parseTirith(allowJson, 0).action).toBe("pass");
   });
 
   it("falls back to exit codes when JSON is absent", () => {
-    expect(mapTirithResult(null, 1).action).toBe("block");
-    expect(mapTirithResult(null, 2).action).toBe("warn");
-    expect(mapTirithResult(null, 0).action).toBe("pass");
+    expect(parseTirith(null, 1).action).toBe("block");
+    expect(parseTirith(null, 2).action).toBe("warn");
+    expect(parseTirith(null, 0).action).toBe("pass");
+    expect(parseTirith(null, 99).action).toBe("pass");
   });
 
-  it("falls back to pass on unknown exit code or missing action field", () => {
-    expect(mapTirithResult(null, 99).action).toBe("pass");
-    expect(mapTirithResult({ findings: [] }, 0).action).toBe("pass");
-  });
-
-  it("treats malformed JSON as null (fail-open via exit code)", () => {
-    // safeParse is internal; mapTirithResult(null, 0) models a parse failure on a clean exit.
-    expect(mapTirithResult(null, 0).action).toBe("pass");
+  it("treats an unknown action with a block exit as a block", () => {
+    // A renamed tier must not read as a pass.
+    expect(parseTirith({ action: "deny", findings: [] }, 1).action).toBe("block");
   });
 });
 
-describe("tirithForcesReview", () => {
-  it("holds for a block", () => {
-    expect(tirithForcesReview(mapTirithResult(blockJson, 1))).toBe(true);
+describe("tirithFloor", () => {
+  it("holds on a CRITICAL finding", () => {
+    expect(tirithFloor(parseTirith(criticalJson, 1))).toBe(true);
   });
 
-  it("holds for a warn that reports a detection", () => {
-    expect(tirithForcesReview(mapTirithResult(warnJson, 2))).toBe(true);
+  it("does not hold on a HIGH finding — that is the classifier's to weigh", () => {
+    expect(tirithFloor(parseTirith(blockJson, 1))).toBe(false);
   });
 
-  it("does not hold for a coverage-gap downgrade (not a detection)", () => {
-    expect(tirithForcesReview(mapTirithResult(coverageGapJson, 1))).toBe(false);
+  it("holds on a block carrying no finding or no severity", () => {
+    expect(tirithFloor(parseTirith({ action: "block", findings: [] }, 1))).toBe(true);
+    expect(tirithFloor(parseTirith(null, 1))).toBe(true);
   });
 
-  it("does not hold for a warn-level coverage gap", () => {
-    expect(tirithForcesReview(mapTirithResult(warnCoverageGapJson, 2))).toBe(false);
+  it("holds on a block whose finding carries no severity to read", () => {
+    expect(tirithFloor(parseTirith({ action: "block", findings: [{ rule_id: "x", title: "t" }] }, 1))).toBe(true);
   });
 
-  it("does not hold for pass", () => {
-    expect(tirithForcesReview(mapTirithResult(allowJson, 0))).toBe(false);
-  });
-});
-
-describe("tirithNote", () => {
-  it("carries a block's finding to the model", () => {
-    const note = tirithNote(mapTirithResult(blockJson, 1));
-    expect(note).toContain("command-safety checker");
-    expect(note).toContain("curl_pipe_shell");
+  it("holds on a warning that carries a CRITICAL finding", () => {
+    // The action a report carries follows tirith's config; the severity is the invariant.
+    expect(
+      tirithFloor(parseTirith({ action: "warn", findings: [{ rule_id: "x", severity: "CRITICAL", title: "t" }] }, 2)),
+    ).toBe(true);
   });
 
-  it("carries a real warn's finding", () => {
-    expect(tirithNote(mapTirithResult(warnJson, 2))).toContain("shortened_url");
+  it("does not hold on a warning below CRITICAL", () => {
+    expect(tirithFloor(parseTirith(warnJson, 2))).toBe(false);
   });
 
-  it("says nothing about a coverage gap (not a detection)", () => {
-    expect(tirithNote(mapTirithResult(coverageGapJson, 1))).toBe("");
-    expect(tirithNote(mapTirithResult(warnCoverageGapJson, 2))).toBe("");
-  });
-
-  it("says nothing for a pass or a no-detail verdict", () => {
-    expect(tirithNote(mapTirithResult(allowJson, 0))).toBe("");
-    expect(tirithNote(mapTirithResult(null, 2))).toBe("");
+  it("does not hold when there is nothing to report", () => {
+    expect(tirithFloor(parseTirith(allowJson, 0))).toBe(false);
   });
 });
 
-describe("formatters", () => {
-  const finding = (over: Partial<TirithFinding> = {}): TirithFinding => ({
-    severity: "HIGH",
-    ruleId: "x",
-    title: "T",
-    description: "fix it",
-    ...over,
+describe("tirithFact", () => {
+  it("says what tirith is and lists every finding", () => {
+    const fact = tirithFact(parseTirith(criticalJson, 1));
+    expect(fact).toContain("command-safety checker");
+    expect(fact).toContain("threat lists");
+    expect(fact).toContain("[Critical] unicode_tags — Unicode Tag characters");
+    expect(fact).toContain("Tag characters encode hidden ASCII.");
   });
 
-  it("formatBlockReason lists rules and the first remedy", () => {
-    const r = formatBlockReason([finding({ description: "fix it" })]);
-    expect(r).toContain("[HIGH] x: T");
-    expect(r).toContain("fix it");
+  it("is empty when there is nothing to report", () => {
+    expect(tirithFact(parseTirith(allowJson, 0))).toBe("");
   });
+});
 
-  it("formatBlockReason is generic with no findings", () => {
-    expect(formatBlockReason([])).toContain("tirith");
-  });
-
-  it("formatFindingSummary joins finding rules", () => {
-    const s = formatFindingSummary([finding({ severity: "MEDIUM", ruleId: "shortened_url", title: "Shortened URL" })]);
-    expect(s).toContain("shortened_url");
-    expect(s).toContain("MEDIUM");
-  });
-
-  it("formatVerdictSummary names a verdict that carried no findings", () => {
-    // Banner text for the exit-code-only paths, which would otherwise render empty.
-    const summarize = (parsed: Parameters<typeof mapTirithResult>[0], exitCode: number): string => {
-      const v = mapTirithResult(parsed, exitCode);
-      if (v.action === "pass") throw new Error("unreachable: expected block or warn");
-      return formatVerdictSummary(v);
-    };
-    expect(summarize(null, 1)).toBe("blocked (no detail)");
-    expect(summarize(null, 2)).toBe("flagged (no detail)");
-    expect(summarize(warnJson, 2)).toContain("shortened_url");
-  });
-
-  it("tirithAnnotation is self-explanatory for the LLM", () => {
-    const a = tirithAnnotation("block", [
-      finding({
-        severity: "HIGH",
-        ruleId: "curl_pipe_shell",
-        title: "Pipe to interpreter",
-        description: "Safer: tirith run",
-      }),
-    ]);
-    expect(a).toContain("command-safety checker");
-    expect(a).toContain("dangerous");
-    expect(a).toContain("curl_pipe_shell");
-    expect(a).toContain("Safer: tirith run");
-
-    const w = tirithAnnotation("warn", [
-      finding({ severity: "MEDIUM", ruleId: "shortened_url", title: "Shortened URL", description: "" }),
-    ]);
-    expect(w).toContain("potentially unsafe");
-    expect(w).toContain("MEDIUM");
+describe("formatFindingSummary", () => {
+  it("joins the rules for the dialog banner", () => {
+    const summary = formatFindingSummary(parseTirith(blockJson, 1));
+    expect(summary).toContain("[HIGH] curl_pipe_shell: Pipe to interpreter: curl | bash");
   });
 });

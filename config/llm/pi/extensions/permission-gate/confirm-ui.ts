@@ -64,14 +64,10 @@ export interface DetailsBody {
   showHeader?: boolean;
 }
 
-/** tirith banner shown in the dialog. `action` is the mapped gate action, not
- *  the finding severity: a coverage-gap block is downgraded to warn while
- *  keeping tirith's HIGH severity text, and the banner/cursor must follow the
- *  mapping, not re-read the text. */
+/** tirith banner shown in the dialog. It annotates a decision the gate already made: a
+ *  CRITICAL finding forces the confirm path, and anything below it rides along. */
 export interface TirithBanner {
-  action: "block" | "warn";
-  /** `formatVerdictSummary` output (tirith's own severities + rules, or a
-   *  fallback when the verdict carried no findings). */
+  /** `formatFindingSummary` output: tirith's severities and rule titles. */
   summary: string;
 }
 
@@ -157,12 +153,10 @@ export function createConfirmUI(
     });
   }
 
-  // tirith finding: styled banner above the explanation. The colour follows the
-  // mapped action (block=red, warn=yellow), not the finding severity — a
-  // coverage-gap block downgraded to warn keeps its HIGH severity text.
+  // tirith finding: the findings above the explanation. The banner reports, it does not
+  // decide; only the CRITICAL floor can be the reason this dialog opened.
   if (tirith) {
-    const sev = tirith.action === "block" ? ("error" as const) : ("warning" as const);
-    container.addChild(new Text(theme.fg(sev, `tirith ${tirith.summary}`), 1, 0));
+    container.addChild(new Text(theme.fg("warning", `tirith ${tirith.summary}`), 1, 0));
   }
 
   // Explanation text (shown between diff/details and select list)
@@ -256,14 +250,6 @@ export function createConfirmUI(
   selectList.onSelect = (item) => finish(item.value);
   selectList.onCancel = () => finish(null);
   container.addChild(selectList);
-
-  // tirith block → default cursor to Block (strongest-signal-wins with the
-  // sidecar: stays Block even if the sidecar later resolves SAFE, since the
-  // sidecar only moves the cursor on DANGEROUS, never resets it). Keyed on the
-  // mapped action: a coverage-gap block is a warn, so it keeps the Allow default.
-  if (tirith?.action === "block") {
-    selectList.setSelectedIndex(blockIndex);
-  }
 
   // Note input (multi-line: Shift+Enter for newlines, Enter confirms)
   const noteLabel = new Text("", 1, 0);

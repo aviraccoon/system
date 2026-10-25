@@ -1,19 +1,18 @@
 import { describe, expect, it } from "bun:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { KeybindingsManager, TUI } from "@earendil-works/pi-tui";
-import { type ConfirmResult, createConfirmUI, type TirithBanner } from "./confirm-ui";
+import { createConfirmUI, type TirithBanner } from "./confirm-ui";
 
 // The dialog only calls requestRender() on the TUI, and fg() is the only theme
 // method it uses. Everything else (SelectList, Editor, ScrollableText) works
-// unrendered — the tests drive input and read the `done` result.
+// unrendered.
 const fakeTui = { requestRender: () => {} } as unknown as TUI;
 const fakeKb = {} as unknown as KeybindingsManager;
 
-/** Mount the dialog; `last()` is the result passed to `done` after input,
- *  `fgCalls` records every theme.fg() the dialog performed. */
+/** Mount the dialog; returns the component and every theme.fg() it performed. */
 function mount(tirith: TirithBanner | undefined) {
-  const results: ConfirmResult[] = [];
   const fgCalls: Array<{ color: string; text: string }> = [];
+  const results: Array<{ choice: string | null }> = [];
   const theme = {
     fg: (color: string, text: string) => {
       fgCalls.push({ color, text });
@@ -24,7 +23,7 @@ function mount(tirith: TirithBanner | undefined) {
     fakeTui,
     theme,
     fakeKb,
-    (result) => results.push(result),
+    (result) => results.push(result as { choice: string | null }),
     "bash",
     ["Allow once", "Block"],
     undefined,
@@ -33,36 +32,19 @@ function mount(tirith: TirithBanner | undefined) {
     undefined,
     tirith,
   );
-  return { component, last: () => results[results.length - 1], fgCalls };
+  return { component, fgCalls, last: () => results[results.length - 1] };
 }
 
-describe("createConfirmUI tirith cursor", () => {
-  it("defaults to Block for a block banner", () => {
-    const d = mount({ action: "block", summary: "[HIGH] curl_pipe_shell: Pipe to interpreter" });
-    d.component.handleInput?.("\r");
-    expect(d.last()?.choice).toBe("Block");
+describe("createConfirmUI tirith banner", () => {
+  it("colours the banner as a warning", () => {
+    const { fgCalls } = mount({ summary: "[HIGH] mass_file_deletion: 3 paths removed" });
+    expect(fgCalls.find((c) => c.text.startsWith("tirith "))?.color).toBe("warning");
   });
 
-  it("defaults to Allow for a warn whose findings keep HIGH severity", () => {
-    // The coverage-gap regression: the mapped action is warn, the text is HIGH.
-    const d = mount({ action: "warn", summary: "[HIGH] analysis_incomplete: body could not be resolved" });
-    d.component.handleInput?.("\r");
-    expect(d.last()?.choice).toBe("Allow once");
-  });
-
-  it("defaults to Allow with no tirith banner", () => {
-    const d = mount(undefined);
-    d.component.handleInput?.("\r");
-    expect(d.last()?.choice).toBe("Allow once");
-  });
-
-  it("colours the banner by the mapped action", () => {
-    const bannerColor = (d: ReturnType<typeof mount>) => d.fgCalls.find((c) => c.text.startsWith("tirith "))?.color;
-    expect(bannerColor(mount({ action: "block", summary: "[HIGH] curl_pipe_shell: Pipe to interpreter" }))).toBe(
-      "error",
-    );
-    expect(
-      bannerColor(mount({ action: "warn", summary: "[HIGH] analysis_incomplete: body could not be resolved" })),
-    ).toBe("warning");
+  it("does not move the cursor", () => {
+    // The banner reports; only the sidecar's DANGEROUS verdict may default to Block.
+    const { component, last } = mount({ summary: "[CRITICAL] unicode_tags: Unicode Tag characters" });
+    component.handleInput?.("\r");
+    expect(last()?.choice).toBe("Allow once");
   });
 });

@@ -3,8 +3,8 @@ import { resolveResultNote } from "./result-notes";
 
 describe("resolveResultNote", () => {
   test("a staged note and an in-flight one are joined", async () => {
-    expect(await resolveResultNote(["tirith finding"], Promise.resolve("patch advice"), 50)).toBe(
-      "tirith finding\n\npatch advice",
+    expect(await resolveResultNote(["patch advice"], Promise.resolve("test advice"), 50)).toBe(
+      "patch advice\n\ntest advice",
     );
   });
 
@@ -13,7 +13,7 @@ describe("resolveResultNote", () => {
   });
 
   test("staged notes alone are the note", async () => {
-    expect(await resolveResultNote(["tirith finding"], undefined)).toBe("tirith finding");
+    expect(await resolveResultNote(["patch advice"], undefined)).toBe("patch advice");
     expect(await resolveResultNote(["one", "two"], undefined)).toBe("one\n\ntwo");
   });
 

@@ -2,7 +2,7 @@
  * Pure decision logic for the permission gate.
  * No pi imports — testable independently.
  *
- * Safety here is floors and tirith, never a new enumeration. The shell-text
+ * Safety here is floors, never a new enumeration. The shell-text
  * heuristics in this file (stripShellPreamble, hasShellEscalation, allPipesSafe)
  * are the whole inventory: do not extend them or add more like them — read-only
  * command sets, redirect or tee targets, wrapper stripping, "safe" subcommand
@@ -449,7 +449,8 @@ export function isPathAllowed(filePath: string, cwd: string, state: GateState): 
 export function isBashAllowed(command: string, state: GateState): boolean {
   const real = stripShellPreamble(command);
   if (hasShellEscalation(real)) return false;
-  return state.allowedBashPrefixes.some((prefix) => real.startsWith(prefix));
+  // An empty prefix would match every command; treat it as no rule at all.
+  return state.allowedBashPrefixes.some((prefix) => prefix.length > 0 && real.startsWith(prefix));
 }
 
 /** Resolve git root, following worktrees back to the main repo. */
@@ -766,7 +767,8 @@ export function decide(toolName: string, input: Record<string, unknown>, cwd: st
     const prefix = suggestPrefix(command);
     const real = stripShellPreamble(command);
     // Did the prefix match but escalation blocked it?
-    const escalation = hasShellEscalation(real) && state.allowedBashPrefixes.some((p) => real.startsWith(p));
+    const escalation =
+      hasShellEscalation(real) && state.allowedBashPrefixes.some((p) => p.length > 0 && real.startsWith(p));
 
     return {
       action: "confirm",
