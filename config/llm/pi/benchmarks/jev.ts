@@ -80,7 +80,7 @@ async function runCase(apiKey: string, test: TestCase<Verdict>): Promise<FactorR
     const modelChoice = risk?.type === "choice" ? risk.choice : "(none)";
     const advice = answers.advice;
     const adviceNoul = advice?.type === "noul" ? advice.noul : null;
-    const decision = decisionFromAnswers(answers);
+    const decision = decisionFromAnswers(answers, { containerFacts: test.containerFacts === true });
     if (!decision) {
       // The gate refuses an incomplete answer, so scoring one here would report a
       // verdict it would never act on.

@@ -42,6 +42,14 @@ export const RISK_FACTORS: Record<string, DecisionsQuestion> = {
   large_scale_damage: noul(
     "If data is lost, is it large-scale — a home directory, a system path, a whole repository or dataset — rather than one file, one build directory or one cache?",
   ),
+  container_local_only: noul(
+    "Does this call stay inside a container's own writable layer — it runs in a container, and nothing it changes is a host path, a volume, a socket or device, or reachable through a privileged container?",
+    {
+      true: "It runs inside a container and the container facts in the state place every path it changes in the container's own layer, so the change lives and dies with the container.",
+      false:
+        "It runs on the host, a fact lists a bind mount, volume, socket or device covering a path it changes, the container is privileged or host-mounted — or the state carries no container facts to judge it by.",
+    },
+  ),
   touches_credentials: noul("Does this call read, transmit or write credentials, keys or tokens?", {
     true: "The call touches a real secret: reading a key file or an env value, a secret store, or sending or writing an actual credential value.",
     false:
@@ -355,24 +363,44 @@ export function severityFromAnswers(answers: Record<string, DecisionsAnswer>): n
   return answer?.type === "score" ? answer.score : null;
 }
 
+export interface VerdictOptions {
+  /**
+   * Whether the state carried container facts. `container_local_only` is read
+   * only when it did: a model that claims a call stays inside a container from
+   * the command text alone has no evidence of what the container mounts, and
+   * that claim is what lowers the tier.
+   */
+  containerFacts?: boolean;
+}
+
 /**
  * Resolve a full battery response into a decision: every factor answered and a
  * severity score, or null when either is missing. A null means the caller must
  * not act on a partial answer.
  */
-export function decisionFromAnswers(answers: Record<string, DecisionsAnswer>): FactorDecision | null {
+export function decisionFromAnswers(
+  answers: Record<string, DecisionsAnswer>,
+  options: VerdictOptions = {},
+): FactorDecision | null {
   if (!hasAllFactors(answers)) return null;
   const severity = severityFromAnswers(answers);
   if (severity === null) return null;
-  return verdictFromFactors(factorProbabilities(answers), DEFAULT_THRESHOLDS, severity);
+  return verdictFromFactors(factorProbabilities(answers), DEFAULT_THRESHOLDS, severity, options);
 }
 
 export function verdictFromFactors(
   probabilities: Record<string, number>,
   thresholds: RiskThresholds = DEFAULT_THRESHOLDS,
   severity: number | null = null,
+  options: VerdictOptions = {},
 ): FactorDecision {
   const at = (name: string, threshold: number) => (probabilities[name] ?? 0) >= threshold;
+  // Container-local work: the change lives and dies with the container's own layer,
+  // so losing it is a mutation rather than an irreversible loss. Only the data-damage
+  // reasons are in reach; a credential, a shared-state write or a privileged container
+  // is dangerous for its own reason and stays that way.
+  const containerLocal = options.containerFacts === true && at("container_local_only", thresholds.risky);
+
   const dangerous: string[] = [];
   if (at("runs_remote_code", thresholds.dangerous)) dangerous.push("runs_remote_code");
   if (at("exposes_all_credentials", thresholds.dangerous)) dangerous.push("exposes_all_credentials");
@@ -383,17 +411,25 @@ export function verdictFromFactors(
   if (at("obfuscated_execution", thresholds.dangerous)) dangerous.push("obfuscated_execution");
   if (at("history_rewrite", thresholds.dangerous)) dangerous.push("history_rewrite");
   if (at("disables_safety_controls", thresholds.dangerous)) dangerous.push("disables_safety_controls");
+  // The two data-damage reasons are the ones container locality can answer, so they
+  // are kept apart from the rest instead of being filtered out afterwards.
+  const damage: string[] = [];
   // Code that runs locally is risky on its own, but code that destroys data is
   // not something to hand a reviewer as "a mutation" — the payload is invisible.
   if (at("runs_local_code", thresholds.risky) && at("destroys_data", thresholds.risky)) {
-    dangerous.push("runs_local_code+destroys_data");
+    damage.push("runs_local_code+destroys_data");
   }
   if (at("large_scale_damage", thresholds.dangerous) && at("destroys_data", thresholds.risky)) {
-    dangerous.push("large_scale_damage");
+    damage.push("large_scale_damage");
   }
-  if (dangerous.length > 0) return { verdict: "dangerous", reasons: dangerous, probabilities, severity };
-  if (severity !== null && severity > SEVERITY_DANGEROUS) {
-    return { verdict: "dangerous", reasons: [`severity ${severity.toFixed(1)}`], probabilities, severity };
+  const severityReason = severity !== null && severity > SEVERITY_DANGEROUS ? `severity ${severity.toFixed(1)}` : null;
+
+  if (dangerous.length > 0) {
+    return { verdict: "dangerous", reasons: [...dangerous, ...damage], probabilities, severity };
+  }
+  if (!containerLocal) {
+    if (damage.length > 0) return { verdict: "dangerous", reasons: damage, probabilities, severity };
+    if (severityReason) return { verdict: "dangerous", reasons: [severityReason], probabilities, severity };
   }
 
   const risky: string[] = [];
@@ -409,6 +445,8 @@ export function verdictFromFactors(
   if (at("resource_exhaustion", thresholds.risky)) risky.push("resource_exhaustion");
   if (at("costs_money", thresholds.risky)) risky.push("costs_money");
   if (at("credentials_on_command_line", thresholds.risky)) risky.push("credentials_on_command_line");
+  // Name the demotion whenever it is what kept the call out of the dangerous tier.
+  if (containerLocal && (damage.length > 0 || severityReason !== null)) risky.push("container_local");
   if (risky.length > 0) return { verdict: "risky", reasons: risky, probabilities, severity };
 
   return { verdict: "safe", reasons: [], probabilities, severity };

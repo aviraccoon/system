@@ -267,6 +267,13 @@ export interface TestCase<T = string> {
   expected: T | T[];
   /** Named section the case belongs to; BENCH_GROUP runs a single section. */
   group?: string;
+  /**
+   * The case's state carries container facts, so the runner reads the
+   * `container_local_only` factor the way the gate does. Carried rather than
+   * parsed out of `input`: a multi-line command contains blank lines of its own,
+   * and a text split would hand such a command its own facts.
+   */
+  containerFacts?: boolean;
 }
 
 /**

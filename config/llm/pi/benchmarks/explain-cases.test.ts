@@ -15,6 +15,16 @@ describe("fixtures", () => {
       );
   });
 
+  test("every case that carries container facts says so, and no other claims it", () => {
+    const tests = buildTests(makeFixture("facts-test"));
+    // A pin whose whole subject can vanish would pass over an empty set.
+    expect(tests.filter((t) => t.containerFacts === true).length).toBeGreaterThan(0);
+    for (const t of tests) {
+      const hasBlock = t.input.includes("from `docker inspect`:");
+      expect(t.containerFacts === true).toBe(hasBlock);
+    }
+  });
+
   test("preview-summarised cases carry numbered added lines matching their count", () => {
     for (const t of buildTests(makeFixture("frame-test"))) {
       const summary = t.input.match(

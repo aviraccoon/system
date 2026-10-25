@@ -97,7 +97,9 @@ async function runCase(model: ResolvedModel, test: TestCase<Verdict>): Promise<F
         error: content.split("\n")[0].slice(0, 140),
       };
     }
-    const decision = verdictFromFactors(parsed.probabilities, DEFAULT_THRESHOLDS);
+    const decision = verdictFromFactors(parsed.probabilities, DEFAULT_THRESHOLDS, null, {
+      containerFacts: test.containerFacts === true,
+    });
     // The gate floors edits at risky; score what it acts on, not the raw battery.
     const verdict = applyEditFloor(
       { verdict: decision.verdict, short: "", detail: "" },

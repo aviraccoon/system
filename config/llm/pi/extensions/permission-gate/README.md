@@ -80,6 +80,25 @@ itself when there is no preview. Any other tool is described by its input JSON,
 clipped to 500 characters. Each classified call appends a `classified` session entry
 (verdict, factor scores, detail) for threshold tuning.
 
+### Facts about the call
+
+A command says what runs, not what it reaches. Before classifying a `bash` call
+the gate appends facts collected from the machine: when a command names a running
+container, that container is inspected and the state gains what it mounts, whether
+it is privileged, and its image, status and network. Damage confined to a
+container's own writable layer is then risky rather than dangerous, because the
+container goes away with its layer; a bind mount, a volume, a socket or a
+privileged container keeps the dangerous tier.
+
+Which container a command names is answered by the runtime's own list and a word
+match — container name, id, or compose service — so wrappers, `sh -c` payloads and
+`docker compose exec` resolve without a shell grammar. The container facts count
+only when the block is present: a container that is not running or could not be
+inspected leaves the stricter tier, and the block is generated text, so a command
+cannot claim locality for itself. A command that names `ssh` or `kubectl` as a word
+gets no container facts at all, since the container it names may live on the other
+machine.
+
 When the decisions call fails, the provider has no credential, or any factor or
 the severity score is missing, the verdict comes from the `explain` role alone —
 the display degrades, never the fail-closed behavior. The model is pinned in
@@ -220,6 +239,8 @@ Status bar shows `+tirith` when active.
 - `edit-preview.ts` — Real diff and change summary for write/edit calls, used by the dialog and the classifier
 - `edit-match.ts` — Edit matcher vendored from pi, so previews match what the edit will do
 - `tirith.ts` — tirith report parsing, the CRITICAL floor and the classifier-facing fact
+- `facts.ts` — Facts collected from the machine for the classifier state (`docker inspect` for a container the command names)
+- `facts.test.ts` — Tests for command detection, inspect parsing, the rendered block and the collector
 - `result-notes.ts` — Resolves a result's note (staged text plus an in-flight classification), with no pi imports
 - `confirm-ui.ts` — Custom TUI component (SelectList + Editor note field + explanation display)
 - `index.ts` — Pi extension wrapper (UI, events, auto-classify, user-message notes, tool_result note injection)

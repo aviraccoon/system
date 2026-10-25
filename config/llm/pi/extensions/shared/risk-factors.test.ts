@@ -116,6 +116,75 @@ describe("verdictFromFactors", () => {
   });
 });
 
+describe("container locality", () => {
+  const facts = { containerFacts: true };
+  const layerDelete = { mutates_state: 0.95, destroys_data: 0.9, large_scale_damage: 0.9, container_local_only: 0.8 };
+
+  test("a delete in the container's own layer is risky, not dangerous", () => {
+    const decision = verdictFromFactors(p(layerDelete), undefined, null, facts);
+    expect(decision.verdict).toBe("risky");
+    expect(decision.reasons).toEqual(["destroys_data", "mutates_state", "container_local"] as string[]);
+  });
+
+  test("the same factors without container facts keep the dangerous tier", () => {
+    expect(verdictFromFactors(p(layerDelete)).verdict).toBe("dangerous");
+    expect(verdictFromFactors(p(layerDelete), undefined, null, { containerFacts: false }).verdict).toBe("dangerous");
+  });
+
+  test("a privileged or shared-state reason is not in the container's reach", () => {
+    const privileged = verdictFromFactors(p({ ...layerDelete, elevated_privileges: 0.9 }), undefined, null, facts);
+    expect(privileged.verdict).toBe("dangerous");
+    // The damage reasons stay in the list when a hard reason already decided the
+    // tier: dropping them here would hide what the classifier saw.
+    expect(privileged.reasons).toEqual(["elevated_privileges", "large_scale_damage"] as string[]);
+    const shared = verdictFromFactors(
+      p({ ...layerDelete, affects_shared_or_remote_state: 0.9 }),
+      undefined,
+      null,
+      facts,
+    );
+    expect(shared.verdict).toBe("dangerous");
+    expect(shared.reasons).toEqual(["affects_shared_or_remote_state", "large_scale_damage"] as string[]);
+  });
+
+  test("inline code that destroys is demoted only inside a container", () => {
+    const inline = { mutates_state: 0.9, destroys_data: 0.9, runs_local_code: 0.9, container_local_only: 0.9 };
+    expect(verdictFromFactors(p(inline)).verdict).toBe("dangerous");
+    expect(verdictFromFactors(p(inline), undefined, null, facts).verdict).toBe("risky");
+  });
+
+  test("the severity promotion does not outrank container locality", () => {
+    const local = p({ mutates_state: 0.9, container_local_only: 0.9 });
+    expect(verdictFromFactors(local, undefined, 3).verdict).toBe("dangerous");
+    expect(verdictFromFactors(local, undefined, 3, facts).verdict).toBe("risky");
+  });
+
+  test("the factor only counts above the risky threshold", () => {
+    const barely = p({ ...layerDelete, container_local_only: 0.4 });
+    expect(verdictFromFactors(barely, undefined, null, facts).verdict).toBe("dangerous");
+  });
+
+  test("locality alone never creates a tier, and is named only when it demoted", () => {
+    expect(verdictFromFactors(p({ container_local_only: 0.9 }), undefined, null, facts).verdict).toBe("safe");
+    const noDemotion = verdictFromFactors(p({ mutates_state: 0.9, container_local_only: 0.9 }), undefined, null, facts);
+    expect(noDemotion.verdict).toBe("risky");
+    expect(noDemotion.reasons).toEqual(["mutates_state"] as string[]);
+  });
+
+  test("decisionFromAnswers passes the facts flag through", () => {
+    const answers = {
+      ...Object.fromEntries(FACTOR_NAMES.map((name) => [name, { type: "noul" as const, noul: 0.1 }])),
+      destroys_data: { type: "noul" as const, noul: 0.9 },
+      mutates_state: { type: "noul" as const, noul: 0.9 },
+      large_scale_damage: { type: "noul" as const, noul: 0.9 },
+      container_local_only: { type: "noul" as const, noul: 0.9 },
+      severity: { type: "score" as const, score: 1.9, probabilities: {} },
+    };
+    expect(decisionFromAnswers(answers)?.verdict).toBe("dangerous");
+    expect(decisionFromAnswers(answers, { containerFacts: true })?.verdict).toBe("risky");
+  });
+});
+
 describe("factorProbabilities", () => {
   test("reads noul answers and defaults missing factors to 0", () => {
     const probs = factorProbabilities({

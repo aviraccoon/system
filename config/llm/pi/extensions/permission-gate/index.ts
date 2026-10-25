@@ -59,6 +59,7 @@ import {
   notesMessage,
   parseExplanation,
 } from "./explain";
+import { collectFacts, hasContainerFacts } from "./facts";
 import {
   autoResolve,
   createInitialState,
@@ -167,9 +168,10 @@ export default function permissionGate(pi: ExtensionAPI) {
     ctx: ExtensionContext,
     toolName: string,
     description: string,
+    containerFacts: boolean,
     timeoutMs = 5000,
   ): Promise<ExplanationResult | null> {
-    const factors = await classifyWithFactors(ctx, toolName, description, timeoutMs);
+    const factors = await classifyWithFactors(ctx, toolName, description, timeoutMs, undefined, containerFacts);
     if (factors) return applyEditFloor(factors, EDIT_LIKE_TOOLS.includes(toolName));
     const proseText = await askProse(ctx, description, timeoutMs);
     // The prose path gets the same edit floor as the battery: its prompt may
@@ -231,6 +233,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     description: string,
     timeoutMs: number,
     signal?: AbortSignal,
+    containerFacts = false,
   ): Promise<ExplanationResult | null> {
     if (!decisionsEnabled) return null;
     try {
@@ -248,7 +251,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         { model: DECISIONS_MODEL, state: description, questions },
         { apiKey: auth.apiKey, headers: auth.headers, timeoutMs, signal },
       );
-      const decision = decisionFromAnswers(result.answers);
+      const decision = decisionFromAnswers(result.answers, { containerFacts });
       if (!decision) return null;
       return withAdviceScores(factorsToExplanation(decision), adviceScores(result.answers, advices));
     } catch {
@@ -267,6 +270,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     ctx: ExtensionContext,
     diff?: DiffBody,
     facts?: string,
+    containerFacts = false,
   ): ExplanationProvider | undefined {
     if (!explainEnabled) return undefined;
 
@@ -290,7 +294,14 @@ export default function permissionGate(pi: ExtensionAPI) {
     const abortController = new AbortController();
     const listeners: Array<(result: ExplanationResult) => void> = [];
 
-    const factorsPromise = classifyWithFactors(ctx, toolName, description, 5000, abortController.signal);
+    const factorsPromise = classifyWithFactors(
+      ctx,
+      toolName,
+      description,
+      5000,
+      abortController.signal,
+      containerFacts,
+    );
     const prosePromise = askProse(ctx, description, 5000, abortController.signal);
 
     const promise = (async (): Promise<ExplanationResult | null> => {
@@ -879,6 +890,13 @@ export default function permissionGate(pi: ExtensionAPI) {
       return { block: true, reason: tirithFacts ? `${reason}\n${tirithFacts}` : reason };
     }
 
+    // Facts about the world the call reaches, appended to the classifier's state.
+    // tirith reads the command's text; these read the container it names, which is what
+    // tells a delete in a container's own layer from one through a bind mount.
+    const worldFacts = await collectFacts({ toolName: event.toolName, input });
+    const containerFacts = hasContainerFacts(worldFacts);
+    const classifierFacts = [worldFacts, tirithFacts].filter(Boolean).join("\n\n") || undefined;
+
     // Auto-classify: call sidecar before showing dialog. Resolution composes the
     // deterministic decision with the verdict (autoResolve), so a floor the gate
     // set is not the classifier's to resolve. Runs supervised only — the /auto
@@ -891,7 +909,7 @@ export default function permissionGate(pi: ExtensionAPI) {
           rawDiff: diffBody?.rawDiff,
           summary: diffBody?.summary,
         },
-        tirithFacts,
+        classifierFacts,
       );
       const cached = state.classifyCache.get(key);
       const resolve = (result: ExplanationResult) =>
@@ -935,7 +953,7 @@ export default function permissionGate(pi: ExtensionAPI) {
       }
 
       ctx.ui.setWorkingMessage("Classifying...");
-      const explResult = await classify(ctx, event.toolName, description);
+      const explResult = await classify(ctx, event.toolName, description, containerFacts);
       ctx.ui.setWorkingMessage();
 
       if (explResult) {
@@ -969,7 +987,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     // Normal path: build explanation provider (fires concurrently with dialog).
     // tirith's findings ride the banner above it; the sidecar explanation states what the
     // command actually does, which is what the human needs to judge it.
-    const explanation = makeExplanation(event.toolName, input, ctx, diffBody, tirithFacts);
+    const explanation = makeExplanation(event.toolName, input, ctx, diffBody, classifierFacts, containerFacts);
     return await showConfirmDialog(ctx, event, decision, explanation, renderableDiff, detailsBody, tirith, tirithFacts);
   });
 
