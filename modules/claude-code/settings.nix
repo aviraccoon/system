@@ -38,7 +38,7 @@ let
           })
           [
             "instructions"
-            "project-instructions"
+            "project-settings"
             "metadata"
             "journal:0"
             "journal:1"

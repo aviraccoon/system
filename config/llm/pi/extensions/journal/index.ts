@@ -40,7 +40,7 @@ export default function journalExtension(pi: ExtensionAPI) {
     if (process.env.LLM_VANILLA !== "1" && process.env.NO_JOURNAL !== "1") {
       const project = projectFor(config.notesDir, cwd);
       const projectName = project.name;
-      const meta = await loadProjectMeta(project.dir);
+      const { meta } = await loadProjectMeta(project.dir);
       const result = await getRecentNotes(config.notesDir, projectName);
       pi.events.emit("journal:loaded", { projectName, notes: result.notes });
 

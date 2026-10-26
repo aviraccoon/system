@@ -19,6 +19,7 @@ A journal project's `meta.json` lists files to inline at session start:
 - A plain string loads for the main agent. The object form with `subagents: true` also loads in subagent children, which pay those tokens on every dispatch.
 - Paths are `~`-expanded or resolved against the project's journal dir. The project resolves worktree-aware, so `<repo>.worktrees/<branch>` loads the same instructions as the main checkout.
 - A missing or unreadable file is reported inside the block, not skipped: these instructions decide what the agent may do.
+- A malformed field anywhere in `meta.json` is reported the same way, in a `Project settings problems` block, because a settings file that half-loads must not read as "nothing was declared".
 - Claude Code injects this part through its own hook, whose output cap truncates a long file; pi has no cap.
 - Subagent children get no journal context, so `agents-loader` loads the subagent-scoped entries there.
 

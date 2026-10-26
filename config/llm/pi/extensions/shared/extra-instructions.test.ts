@@ -5,46 +5,14 @@ import { join } from "node:path";
 import {
   expandInstructionPath,
   formatInstructions,
-  instructionPaths,
   MISSING_INSTRUCTION,
   projectInstructions,
 } from "./extra-instructions";
+import type { ProjectMeta } from "./project-meta";
 
 function tempDir(prefix: string): string {
   return mkdtempSync(join(tmpdir(), prefix));
 }
-
-describe("instructionPaths", () => {
-  it("a plain string loads for the main agent only", () => {
-    expect(instructionPaths(["a.md"], "main")).toEqual(["a.md"]);
-    expect(instructionPaths(["a.md"], "subagent")).toEqual([]);
-  });
-
-  it("the object form with subagents:true loads for both audiences", () => {
-    const entries = [{ path: "a.md", subagents: true }];
-    expect(instructionPaths(entries, "main")).toEqual(["a.md"]);
-    expect(instructionPaths(entries, "subagent")).toEqual(["a.md"]);
-  });
-
-  it("the object form without the flag stays main-only", () => {
-    expect(instructionPaths([{ path: "a.md" }], "subagent")).toEqual([]);
-    expect(instructionPaths([{ path: "a.md", subagents: false }], "subagent")).toEqual([]);
-  });
-
-  it("drops malformed entries instead of failing the session", () => {
-    expect(instructionPaths([null, 42, {}, { path: "" }, "ok.md"], "main")).toEqual(["ok.md"]);
-  });
-
-  it("is empty for a missing or non-array value", () => {
-    expect(instructionPaths(undefined, "main")).toEqual([]);
-    expect(instructionPaths("a.md", "main")).toEqual([]);
-    expect(instructionPaths({ path: "a.md" }, "main")).toEqual([]);
-  });
-
-  it("deduplicates while keeping declaration order", () => {
-    expect(instructionPaths(["b.md", "a.md", "b.md"], "main")).toEqual(["b.md", "a.md"]);
-  });
-});
 
 describe("expandInstructionPath", () => {
   it("expands a leading ~/ to the home directory", () => {
@@ -108,12 +76,17 @@ describe("projectInstructions", () => {
     writeFileSync(join(dir, "main.md"), "MAIN");
     writeFileSync(join(dir, "child.md"), "CHILD");
 
-    const entries = ["main.md", { path: "child.md", subagents: true }];
-    const main = projectInstructions(entries, "main", dir);
+    const meta: ProjectMeta = {
+      instructions: [
+        { path: "main.md", subagents: false },
+        { path: "child.md", subagents: true },
+      ],
+    };
+    const main = projectInstructions(meta, "main", dir);
     expect(main).toContain("MAIN");
     expect(main).toContain("CHILD");
 
-    const child = projectInstructions(entries, "subagent", dir);
+    const child = projectInstructions(meta, "subagent", dir);
     expect(child).not.toContain("MAIN");
     expect(child).toContain("CHILD");
   });

@@ -6,7 +6,6 @@ import {
   buildHarvestBlock,
   buildJournalContext,
   buildJournalParts,
-  harvestEnabled,
   type JournalConfig,
   journalDirFor,
   journalNotesDir,
@@ -31,28 +30,11 @@ describe("loadHarvestPolicy", () => {
   });
 });
 
-describe("harvestEnabled", () => {
-  it("true and the object form opt in", () => {
-    expect(harvestEnabled(true)).toBe(true);
-    expect(harvestEnabled({ note: "alias acme" })).toBe(true);
-    expect(harvestEnabled({})).toBe(true);
-  });
-
-  it("everything else stays off, including the null a hand-edit produces", () => {
-    expect(harvestEnabled(undefined)).toBe(false);
-    expect(harvestEnabled(null)).toBe(false);
-    expect(harvestEnabled(false)).toBe(false);
-    expect(harvestEnabled("true")).toBe(false);
-    expect(harvestEnabled(1)).toBe(false);
-    expect(harvestEnabled([])).toBe(false);
-  });
-});
-
 describe("buildHarvestBlock", () => {
   const policy = "POLICY";
 
-  it("true flag yields the policy only", () => {
-    expect(buildHarvestBlock(policy, true)).toBe("POLICY");
+  it("a bare flag yields the policy only", () => {
+    expect(buildHarvestBlock(policy, {})).toBe("POLICY");
   });
 
   it("object with note appends it verbatim", () => {
@@ -135,15 +117,17 @@ describe("buildJournalParts with a harvest flag", () => {
     expect(parts.metadata).toContain("alias acme");
   });
 
-  it("drops a note that is not a string and keeps the policy", async () => {
+  it("drops a note that is not a string, keeps the policy and says so", async () => {
     const parts = await buildJournalParts(config(notesTree({ harvest: { note: 5 } })), "/code/acme");
     expect(parts.metadata).toContain("Time tracking");
     expect(parts.metadata).not.toContain("Project notes");
+    expect(parts.projectSettings).toContain("`harvest.note`");
   });
 
-  it("builds no block and does not throw when `harvest` is null", async () => {
+  it("builds no block, does not throw and reports a null flag", async () => {
     const parts = await buildJournalParts(config(notesTree({ harvest: null })), "/code/acme");
     expect(parts.metadata).not.toContain("Time tracking");
+    expect(parts.projectSettings).toContain("`harvest`");
   });
 });
 
@@ -177,7 +161,7 @@ describe("buildJournalParts with declared instructions", () => {
 
   it("inlines the file in its own part, leaving the global instructions alone", async () => {
     const parts = await buildJournalParts(config(notesTree()), "/code/acme");
-    expect(parts.projectInstructions).toContain("RULE BODY");
+    expect(parts.projectSettings).toContain("RULE BODY");
     expect(parts.instructions).toContain("GLOBAL");
     expect(parts.instructions).not.toContain("RULE BODY");
     expect(parts.instructions).toContain("JOURNAL REMINDER");
@@ -191,7 +175,7 @@ describe("buildJournalParts with declared instructions", () => {
 
   it("loads for a worktree cwd through the main project's meta.json", async () => {
     const parts = await buildJournalParts(config(notesTree()), "/code/acme.worktrees/feat/x");
-    expect(parts.projectInstructions).toContain("RULE BODY");
+    expect(parts.projectSettings).toContain("RULE BODY");
   });
 
   it("still loads under NO_JOURNAL=1, because they are rules and not notes", async () => {
@@ -199,7 +183,7 @@ describe("buildJournalParts with declared instructions", () => {
     process.env.NO_JOURNAL = "1";
     try {
       const parts = await buildJournalParts(config(notesTree()), "/code/acme");
-      expect(parts.projectInstructions).toContain("RULE BODY");
+      expect(parts.projectSettings).toContain("RULE BODY");
       expect(parts.instructions).toContain("SKIP");
       expect(parts.metadata).toBe("");
     } finally {
@@ -212,27 +196,27 @@ describe("buildJournalParts with declared instructions", () => {
     const notesDir = notesTree();
     writeFileSync(join(notesDir, "acme", "meta.json"), '{ "instructions": [ "work-rules.md" ], }');
     const parts = await buildJournalParts(config(notesDir), "/code/acme");
-    expect(parts.projectInstructions).toContain("could not be read as JSON");
+    expect(parts.projectSettings).toContain("could not be read as JSON");
   });
 
   it("reports an `instructions` value that is not an array", async () => {
     const notesDir = notesTree();
     writeFileSync(join(notesDir, "acme", "meta.json"), JSON.stringify({ instructions: "work-rules.md" }));
     const parts = await buildJournalParts(config(notesDir), "/code/acme");
-    expect(parts.projectInstructions).toContain("must be an array");
+    expect(parts.projectSettings).toContain("must be an array");
   });
 
   it("names the real fault for a valid meta.json whose top level is not an object", async () => {
     const notesDir = notesTree();
     writeFileSync(join(notesDir, "acme", "meta.json"), JSON.stringify(["work-rules.md"]));
     const parts = await buildJournalParts(config(notesDir), "/code/acme");
-    expect(parts.projectInstructions).toContain("must be an object");
-    expect(parts.projectInstructions).not.toContain("could not be read as JSON");
+    expect(parts.projectSettings).toContain("must be an object");
+    expect(parts.projectSettings).not.toContain("could not be read as JSON");
   });
 
   it("exposes the project part under the name the Claude Code hook passes", async () => {
     const parts = await buildJournalParts(config(notesTree()), "/code/acme");
-    expect(resolvePart(parts, "project-instructions")).toContain("RULE BODY");
+    expect(resolvePart(parts, "project-settings")).toContain("RULE BODY");
   });
 
   it("makes a misspelled part name visible instead of injecting nothing", async () => {
@@ -259,8 +243,8 @@ describe("buildJournalParts with declared instructions", () => {
       JSON.stringify({ instructions: ["work-rules.md", { file: "other.md" }] }),
     );
     const parts = await buildJournalParts(config(notesDir), "/code/acme");
-    expect(parts.projectInstructions).toContain("entry 2");
-    expect(parts.projectInstructions).toContain("no `path` string");
+    expect(parts.projectSettings).toContain("entry 2");
+    expect(parts.projectSettings).toContain("no `path` string");
   });
 
   it("names an entry whose `subagents` marker is not a boolean", async () => {
@@ -270,7 +254,7 @@ describe("buildJournalParts with declared instructions", () => {
       JSON.stringify({ instructions: [{ path: "work-rules.md", subagents: "true" }] }),
     );
     const parts = await buildJournalParts(config(notesDir), "/code/acme");
-    expect(parts.projectInstructions).toContain("`subagents`");
-    expect(parts.projectInstructions).not.toContain("RULE BODY");
+    expect(parts.projectSettings).toContain("`subagents`");
+    expect(parts.projectSettings).not.toContain("RULE BODY");
   });
 });

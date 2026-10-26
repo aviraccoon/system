@@ -26,7 +26,14 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { declaredInstructionsWarning, type InstructionEntry, projectInstructions } from "./extra-instructions";
+import { projectInstructions } from "./extra-instructions";
+import {
+  emptyProjectMeta,
+  formatMetaProblems,
+  type HarvestSetting,
+  type ParsedMeta,
+  parseProjectMeta,
+} from "./project-meta";
 
 /** Max recent filenames to list for the current project. */
 const FILENAME_LIST_CURRENT = 30;
@@ -59,49 +66,40 @@ export function journalDirFor(notesDir: string, cwd: string): string {
   return join(notesDir, basename(cwd) || "root");
 }
 
-export interface ProjectMeta {
-  description?: string;
-  path?: string;
-  /** Flag: this project tracks time with the harvest CLI. true = standard policy; object = + private project notes. */
-  harvest?: HarvestSetting | false;
-  /** Files inlined at session start; `{ path, subagents: true }` also loads in subagent children. */
-  instructions?: InstructionEntry[];
-}
-
-/**
- * A meta.json value that opts a project into the harvest policy and the pill.
- * `note` is `unknown` on purpose: the guard checks the object shape, not the
- * note's type, so a consumer has to narrow it before reading.
- */
-export type HarvestSetting = true | { note?: unknown };
-
-/**
- * Whether `harvest` opts in. The one rule: the pill's gate and the injected
- * policy read it here, so they cannot drift, and `null` (a plausible hand-edit)
- * does not reach `buildHarvestBlock`, which reads `.note` off it.
- */
-export function harvestEnabled(value: unknown): value is HarvestSetting {
-  return value === true || (typeof value === "object" && value !== null && !Array.isArray(value));
-}
-
 /** The project a cwd belongs to: worktree-aware dir under the notes tree, and its name. */
 export function projectFor(notesDir: string, cwd: string): { name: string; dir: string } {
   const dir = journalDirFor(notesDir, cwd);
   return { name: basename(dir), dir };
 }
 
-export async function loadProjectMeta(projectDir: string): Promise<ProjectMeta | null> {
+/**
+ * Read and parse a project's meta.json. A missing file is silent; anything the
+ * file loses on the way in (unreadable, invalid JSON, wrong top level, a
+ * malformed field) is reported in `problems`, because a settings file that
+ * half-loads must not read as "nothing was declared".
+ */
+export async function loadProjectMeta(projectDir: string): Promise<ParsedMeta> {
   const metaPath = join(projectDir, "meta.json");
-  if (!existsSync(metaPath)) return null;
+  if (!existsSync(metaPath)) return { meta: emptyProjectMeta(), problems: [] };
+
+  let raw: unknown;
   try {
-    const parsed: unknown = JSON.parse(await readFile(metaPath, "utf-8"));
-    // A bare array or scalar parses cleanly but carries no fields: treat it as
-    // unreadable so the declared-instructions warning can say so.
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-    return parsed as ProjectMeta;
+    raw = JSON.parse(await readFile(metaPath, "utf-8"));
   } catch {
-    return null;
+    return {
+      meta: emptyProjectMeta(),
+      problems: [`${metaPath} could not be read as JSON, so no project settings were loaded — fix the file.`],
+    };
   }
+  // A bare array or scalar parses cleanly but carries no fields: name the real
+  // fault so the reader does not hunt for a syntax error that is not there.
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return {
+      meta: emptyProjectMeta(),
+      problems: [`the top level of ${metaPath} must be an object, so no project settings were loaded — fix the file.`],
+    };
+  }
+  return parseProjectMeta(raw as Record<string, unknown>, metaPath);
 }
 
 export interface JournalConfig {
@@ -139,14 +137,9 @@ export function loadHarvestPolicy(): string {
   return text.replace(/\n+$/, "");
 }
 
-/**
- * Pure given the policy text: the injection block for a meta.json harvest flag.
- * A `note` that is not a string is dropped rather than read: the policy alone
- * still tells the agent to track time, and a hand-edit cannot cost the session
- * its whole context.
- */
+/** Pure given the policy text: the injection block for a parsed harvest flag. */
 export function buildHarvestBlock(policy: string, harvest: HarvestSetting): string {
-  const note = typeof harvest === "object" && typeof harvest.note === "string" ? harvest.note.trim() : "";
+  const note = harvest.note?.trim();
   return note ? `${policy}\nProject notes: ${note}` : policy;
 }
 
@@ -219,11 +212,11 @@ async function getOtherProjectSummaries(notesDir: string, currentProject: string
     if (!dir.isDirectory() || dir.name === currentProject) continue;
     const filenames = await getOtherProjectFilenames(notesDir, dir.name);
     if (filenames.length === 0) continue;
-    const meta = await loadProjectMeta(join(notesDir, dir.name));
+    const { meta } = await loadProjectMeta(join(notesDir, dir.name));
     projects.push({
       name: dir.name,
-      description: meta?.description ?? null,
-      path: meta?.path ?? null,
+      description: meta.description ?? null,
+      path: meta.path ?? null,
       filenames,
       mostRecent: filenames[0],
     });
@@ -252,8 +245,8 @@ async function getOtherProjectSummaries(notesDir: string, currentProject: string
 export interface JournalParts {
   /** Global instructions + journal behavioral guidance */
   instructions: string;
-  /** Files the project's meta.json declares under `instructions` (own part: a hook has its own output budget) */
-  projectInstructions: string;
+  /** meta.json problems plus the files it declares under `instructions` (own part: a hook has its own output budget) */
+  projectSettings: string;
   /** TODO.md + directory listing + cross-project awareness */
   metadata: string;
   /** Individual journal entries (most recent first), one per element */
@@ -261,25 +254,25 @@ export interface JournalParts {
 }
 
 export async function buildJournalParts(config: JournalConfig, cwd: string): Promise<JournalParts> {
-  const empty: JournalParts = { instructions: "", projectInstructions: "", metadata: "", journals: [] };
+  const empty: JournalParts = { instructions: "", projectSettings: "", metadata: "", journals: [] };
 
   if (process.env.LLM_VANILLA === "1") {
     return { ...empty, instructions: config.vanillaMessage };
   }
 
   const { name: projectName, dir: projectDir } = projectFor(config.notesDir, cwd);
-  const meta = await loadProjectMeta(projectDir);
+  const { meta, problems } = await loadProjectMeta(projectDir);
 
   // Declared instructions are rules, not notes: they load under NO_JOURNAL too.
-  const declared = projectInstructions(meta?.instructions, "main", projectDir);
-  const projectMetaWarning = declaredInstructionsWarning(meta, projectDir);
-  const projectPart = [projectMetaWarning, declared].filter(Boolean).join("\n\n");
+  const projectPart = [formatMetaProblems(problems), projectInstructions(meta, "main", projectDir)]
+    .filter(Boolean)
+    .join("\n\n");
 
   let instructions = config.globalInstructions;
   if (process.env.NO_JOURNAL === "1") {
     return {
       ...empty,
-      projectInstructions: projectPart,
+      projectSettings: projectPart,
       instructions: `${instructions}\n\n${config.journalSkipMessage}`,
     };
   }
@@ -287,8 +280,7 @@ export async function buildJournalParts(config: JournalConfig, cwd: string): Pro
   instructions += `\n\n${config.journalReminder}`;
 
   const result = await getRecentNotes(config.notesDir, projectName);
-  const harvest = meta?.harvest;
-  const harvestBlock = harvestEnabled(harvest) ? buildHarvestBlock(loadHarvestPolicy(), harvest) : null;
+  const harvestBlock = meta.harvest ? buildHarvestBlock(loadHarvestPolicy(), meta.harvest) : null;
 
   const metaParts: string[] = [];
   const journals: string[] = [];
@@ -348,15 +340,13 @@ export async function buildJournalParts(config: JournalConfig, cwd: string): Pro
     metaParts.push(otherProjects);
   }
 
-  return { instructions, projectInstructions: projectPart, metadata: metaParts.join("\n\n"), journals };
+  return { instructions, projectSettings: projectPart, metadata: metaParts.join("\n\n"), journals };
 }
 
 /** Full context string (used by Pi, backward compatible). */
 export async function buildJournalContext(config: JournalConfig, cwd: string): Promise<string> {
   const parts = await buildJournalParts(config, cwd);
-  return [parts.instructions, parts.projectInstructions, parts.metadata, ...parts.journals]
-    .filter(Boolean)
-    .join("\n\n");
+  return [parts.instructions, parts.projectSettings, parts.metadata, ...parts.journals].filter(Boolean).join("\n\n");
 }
 
 /**
@@ -366,7 +356,7 @@ export async function buildJournalContext(config: JournalConfig, cwd: string): P
  */
 export function resolvePart(parts: JournalParts, name: string): string {
   if (name === "instructions") return parts.instructions;
-  if (name === "project-instructions") return parts.projectInstructions;
+  if (name === "project-settings") return parts.projectSettings;
   if (name === "metadata") return parts.metadata;
   if (name.startsWith("journal:")) {
     const raw = name.slice("journal:".length);
@@ -398,7 +388,7 @@ export async function main(args: string[]): Promise<string> {
 // CLI mode:
 //   bun .../journal-context.ts [cwd]                  -- full context (Pi, legacy)
 //   bun .../journal-context.ts --part <name> [cwd]    -- single part (Claude Code hooks)
-//     Parts: instructions, project-instructions, metadata, journal:0, journal:1, journal:2
+//     Parts: instructions, project-settings, metadata, journal:0, journal:1, journal:2
 const isMainModule = typeof process !== "undefined" && process.argv[1]?.includes("journal-context");
 
 if (isMainModule) {

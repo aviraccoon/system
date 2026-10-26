@@ -20,8 +20,9 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { extractAtMentions } from "../shared/at-mentions";
-import { declaredInstructionsWarning, projectInstructions } from "../shared/extra-instructions";
+import { projectInstructions } from "../shared/extra-instructions";
 import { journalNotesDir, loadProjectMeta, projectFor } from "../shared/journal-context";
+import { formatMetaProblems } from "../shared/project-meta";
 import { type DiscoveredFile, discoverAgentsFiles, discoverStartupLocalFiles, extractPaths } from "./loader.js";
 
 export default function agentsLoaderExtension(pi: ExtensionAPI) {
@@ -45,9 +46,9 @@ export default function agentsLoaderExtension(pi: ExtensionAPI) {
     // the project's subagent-scoped instructions load here instead.
     if (process.env.PI_SUBAGENT === "1") {
       const { dir: projectDir } = projectFor(journalNotesDir(), cwd);
-      const meta = await loadProjectMeta(projectDir);
-      const warning = declaredInstructionsWarning(meta, projectDir);
-      const declared = projectInstructions(meta?.instructions, "subagent", projectDir);
+      const { meta, problems } = await loadProjectMeta(projectDir);
+      const warning = formatMetaProblems(problems);
+      const declared = projectInstructions(meta, "subagent", projectDir);
       if (warning) parts.push(warning);
       if (declared) {
         parts.push(declared);
