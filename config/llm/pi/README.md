@@ -6,12 +6,12 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 
 | Extension | What it does |
 |-----------|-------------|
-| **agents-loader** | Loads AGENTS.md from subdirectories and parent dirs (filling gaps in pi's native loading) |
+| **agents-loader** | Loads AGENTS.md from subdirectories and parent dirs (filling gaps in pi's native loading); loads meta.json-declared instructions in subagent children, which get no journal context |
 | **at-mentions** | Inlines file/directory contents when using pi's `@` file picker |
 | **draft-suggestion** | Ghost text predicting the next message, Tab to accept |
 | **edit-guard** | Content-policy checks on edited files and bash commands; prose edits gated on the writing-style skill, dispatches gated on a current, linked journal |
 | **harvest** | Timer status pill (running/idle) in sessions whose journal meta.json sets a `harvest` flag; refreshed after each turn |
-| **journal** | Journal/notes injection at session start, env var overrides |
+| **journal** | Journal notes, project instructions and cross-project context injected at session start, re-injected after compaction, env var overrides |
 | **lsp** | Language server integration -- auto-diagnostics on edit/write, go-to-definition, hover, references, symbols, rename, code actions. Also runs CLI linters |
 | **model-policy** | Per-project model policies based on provider tags. Blocks non-compliant models for sensitive projects (e.g., local/ZDR only) |
 | **or-pin** | `/or-pin` -- pick the OpenRouter upstream provider to pin for the session |

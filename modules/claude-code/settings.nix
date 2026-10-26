@@ -23,8 +23,9 @@ let
     autoMemoryEnabled = false;
 
     hooks = {
-      # Runs at session start - injects journal context split across hooks
-      # to stay under the 10K char per-hook output limit
+      # Runs at session start - injects journal context split across hooks.
+      # Each hook output is capped, and a part over the cap arrives truncated;
+      # the split keeps one oversized part from consuming another's budget.
       SessionStart =
         builtins.map
           (part: {
@@ -37,6 +38,7 @@ let
           })
           [
             "instructions"
+            "project-instructions"
             "metadata"
             "journal:0"
             "journal:1"

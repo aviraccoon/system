@@ -60,11 +60,11 @@ describe("buildFilters", () => {
   test("directory entries become directory rules, files stay file rules", () => {
     const { lines, stats } = buildFilters({
       ...base,
-      repoIgnores: [{ repo: "advantages/taldis", entries: [".pnpm-store/", "AGENTS.local.md", "model/.DS_Store"] }],
+      repoIgnores: [{ repo: "acme/widgets", entries: [".pnpm-store/", "AGENTS.local.md", "model/.DS_Store"] }],
     });
-    expect(lines).toContain("- /advantages/taldis/.pnpm-store/");
-    expect(lines).toContain("- /advantages/taldis/AGENTS.local.md");
-    expect(lines).toContain("- /advantages/taldis/model/.DS_Store");
+    expect(lines).toContain("- /acme/widgets/.pnpm-store/");
+    expect(lines).toContain("- /acme/widgets/AGENTS.local.md");
+    expect(lines).toContain("- /acme/widgets/model/.DS_Store");
     expect(stats.gitignore).toBe(3);
     expect(stats.repos).toBe(1);
   });

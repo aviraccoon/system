@@ -9,6 +9,8 @@
  *   - Filename listing of older entries (up to 30)
  *   - Cross-project awareness (5 recent filenames per other project)
  *   - Harvest cheat-sheet when the project's meta.json sets a harvest flag
+ *   - Files the project's meta.json lists under `instructions`, inlined in full
+ *     as their own part (see ./extra-instructions.ts)
  *
  * Used as:
  *   - Library: import { buildJournalContext } from "./index.ts"
@@ -24,6 +26,7 @@ import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { declaredInstructionsWarning, type InstructionEntry, projectInstructions } from "./extra-instructions";
 
 /** Max recent filenames to list for the current project. */
 const FILENAME_LIST_CURRENT = 30;
@@ -61,13 +64,25 @@ export interface ProjectMeta {
   path?: string;
   /** Flag: this project tracks time with the harvest CLI. true = standard policy; object = + private project notes. */
   harvest?: boolean | { note?: string };
+  /** Files inlined at session start; `{ path, subagents: true }` also loads in subagent children. */
+  instructions?: InstructionEntry[];
+}
+
+/** The project a cwd belongs to: worktree-aware dir under the notes tree, and its name. */
+export function projectFor(notesDir: string, cwd: string): { name: string; dir: string } {
+  const dir = journalDirFor(notesDir, cwd);
+  return { name: basename(dir), dir };
 }
 
 export async function loadProjectMeta(projectDir: string): Promise<ProjectMeta | null> {
   const metaPath = join(projectDir, "meta.json");
   if (!existsSync(metaPath)) return null;
   try {
-    return JSON.parse(await readFile(metaPath, "utf-8")) as ProjectMeta;
+    const parsed: unknown = JSON.parse(await readFile(metaPath, "utf-8"));
+    // A bare array or scalar parses cleanly but carries no fields: treat it as
+    // unreadable so the declared-instructions warning can say so.
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as ProjectMeta;
   } catch {
     return null;
   }
@@ -208,12 +223,16 @@ async function getOtherProjectSummaries(notesDir: string, currentProject: string
 }
 
 /**
- * Structured journal context split into parts, each under the 10K char hook
- * output limit for Claude Code. Pi uses buildJournalContext() which joins them.
+ * Structured journal context split into parts, so a consumer that injects one
+ * hook per part (Claude Code) spends a separate output budget on each; a part
+ * over that budget arrives truncated. Pi uses buildJournalContext(), which
+ * joins them.
  */
 export interface JournalParts {
   /** Global instructions + journal behavioral guidance */
   instructions: string;
+  /** Files the project's meta.json declares under `instructions` (own part: a hook has its own output budget) */
+  projectInstructions: string;
   /** TODO.md + directory listing + cross-project awareness */
   metadata: string;
   /** Individual journal entries (most recent first), one per element */
@@ -221,23 +240,31 @@ export interface JournalParts {
 }
 
 export async function buildJournalParts(config: JournalConfig, cwd: string): Promise<JournalParts> {
-  const empty: JournalParts = { instructions: "", metadata: "", journals: [] };
+  const empty: JournalParts = { instructions: "", projectInstructions: "", metadata: "", journals: [] };
 
   if (process.env.LLM_VANILLA === "1") {
     return { ...empty, instructions: config.vanillaMessage };
   }
 
-  let instructions = config.globalInstructions;
+  const { name: projectName, dir: projectDir } = projectFor(config.notesDir, cwd);
+  const meta = await loadProjectMeta(projectDir);
 
+  // Declared instructions are rules, not notes: they load under NO_JOURNAL too.
+  const declared = projectInstructions(meta?.instructions, "main", projectDir);
+  const projectMetaWarning = declaredInstructionsWarning(meta, projectDir);
+  const projectPart = [projectMetaWarning, declared].filter(Boolean).join("\n\n");
+
+  let instructions = config.globalInstructions;
   if (process.env.NO_JOURNAL === "1") {
-    return { ...empty, instructions: `${instructions}\n\n${config.journalSkipMessage}` };
+    return {
+      ...empty,
+      projectInstructions: projectPart,
+      instructions: `${instructions}\n\n${config.journalSkipMessage}`,
+    };
   }
 
   instructions += `\n\n${config.journalReminder}`;
 
-  const projectName = basename(cwd);
-  const projectDir = join(config.notesDir, projectName);
-  const meta = await loadProjectMeta(projectDir);
   const result = await getRecentNotes(config.notesDir, projectName);
   const harvestBlock =
     meta?.harvest === true || (meta?.harvest !== undefined && typeof meta.harvest === "object")
@@ -302,24 +329,34 @@ export async function buildJournalParts(config: JournalConfig, cwd: string): Pro
     metaParts.push(otherProjects);
   }
 
-  return { instructions, metadata: metaParts.join("\n\n"), journals };
+  return { instructions, projectInstructions: projectPart, metadata: metaParts.join("\n\n"), journals };
 }
 
 /** Full context string (used by Pi, backward compatible). */
 export async function buildJournalContext(config: JournalConfig, cwd: string): Promise<string> {
   const parts = await buildJournalParts(config, cwd);
-  return [parts.instructions, parts.metadata, ...parts.journals].filter(Boolean).join("\n\n");
+  return [parts.instructions, parts.projectInstructions, parts.metadata, ...parts.journals]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-/** Resolve a named part from JournalParts. Returns empty string for missing journal indices. */
+/**
+ * Resolve a named part from JournalParts. A missing journal index is empty; an
+ * unrecognized name returns a visible line, so a caller that passes one (a hook
+ * configured with a typo) shows up instead of injecting nothing.
+ */
 export function resolvePart(parts: JournalParts, name: string): string {
   if (name === "instructions") return parts.instructions;
+  if (name === "project-instructions") return parts.projectInstructions;
   if (name === "metadata") return parts.metadata;
   if (name.startsWith("journal:")) {
-    const idx = parseInt(name.split(":")[1], 10);
-    return parts.journals[idx] ?? "";
+    const raw = name.slice("journal:".length);
+    // A valid index past the end is legitimately empty (the hooks ask for three);
+    // anything that is not an index is a typo and has to show up.
+    if (!/^\d+$/.test(raw)) return `unknown context part: ${name}`;
+    return parts.journals[Number(raw)] ?? "";
   }
-  return "";
+  return `unknown context part: ${name}`;
 }
 
 /** CLI entry point. Exported for testing. */
@@ -342,7 +379,7 @@ export async function main(args: string[]): Promise<string> {
 // CLI mode:
 //   bun .../journal-context.ts [cwd]                  -- full context (Pi, legacy)
 //   bun .../journal-context.ts --part <name> [cwd]    -- single part (Claude Code hooks)
-//     Parts: instructions, metadata, journal:0, journal:1, journal:2
+//     Parts: instructions, project-instructions, metadata, journal:0, journal:1, journal:2
 const isMainModule = typeof process !== "undefined" && process.argv[1]?.includes("journal-context");
 
 if (isMainModule) {

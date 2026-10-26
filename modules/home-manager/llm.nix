@@ -47,8 +47,9 @@ let
   bun = "${pkgs.bun}/bin/bun";
   journalContextScript = "${config.home.homeDirectory}/system/config/llm/pi/extensions/shared/journal-context.ts";
 
-  # Session start hook: called once per journal part to stay under Claude Code's
-  # 10K char per-hook output limit. The part name is passed as $1 from settings.json.
+  # Session start hook: called once per journal part. Each hook output is capped,
+  # and a part over the cap arrives truncated; the split spreads the context over
+  # separate budgets. The part name is passed as $1 from settings.json.
   # Env vars:
   #   LLM_VANILLA=1 - skip all custom context (truly vanilla experience)
   #   NO_JOURNAL=1  - skip journal reading only (fresh session, no prior context)

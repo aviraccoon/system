@@ -13,9 +13,14 @@
  * event hooks, context nudge, compaction reminder.
  */
 
-import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { buildJournalContext, getRecentNotes, loadJournalConfig, loadProjectMeta } from "../shared/journal-context";
+import {
+  buildJournalContext,
+  getRecentNotes,
+  loadJournalConfig,
+  loadProjectMeta,
+  projectFor,
+} from "../shared/journal-context";
 
 /** Context usage fraction (0-1) above which the agent gets a journal nudge. */
 const CONTEXT_NUDGE_THRESHOLD = 0.7;
@@ -24,7 +29,8 @@ export default function journalExtension(pi: ExtensionAPI) {
   const isSubagent = process.env.PI_SUBAGENT === "1";
   const config = loadJournalConfig();
   let cachedContext = "";
-  let firstPrompt = true;
+  /** Inject on the next run: the session start, and again after a compaction. */
+  let pendingContext = true;
   let nudged = false;
 
   async function loadContext(cwd: string, ctx: ExtensionContext) {
@@ -32,9 +38,9 @@ export default function journalExtension(pi: ExtensionAPI) {
     cachedContext = await buildJournalContext(config, cwd);
 
     if (process.env.LLM_VANILLA !== "1" && process.env.NO_JOURNAL !== "1") {
-      const projectName = basename(cwd);
-      const projectDir = join(config.notesDir, projectName);
-      const meta = await loadProjectMeta(projectDir);
+      const project = projectFor(config.notesDir, cwd);
+      const projectName = project.name;
+      const meta = await loadProjectMeta(project.dir);
       const result = await getRecentNotes(config.notesDir, projectName);
       pi.events.emit("journal:loaded", { projectName, notes: result.notes });
 
@@ -66,14 +72,14 @@ export default function journalExtension(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    firstPrompt = true;
+    pendingContext = true;
     nudged = false;
     await loadContext(ctx.cwd, ctx);
   });
 
   pi.on("before_agent_start", async () => {
-    if (isSubagent || !firstPrompt || !cachedContext) return;
-    firstPrompt = false;
+    if (isSubagent || !pendingContext || !cachedContext) return;
+    pendingContext = false;
 
     return {
       message: {
@@ -104,6 +110,8 @@ export default function journalExtension(pi: ExtensionAPI) {
 
   pi.on("session_before_compact", async (_event, ctx) => {
     if (isSubagent || process.env.LLM_VANILLA === "1") return;
+    // Compaction can summarize the injected context away; restore it on the next run.
+    pendingContext = true;
     ctx.ui.notify("Context compacting - journal your progress!", "warning");
     return undefined;
   });

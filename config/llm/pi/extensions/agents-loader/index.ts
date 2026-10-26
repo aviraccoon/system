@@ -20,6 +20,8 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { extractAtMentions } from "../shared/at-mentions";
+import { declaredInstructionsWarning, projectInstructions } from "../shared/extra-instructions";
+import { journalNotesDir, loadProjectMeta, projectFor } from "../shared/journal-context";
 import { type DiscoveredFile, discoverAgentsFiles, discoverStartupLocalFiles, extractPaths } from "./loader.js";
 
 export default function agentsLoaderExtension(pi: ExtensionAPI) {
@@ -29,25 +31,42 @@ export default function agentsLoaderExtension(pi: ExtensionAPI) {
   let startupInjected = false;
   let pendingAtContext = "";
 
-  function init(newCwd: string) {
+  /** Load startup context; returns what to tell the user. */
+  async function init(newCwd: string): Promise<string[]> {
     cwd = newCwd;
     loadedRealpaths = new Set();
     startupInjected = false;
     pendingAtContext = "";
 
+    const parts: string[] = [];
+    const notices: string[] = [];
+
+    // Subagent children are the one place the journal extension does not run, so
+    // the project's subagent-scoped instructions load here instead.
+    if (process.env.PI_SUBAGENT === "1") {
+      const { dir: projectDir } = projectFor(journalNotesDir(), cwd);
+      const meta = await loadProjectMeta(projectDir);
+      const warning = declaredInstructionsWarning(meta, projectDir);
+      const declared = projectInstructions(meta?.instructions, "subagent", projectDir);
+      if (warning) parts.push(warning);
+      if (declared) {
+        parts.push(declared);
+        notices.push("Loaded project instructions");
+      }
+    }
+
     const localFiles = discoverStartupLocalFiles(cwd, loadedRealpaths);
     if (localFiles.length > 0) {
-      startupContext = localFiles.map((f) => `<file name="${f.relativePath}">\n${f.content}\n</file>`).join("\n\n");
-    } else {
-      startupContext = "";
+      parts.push(localFiles.map((f) => `<file name="${f.relativePath}">\n${f.content}\n</file>`).join("\n\n"));
+      notices.push("Loaded AGENTS.local.md");
     }
+
+    startupContext = parts.join("\n\n");
+    return notices;
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    init(ctx.cwd);
-    if (startupContext) {
-      ctx.ui.notify("Loaded AGENTS.local.md", "info");
-    }
+    for (const notice of await init(ctx.cwd)) ctx.ui.notify(notice, "info");
   });
 
   // Discover agents files from @path mentions

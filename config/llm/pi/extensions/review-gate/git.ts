@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { expandTilde } from "../shared/paths";
 
 /** Where `modules/home-manager/git.nix` points `core.hooksPath`. */
 export const GATE_HOOKS_PATH = join(homedir(), ".config", "git", "hooks");
@@ -78,12 +79,7 @@ export function hooksPath(cwd: string): string | null {
   }
 }
 
-/** Git expands a leading `~/` itself; `path.resolve` does not. */
-export function expandTilde(value: string): string {
-  if (value === "~") return homedir();
-  if (value.startsWith("~/")) return join(homedir(), value.slice(2));
-  return value;
-}
+export { expandTilde } from "../shared/paths";
 
 /**
  * Hooks a repository ships itself. A global `core.hooksPath` shadows them, so
