@@ -7,7 +7,9 @@ CLI. Personal sessions never see it.
 
 - A journal project opts in by setting a `harvest` flag in its meta.json:
   `"harvest": true`, or `"harvest": { "note": "..." }` for per-project policy
-  (which aliases apply, entry-note rules, thread quirks).
+  (which aliases apply, entry-note rules, thread quirks). The project resolves
+  worktree-aware, so a session in `<repo>.worktrees/<branch>` shows the same pill
+  as its checkout.
 - After each agent turn (agent_end), the extension runs `harvest status --json
   --conceal` and shows the result as a footer pill:
   - timer running: `⏱ 0:42 Website` (elapsed + project name)
@@ -24,4 +26,5 @@ CLI. Personal sessions never see it.
 
 ## Testing
 
-`pill.test.ts` covers the pure formatting. Run `mise tree-check config/llm/pi`.
+`pill.test.ts` covers the pure formatting, `active.test.ts` the flag and the
+worktree-aware project lookup. Run `mise tree-check config/llm/pi`.

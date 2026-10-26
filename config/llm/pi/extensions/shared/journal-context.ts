@@ -63,9 +63,25 @@ export interface ProjectMeta {
   description?: string;
   path?: string;
   /** Flag: this project tracks time with the harvest CLI. true = standard policy; object = + private project notes. */
-  harvest?: boolean | { note?: string };
+  harvest?: HarvestSetting | false;
   /** Files inlined at session start; `{ path, subagents: true }` also loads in subagent children. */
   instructions?: InstructionEntry[];
+}
+
+/**
+ * A meta.json value that opts a project into the harvest policy and the pill.
+ * `note` is `unknown` on purpose: the guard checks the object shape, not the
+ * note's type, so a consumer has to narrow it before reading.
+ */
+export type HarvestSetting = true | { note?: unknown };
+
+/**
+ * Whether `harvest` opts in. The one rule: the pill's gate and the injected
+ * policy read it here, so they cannot drift, and `null` (a plausible hand-edit)
+ * does not reach `buildHarvestBlock`, which reads `.note` off it.
+ */
+export function harvestEnabled(value: unknown): value is HarvestSetting {
+  return value === true || (typeof value === "object" && value !== null && !Array.isArray(value));
 }
 
 /** The project a cwd belongs to: worktree-aware dir under the notes tree, and its name. */
@@ -123,10 +139,15 @@ export function loadHarvestPolicy(): string {
   return text.replace(/\n+$/, "");
 }
 
-/** Pure given the policy text: the injection block for a meta.json harvest flag. */
-export function buildHarvestBlock(policy: string, harvest: NonNullable<ProjectMeta["harvest"]>): string {
-  const note = typeof harvest === "object" && harvest.note?.trim() ? `\nProject notes: ${harvest.note.trim()}` : "";
-  return `${policy}${note}`;
+/**
+ * Pure given the policy text: the injection block for a meta.json harvest flag.
+ * A `note` that is not a string is dropped rather than read: the policy alone
+ * still tells the agent to track time, and a hand-edit cannot cost the session
+ * its whole context.
+ */
+export function buildHarvestBlock(policy: string, harvest: HarvestSetting): string {
+  const note = typeof harvest === "object" && typeof harvest.note === "string" ? harvest.note.trim() : "";
+  return note ? `${policy}\nProject notes: ${note}` : policy;
 }
 
 export function loadJournalConfig(): JournalConfig {
@@ -266,10 +287,8 @@ export async function buildJournalParts(config: JournalConfig, cwd: string): Pro
   instructions += `\n\n${config.journalReminder}`;
 
   const result = await getRecentNotes(config.notesDir, projectName);
-  const harvestBlock =
-    meta?.harvest === true || (meta?.harvest !== undefined && typeof meta.harvest === "object")
-      ? buildHarvestBlock(loadHarvestPolicy(), meta.harvest)
-      : null;
+  const harvest = meta?.harvest;
+  const harvestBlock = harvestEnabled(harvest) ? buildHarvestBlock(loadHarvestPolicy(), harvest) : null;
 
   const metaParts: string[] = [];
   const journals: string[] = [];

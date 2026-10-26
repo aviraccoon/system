@@ -6,6 +6,7 @@ import {
   buildHarvestBlock,
   buildJournalContext,
   buildJournalParts,
+  harvestEnabled,
   type JournalConfig,
   journalDirFor,
   journalNotesDir,
@@ -27,6 +28,23 @@ describe("loadHarvestPolicy", () => {
     expect(policy).not.toContain("Every entry needs a note");
     expect(policy).not.toContain("work thread");
     expect(policy).not.toMatch(/https?:\/\//);
+  });
+});
+
+describe("harvestEnabled", () => {
+  it("true and the object form opt in", () => {
+    expect(harvestEnabled(true)).toBe(true);
+    expect(harvestEnabled({ note: "alias acme" })).toBe(true);
+    expect(harvestEnabled({})).toBe(true);
+  });
+
+  it("everything else stays off, including the null a hand-edit produces", () => {
+    expect(harvestEnabled(undefined)).toBe(false);
+    expect(harvestEnabled(null)).toBe(false);
+    expect(harvestEnabled(false)).toBe(false);
+    expect(harvestEnabled("true")).toBe(false);
+    expect(harvestEnabled(1)).toBe(false);
+    expect(harvestEnabled([])).toBe(false);
   });
 });
 
@@ -89,6 +107,46 @@ describe("journalNotesDir", () => {
   });
 });
 
+/** A config over a temp notes tree; both builder suites start from it. */
+function config(notesDir: string): JournalConfig {
+  return {
+    notesDir,
+    noNotesReminder: "NO NOTES",
+    journalReminder: "JOURNAL REMINDER",
+    compactionReminder: "COMPACT",
+    journalSkipMessage: "SKIP",
+    vanillaMessage: "VANILLA",
+    globalInstructions: "GLOBAL",
+  };
+}
+
+describe("buildJournalParts with a harvest flag", () => {
+  /** A notes tree with one project carrying `meta`. */
+  function notesTree(meta: unknown): string {
+    const notesDir = mkdtempSync(join(tmpdir(), "jc-harvest-"));
+    mkdirSync(join(notesDir, "acme"));
+    writeFileSync(join(notesDir, "acme", "meta.json"), JSON.stringify(meta));
+    return notesDir;
+  }
+
+  it("builds the block for the object form and keeps its note", async () => {
+    const parts = await buildJournalParts(config(notesTree({ harvest: { note: "alias acme" } })), "/code/acme");
+    expect(parts.metadata).toContain("Time tracking");
+    expect(parts.metadata).toContain("alias acme");
+  });
+
+  it("drops a note that is not a string and keeps the policy", async () => {
+    const parts = await buildJournalParts(config(notesTree({ harvest: { note: 5 } })), "/code/acme");
+    expect(parts.metadata).toContain("Time tracking");
+    expect(parts.metadata).not.toContain("Project notes");
+  });
+
+  it("builds no block and does not throw when `harvest` is null", async () => {
+    const parts = await buildJournalParts(config(notesTree({ harvest: null })), "/code/acme");
+    expect(parts.metadata).not.toContain("Time tracking");
+  });
+});
+
 describe("projectFor", () => {
   it("names and locates a plain project", () => {
     expect(projectFor("/notes/llm", "/code/acme")).toEqual({ name: "acme", dir: "/notes/llm/acme" });
@@ -103,18 +161,6 @@ describe("projectFor", () => {
 });
 
 describe("buildJournalParts with declared instructions", () => {
-  function config(notesDir: string): JournalConfig {
-    return {
-      notesDir,
-      noNotesReminder: "NO NOTES",
-      journalReminder: "JOURNAL REMINDER",
-      compactionReminder: "COMPACT",
-      journalSkipMessage: "SKIP",
-      vanillaMessage: "VANILLA",
-      globalInstructions: "GLOBAL",
-    };
-  }
-
   /** A notes tree with one project that declares `instructions`. */
   function notesTree(note?: string): string {
     const notesDir = mkdtempSync(join(tmpdir(), "jc-parts-"));

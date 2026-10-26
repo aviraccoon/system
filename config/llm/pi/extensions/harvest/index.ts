@@ -13,9 +13,9 @@
  * CLI/auth failures degrade silently (no pill update).
  */
 import { execFile } from "node:child_process";
-import { basename, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { loadJournalConfig, loadProjectMeta } from "../shared/journal-context";
+import { loadJournalConfig } from "../shared/journal-context";
+import { harvestActive } from "./active";
 import { formatPill, type StatusJson } from "./pill";
 
 const STATUS_TIMEOUT_MS = 8_000;
@@ -34,10 +34,6 @@ function statusJson(): Promise<StatusJson | null> {
   });
 }
 
-function harvestFlag(value: unknown): boolean {
-  return value === true || (value !== undefined && value !== null && typeof value === "object");
-}
-
 export default function (pi: ExtensionAPI) {
   let active = false;
 
@@ -53,9 +49,7 @@ export default function (pi: ExtensionAPI) {
     active = false;
     ctx.ui.setStatus("harvest", undefined);
     try {
-      const config = loadJournalConfig();
-      const meta = await loadProjectMeta(join(config.notesDir, basename(ctx.cwd)));
-      active = harvestFlag(meta?.harvest);
+      active = await harvestActive(loadJournalConfig().notesDir, ctx.cwd);
     } catch {
       // journal config missing — extension stays off
     }
