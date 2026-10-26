@@ -417,7 +417,7 @@ export default function editGuardExtension(pi: ExtensionAPI) {
     promptSnippet:
       "todo_check: Scan the project journal TODO.md (or a given path) for rule violations (done items, done narration, wishlist markers). Run when maintaining a TODO.md or at wrap-up; remove or reword flagged lines.",
     promptGuidelines: [
-      "After finishing work a TODO.md tracks (or at wrap-up), run todo_check on it; flagged lines are either fully done (delete them), hold leftover work (strip the done narration, keep the rest), or carry a wishlist marker (give it a trigger or name the decision).",
+      "After finishing work a TODO.md tracks (or at wrap-up), run todo_check on it; flagged lines are either fully done (delete them), hold leftover work (strip the done narration, keep the rest), or carry a wishlist marker (give it a trigger a reader can check, or name the decision).",
     ],
     parameters: Type.Object({
       path: Type.Optional(

@@ -62,7 +62,8 @@ export const DEFAULT_RULE_CONFIG: RuleConfig[] = [
       "TODO.md lists only unfinished, actionable work. DELETE done items entirely — the journal holds the details. " +
       "Never reword a done item or annotate it as done. If the item holds remaining work, strip the done narration " +
       "(commit hashes, landed/shipped references) and keep only what remains. " +
-      "A wishlist entry is not an item: 'watch for' needs a trigger or a check date, and 'consider'/'optional'/'if wanted' " +
+      "A wishlist entry is not an item: in TODO, 'watch for' needs a trigger a reader can check, " +
+      "and 'consider'/'optional'/'if wanted' " +
       "must name the decision Avi made and its consequence — an undecided proposal belongs in the journal, not here. " +
       "A rejected option is not an item: DELETE the line — a decision against something is recorded in the journal or in the " +
       "document that owns the rule, and the line itself is neither actionable nor a decision still to make. " +

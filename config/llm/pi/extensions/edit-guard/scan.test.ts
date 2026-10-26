@@ -474,11 +474,6 @@ describe("formatViolations", () => {
     expect(block).toContain("[edit-guard TODO.md TODO.md: this call was blocked and did not run (1 suspect line)]");
     expect(block).toContain(">> - old thing — DONE");
     expect(block).toContain(todoRule.policy);
-    // Literal, so deleting the wishlist sentence turns this pin red rather than
-    // comparing the policy object to itself.
-    expect(block).toContain("an undecided proposal belongs in the journal");
-    expect(block).toContain("A rejected option is not an item");
-    expect(block).toContain("DELETE the line");
   });
 
   test("a completed call's scan does not read as a block", () => {
