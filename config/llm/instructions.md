@@ -144,6 +144,16 @@ path — a fake that models only the happy path, a mock standing in for the subj
 weak pin. Prefer the real implementation over a mock of the thing under test; a fake must model
 the contract the code relies on, failure modes included.
 
+Every new branch — `else if`, early return, guard — needs a test that fails when the branch is
+deleted. An assertion added to an existing test is evidence too; it needs the same proof.
+
+A universal claim (`never`, `every`, `each`, `all`, `no …`) in a comment, doc, or commit message
+needs a test over that domain, one test per case the claim spans.
+
+A hand-edited input file (config, settings, secrets) gets one parser and a table test over its
+value domain. The parser reports every entry it drops, and one row per way the file can be wrong
+asserts that report; a file checked per consumer drifts into two rules.
+
 A check is fixed at the cause, never greened by weakening it: a relaxed assertion, a skipped test,
 a widened catch, a disabled rule. An expectation edited to match new output claims that output is
 correct. A result a rerun, a sleep, or a run order decides is a defect, not noise — make the test
