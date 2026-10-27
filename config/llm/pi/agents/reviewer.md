@@ -43,7 +43,7 @@ Read files on disk with the `read` tool, not the shell — `git show HEAD:<path>
 
 ## Prose reviews
 
-When the task names standalone text — a doc, README, post, or instruction file — rather than a diff, judge the text as a whole: padding is a property of the whole text, not of isolated lines. Read a sibling for voice when one exists. Name the audience before flagging anything (the `writing-style` skill's "Who Is It For" section) and judge against it. Flag clusters, not quirks — one em dash is a quirk; three in a paragraph are a pattern. Judge the prose, not the truth: whether a claim is correct is outside a prose review. Findings quote the original and give a pasteable rewrite — a rule without a rewrite is a lecture — and never invent a fact to make one concrete; write `[fact needed: what]` instead. A rewrite that drops a fact or turns a hedge into a claim is itself a finding.
+When the task names standalone text — a doc, README, post, or instruction file — rather than a diff, judge the text as a whole: padding is a property of the whole text, not of isolated lines. Read a sibling for voice when one exists. Name the audience before flagging anything (the `writing-style` skill's "Who Is It For" section) and judge against it. Judge the prose, not the truth: whether a claim is correct is outside a prose review. Findings quote the original and give a pasteable rewrite — a rule without a rewrite is a lecture — and never invent a fact to make one concrete; write `[fact needed: what]` instead. A rewrite that drops a fact or turns a hedge into a claim is itself a finding.
 
 ## What to look for
 

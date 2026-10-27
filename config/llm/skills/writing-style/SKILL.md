@@ -1,6 +1,6 @@
 ---
 name: writing-style
-description: Load and read this file in full BEFORE writing or reviewing any prose another person will read — docs, posts, READMEs, commit messages, code comments, forum replies, handouts. Mandatory first step, not a reference to consult after feedback.
+description: Load and read this file in full BEFORE writing or reviewing any prose another person will read, including docs, posts, READMEs, commit messages, code comments, forum replies, handouts. Mandatory first step, not a reference to consult after feedback.
 ---
 
 # LLM Writing Guide
@@ -21,7 +21,7 @@ The fix: specificity over grandiosity. Be direct. Let readers draw their own con
 
 ## Always Problematic
 
-These patterns are bad regardless of context.
+These patterns are bad regardless of context, except where the material is quoted or the character itself carries meaning.
 
 ### Importance Inflation
 
@@ -47,7 +47,7 @@ These patterns are bad regardless of context.
 - "...shaping their values, community structures, and approaches to political engagement"
 - "...driving a commitment to empowerment and social change that echoes through generations"
 
-**Instead**: Present facts. If analysis is needed, make it substantive and specific—not a vague phrase tacked onto a sentence.
+**Instead**: Present facts. If analysis is needed, make it substantive and specific, not a vague phrase tacked onto a sentence.
 
 ### Promotional Puffery
 
@@ -81,7 +81,7 @@ These patterns are bad regardless of context.
 
 ### Elegant Variation (Synonym Chains)
 
-**The problem**: Repetition-penalty causes awkward synonym chains (protagonist → key player → eponymous character → the individual in question).
+**The problem**: Repetition-penalty causes awkward synonym chains (protagonist, then key player, then eponymous character, then the individual in question).
 
 **Instead**: Repeat words when clarity requires it. Don't sacrifice clarity for forced variety.
 
@@ -102,6 +102,39 @@ These patterns are bad regardless of context.
 > "Despite its industrial prosperity, [Subject] faces challenges typical of urban areas... With its strategic location and ongoing initiatives, [Subject] continues to thrive..."
 
 **Instead**: If challenges exist, discuss them specifically. Don't force optimistic conclusions.
+
+### Em Dashes
+
+**Banned in prose**, along with `--` used as a stand-in for one. Quoted material keeps whatever its
+source has, command lines keep `--` as a flag prefix, hyphens stay in compounds, and en dashes stay in
+ranges (2–3 days).
+
+**The problem**: The em dash is a tell. It splices two thoughts where a sentence boundary belongs, and
+model prose reaches for it at a nearly fixed rhythm, several times per screen.
+
+**Instead**: a period, a comma, parentheses, or a colon. When a period reads wrong there, the splice is
+hiding two claims.
+
+### Typography Tells
+
+Characters that arrive through a symbol picker usually decorate a sentence instead of saying something.
+Prefer what the keyboard gives you.
+
+- **Middle dot (`·`) as a separator.** It lands where a comma or a semicolon belongs, most often in
+  terse lists like `acme · 3 tools · 4m`. Write commas, or write a sentence.
+- **Arrows (`→`, `←`, `⇒`) as connectives.** Write "becomes", "leads to", "then".
+- **Curly quotes and apostrophes** in a new document. Type straight quotes there; in an existing file,
+  follow its convention.
+- **The ellipsis character (`…`)** in prose. Write three periods; a truncated runtime string is not
+  prose.
+- **Unicode bold or italic** (`𝗯𝗼𝗹𝗱`). Use the markup of the format.
+- **Box drawing, bullets and check marks** (`───`, `▸`, `✓`) as decoration. A Markdown list needs none
+  of it.
+- **Emoji as structure** in headings or bullets. No emoji by default, unless the project's AGENTS.md
+  says otherwise.
+
+Outside that list, keep a character only when it says something the words cannot: names (`café`,
+`Zoë`), symbols in mathematics or units (`≤`, `×`), anything inside a quotation.
 
 ### Over-Hedging
 
@@ -129,7 +162,7 @@ These patterns are bad regardless of context.
 
 **The problem**: Using 20 words where 8 would do. Restating things multiple ways. Adding unnecessary detail.
 
-**Existence comes before wording**: Is this needed — does it bring anything the reader lacks? If not, delete it, don't tighten it. What survives often still carries padding — cut until only the important stuff remains. The rule scales to whole documents: keep a README or guide short, and never overexplain.
+**Existence comes before wording**: Is this needed, and does it bring anything the reader lacks? If not, delete it, don't tighten it. What survives often still carries padding: cut until only the important stuff remains. The rule scales to whole documents: keep a README or guide short, and never overexplain.
 
 **Example**:
 > "The process of migrating the database involved a series of steps that were undertaken over a period of time in order to ensure that the transition was completed successfully."
@@ -142,34 +175,34 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 **The problem**: Prose that re-walks the document's table, re-transcribes a tool's `--help` output, or repeats one fact across sections. The copies drift until they contradict each other.
 
-**Instead**: One fact, one home. A table (or the tool's own help) is the command reference; prose carries only what the table cannot — runtime gotchas and non-obvious defaults. A value maintained elsewhere — a manifest, a config, a registry — stays there; point at it instead of restating it. A useless detail is not improved by moving it; delete it.
+**Instead**: One fact, one home. A table (or the tool's own help) is the command reference; prose carries only what the table cannot: runtime gotchas and non-obvious defaults. A value maintained elsewhere (a manifest, a config, a registry) stays there; point at it instead of restating it. A useless detail is not improved by moving it; delete it.
 
 ### Status Prose
 
-**Applies to**: every durable text — commit messages, code and doc comments, READMEs, design notes, handoffs. Status belongs in the moment (chat, a working update); text that is read later is not its place.
+**Applies to** every durable text: commit messages, code and doc comments, READMEs, design notes, handoffs. Status belongs in the moment (chat, a working update); text that is read later is not its place.
 
 **Patterns to avoid**:
 - Verification and test results: *verified by ...*, *confirmed by running X*, *all checks pass*, *53 tests green*, pass counts, check transcripts, CI status, coverage percentages.
 - Work narration: what was run and in what order, attempts and review rounds, elapsed time (*took three rounds*, *first try*, *after some back-and-forth*).
 - Change numbers and effect sizes: deltas (*p95 dropped from 420 ms to 180 ms*), counts of things added, fixed or removed (*now covers 26 more providers*, *coverage rose from 71% to 89%*, *7 findings fixed*), diff size (*+233/−118*).
-- Unobservable context: an audit, a session, a conversation, a ticket, an incident — *as discussed*, *found during the migration*, *the review flagged*, *after the audit*. The reader has only the artifact; a claim resting on something they cannot see cannot be checked and describes a world they are not in.
+- Unobservable context (an audit, a session, a conversation, a ticket, an incident): *as discussed*, *found during the migration*, *the review flagged*, *after the audit*. The reader has only the artifact; a claim resting on something they cannot see cannot be checked and describes a world they are not in.
 - Restating the diff, the boast built from any of it (*now handles every case*), and progress labels (*WIP*, *90% done*, *ready to merge*).
 
-**The problem**: A later reader sees the current tree, never the version it replaced, so a delta is unreadable there; re-running the measurement moves the numbers, so an effect size goes stale; a verification claim or a test count cannot be checked from the file it sits in and has to be re-run anyway; and work narration describes a process the reader never needed. Correct at the spot, useless to every reader after it — and the boast asserts importance instead of showing it.
+**The problem**: A later reader sees the current tree, never the version it replaced, so a delta is unreadable there; re-running the measurement moves the numbers, so an effect size goes stale; a verification claim or a test count cannot be checked from the file it sits in and has to be re-run anyway; and work narration describes a process the reader never needed. Correct at the spot, useless to every reader after it, and the boast asserts importance instead of showing it.
 
-**Instead**: State the rule or invariant the code encodes, or the failure the change prevents. Where a rule or a constant rests on a measurement, name the probe that produces it so it can be re-run (a command, a file, a test), never the occasion that produced it, and never the number itself — not in a comment, a doc, an error string, or a commit body. Numbers the code's own value depends on (a calibration constant, the measured reference a scaling factor derives from) stay in the code. A test count is never a justification: the tests show what they cover.
+**Instead**: State the rule or invariant the code encodes, or the failure the change prevents. Where a rule or a constant rests on a measurement, name the probe that produces it so it can be re-run (a command, a file, a test), never the occasion that produced it, and never the number itself: not in a comment, a doc, an error string, or a commit body. Numbers the code's own value depends on (a calibration constant, the measured reference a scaling factor derives from) stay in the code. A test count is never a justification: the tests show what they cover.
 
 ### Change-Relative Prose
 
-**Patterns to avoid**: *as before*, *previously*, *used to*, *no longer*, *which is where it ran before*, *as it did*, *the old path* — any comparison of the text's subject to its own earlier form.
+**Patterns to avoid**: *as before*, *previously*, *used to*, *no longer*, *which is where it ran before*, *as it did*, *the old path* (any comparison of the text's subject to its own earlier form).
 
-**The problem**: Docs and comments describe the code as it is. A reader with only the current tree cannot place "before", and the comparison turns a fact into a diff. A comparison of earlier and current behavior belongs in the change's own record — the journal or a design note — and only as the failure the change prevents.
+**The problem**: Docs and comments describe the code as it is. A reader with only the current tree cannot place "before", and the comparison turns a fact into a diff. A comparison of earlier and current behavior belongs in the change's own record (the journal or a design note), and only as the failure the change prevents.
 
 **Instead**: State the current behavior on its own terms. If the earlier behavior explains why the code is shaped the way it is, it belongs in the journal or a design note. The commit message may still name the artifact it replaces, when that artifact exists in a commit (see *Predecessor Framing*).
 
 ### Predecessor Framing
 
-**Patterns to avoid**: *replaces the old X*, *removes the legacy Y* — the **commit message** describing it against an artifact no commit contains.
+**Patterns to avoid**: *replaces the old X*, *removes the legacy Y* (the **commit message** describing it against an artifact no commit contains).
 
 **The problem**: When the history dropped the predecessor (a rebase, a squash, a file that never existed in a commit), the message rests on something the repository cannot show, and the reader cannot check the sentence that names it.
 
@@ -177,17 +210,17 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 ### Timeless Text
 
-**Patterns to avoid**: time anchors — *currently*, *new*, *latest*, *now*, *soon*, *as of this writing*, *presently*, *does not yet*, *existing*. A document is assumed to describe the current state.
+**Patterns to avoid**: time anchors such as *currently*, *new*, *latest*, *now*, *soon*, *as of this writing*, *presently*, *does not yet*, *existing*. A document is assumed to describe the current state.
 
 **The problem**: *Currently* and *latest* tie the claim to an unstated moment, so a later reader cannot tell whether it still holds, and *does not yet* reads as a promise the text cannot keep. *New* assumes the reader knows the prior state. Each of these reads wrong once the thing described moves.
 
-**Instead**: State present behavior plainly: "the parser accepts trailing commas", not "the parser now accepts trailing commas". Describing what exists now is the point; the anchor is what to cut. Keep time words for dated text — release notes, journals, minutes — or a step whose effect follows later ("the VM goes offline soon after shutdown"). To mark a change, name the reference point (a release, a version, a date) rather than calling it *new*.
+**Instead**: State present behavior plainly: "the parser accepts trailing commas", not "the parser now accepts trailing commas". Describing what exists now is the point; the anchor is what to cut. Keep time words for dated text (release notes, journals, minutes), or a step whose effect follows later ("the VM goes offline soon after shutdown"). To mark a change, name the reference point (a release, a version, a date) rather than calling it *new*.
 
 ### Mechanism Shorthand
 
-**Patterns to avoid**: *the stubs land*, *once the flag flips*, *after the frames land*, *once the wiring is in* — the session's own words for a condition, in place of the condition itself.
+**Patterns to avoid** the session's own words for a condition: *the stubs land*, *once the flag flips*, *after the frames land*, *once the wiring is in*.
 
-**The problem**: Status posts, cards, TODOs, and handoffs written mid-task absorb the project's working vocabulary — tool-specific words and half-coined shorthand. Readers outside the working session cannot parse them, and weeks later the author often can't either.
+**The problem**: Status posts, cards, TODOs, and handoffs written mid-task absorb the project's working vocabulary: tool-specific words and half-coined shorthand. Readers outside the working session cannot parse them, and weeks later the author often can't either.
 
 **Instead**: State the checkable condition, not the mechanism. "Blocked until the components render with fake data", not "blocked on the stubs"; "once the designs exist to compare against", not "once the frames land". Test: can a reader tell when the condition is met without asking what a word means?
 
@@ -201,13 +234,13 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 ### Wall of Text
 
-**The problem**: A paragraph that stacks unrelated facts, or a list item that runs past about two rendered lines and carries more than its one claim, gets skipped rather than read — the reader cannot find the one fact they came for. LLM output defaults to this shape: a whole answer as one block, an explanation packed into the bullet that states the claim.
+**The problem**: A paragraph that stacks unrelated facts, or a list item that runs past about two rendered lines and carries more than its one claim, gets skipped rather than read, because the reader cannot find the one fact they came for. LLM output defaults to this shape: a whole answer as one block, an explanation packed into the bullet that states the claim.
 
-**Instead**: One thought per paragraph; split when the topic changes or when a reader would act on the parts separately. Keep a list item to its claim: delete detail that earns nothing, and move what remains into a sub-list or a paragraph beneath it. Length itself is not the fault — a reference entry or a decision document's argument can run long and stay readable (see *Who Is It For*) — and the fix is separating topics, not breaking every thought into a separate sentence (see *Staccato Overcorrection*).
+**Instead**: One thought per paragraph; split when the topic changes or when a reader would act on the parts separately. Keep a list item to its claim: delete detail that earns nothing, and move what remains into a sub-list or a paragraph beneath it. Length itself is not the fault: a reference entry or a decision document's argument can run long and stay readable (see *Who Is It For*). The fix is separating topics, not breaking every thought into a separate sentence (see *Staccato Overcorrection*).
 
 ### Staccato Overcorrection
 
-**The problem**: When fixing verbosity or em dash overuse, the instinct is to break everything into short sentences. This creates robotic, choppy prose that sounds like a PowerPoint deck.
+**The problem**: When fixing verbosity, or a habit of splicing clauses with dashes, the instinct is to break everything into short sentences. This creates robotic, choppy prose that sounds like a PowerPoint deck.
 
 **Example**:
 > "Same person. Same skills. Different position. The difference wasn't communication. It was structural."
@@ -238,7 +271,7 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 ### Word Echo
 
-**The problem**: Reusing a distinctive word (like "structural" or "regardless") multiple times without noticing. Different from Elegant Variation (synonym chains) -- this is the opposite problem. AI doesn't track word frequency across paragraphs.
+**The problem**: Reusing a distinctive word (like "structural" or "regardless") multiple times without noticing. Different from Elegant Variation (synonym chains): this is the opposite problem. AI doesn't track word frequency across paragraphs.
 
 **Instead**: After writing, scan for distinctive words that appear more than twice. Either cut instances or find actual alternatives (not forced synonyms).
 
@@ -254,7 +287,7 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 ## Context-Dependent Choices
 
-These aren't inherently bad—they depend on the writing context, audience, and style.
+These aren't inherently bad: they depend on the writing context, audience, and style.
 
 ### Tone and Voice
 
@@ -279,11 +312,9 @@ Bold can be used purposefully for key concepts, philosophy statements, or import
 
 ### Tables
 
-Tables are excellent for reference material, comparisons, and structured data. The problem is unnecessary small tables for information better presented as prose. Use tables when they genuinely help—which is often.
-
-### Em Dashes
-
-Em dashes are a normal punctuation choice. The problem is formulaic overuse mimicking "punched up" sales writing. Natural use of em dashes in moderation is fine.
+Tables work for comparisons and reference data. The failure is a cell sized for a sentence: its column
+takes width from the others, so every row reads as prose and the values stop being scannable. When that
+happens, the content belongs in a bullet or in prose, or shortens to a value that stays scannable.
 
 ### Inline-Header Lists
 
@@ -311,9 +342,9 @@ Sometimes three items are genuinely what you need. The problem is padding lists 
 
 Judge the text against its audience, not against a generic notion of good prose. Name the audience before flagging or cutting anything.
 
-- **A README, guide or reference serves someone using the thing.** They came to do a task. Design justification, history, and internal mechanism are not theirs to carry — cut them, or keep one line where a limitation would otherwise look like a bug.
-- **A decision document — design note, journal entry, review, post — serves a reader who has to agree or disagree.** The reasoning is the content; trimming it to "just the facts" destroys the text. Restating the mechanism is still padding; the argument is not.
-- **Agent-facing text — AGENTS.md, code comments, prompts — serves a reader who acts without you.** It needs the mechanism and the failure it prevents, compressed. Narrative and motivation are waste; specifics are not.
+- **A README, guide or reference serves someone using the thing.** They came to do a task. Design justification, history, and internal mechanism are not theirs to carry. Cut them, or keep one line where a limitation would otherwise look like a bug.
+- **A decision document (design note, journal entry, review, post) serves a reader who has to agree or disagree.** The reasoning is the content; trimming it to "just the facts" destroys the text. Restating the mechanism is still padding; the argument is not.
+- **Agent-facing text (AGENTS.md, code comments, prompts) serves a reader who acts without you.** It needs the mechanism and the failure it prevents, compressed. Narrative and motivation are waste; specifics are not.
 - Mixed documents exist (a README with an architecture section). Judge section by section, not the file as one voice.
 - If you cannot tell, state which audience you assumed.
 
@@ -373,7 +404,7 @@ End when content ends. No recaps unless the document is long enough to need one.
 
 Good writing is specific, not generic. It states facts rather than asserting importance. It trusts readers to draw conclusions. It uses precise words rather than impressive-sounding ones. It matches tone to context and audience.
 
-The fundamental problem with typical AI writing is regression toward the generic and impressive-sounding—fading specific details while amplifying claims of significance. Counter this by prioritizing specificity and directness over grandiosity.
+The fundamental problem with typical AI writing is regression toward the generic and impressive-sounding: fading specific details while amplifying claims of significance. Counter this by prioritizing specificity and directness over grandiosity.
 
 ---
 
