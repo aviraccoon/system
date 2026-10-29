@@ -7,7 +7,7 @@ import type { AgentToolResult, ExtensionToolContext } from "@earendil-works/pi-c
 import type { ReviewLedgerEntry } from "../shared/review-ledger";
 import { type GateOutcome, gateFromAnswers } from "./gate";
 import { gateNoteColor } from "./render";
-import { type DispatchResult, type ReviewDeps, runReview, taskWithMessage } from "./review-tool";
+import { type DispatchResult, nothingStagedRefusal, type ReviewDeps, runReview, taskWithMessage } from "./review-tool";
 import { isolateGitConfig } from "./test-git-config";
 
 const dirs: string[] = [];
@@ -36,6 +36,25 @@ function repo(): string {
   execFileSync("git", ["add", "a.txt"], { cwd: dir });
   execFileSync("git", ["commit", "-qm", "chore: init"], { cwd: dir });
   writeFileSync(join(dir, "a.txt"), "b\n");
+  execFileSync("git", ["add", "a.txt"], { cwd: dir });
+  return dir;
+}
+
+/** A repository whose index and working tree both match HEAD. */
+function committedRepo(): string {
+  const dir = repo();
+  execFileSync("git", ["commit", "-qm", "chore: change"], { cwd: dir });
+  return dir;
+}
+
+/** A repository with a staged first commit and no HEAD yet. */
+function unbornRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), "review-tool-unborn-"));
+  dirs.push(dir);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  execFileSync("git", ["config", "user.email", "example@example.com"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "Example"], { cwd: dir });
+  writeFileSync(join(dir, "a.txt"), "a\n");
   execFileSync("git", ["add", "a.txt"], { cwd: dir });
   return dir;
 }
@@ -109,6 +128,72 @@ function text(result: AgentToolResult<unknown>): string {
     .map((block) => block.text)
     .join("\n");
 }
+
+describe("nothing staged", () => {
+  test("the refusal fires only when the index is HEAD's tree and the working tree is dirty", () => {
+    const head = "a".repeat(40);
+    expect(nothingStagedRefusal(head, head, true)).toContain("nothing is staged");
+    expect(nothingStagedRefusal(head, head, true)).toContain("unreviewed delta");
+    expect(nothingStagedRefusal(head, head, false)).toBeNull();
+    expect(nothingStagedRefusal(head, "b".repeat(40), true)).toBeNull();
+    // A first commit has no HEAD tree to be identical to.
+    expect(nothingStagedRefusal(head, null, true)).toBeNull();
+  });
+
+  test("an unstaged change is refused before the reviewer runs", async () => {
+    const dir = repo();
+    execFileSync("git", ["restore", "--staged", "a.txt"], { cwd: dir });
+    let ran = false;
+    const d = deps({
+      dispatch: async () => {
+        ran = true;
+        return report();
+      },
+    });
+    const result = await runReview({ task: "review", proposedMessage: MESSAGE }, ctxAt(dir), d);
+    expect(ran).toBe(false);
+    expect(d.entries).toHaveLength(0);
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("nothing is staged");
+    expect(text(result)).toContain("Stage it, then call the `review` tool again");
+    // A working-tree round that records nothing is a real case: the parallel review.
+    expect(text(result)).toContain("dispatch the `reviewer` agent through the `subagent` tool");
+  });
+
+  test("a staged change reviews even when the working tree holds more", async () => {
+    const dir = repo();
+    writeFileSync(join(dir, "a.txt"), "c\n");
+    const d = deps();
+    const result = await runReview({ task: "review", proposedMessage: MESSAGE }, ctxAt(dir), d);
+    expect(d.entries).toHaveLength(1);
+    expect(text(result)).toContain("gate: clean for tree");
+  });
+
+  test("an untracked file does not make a clean tree look unstaged", async () => {
+    const dir = committedRepo();
+    writeFileSync(join(dir, "untracked.txt"), "x\n");
+    const d = deps();
+    const result = await runReview({ task: "review", proposedMessage: MESSAGE }, ctxAt(dir), d);
+    expect(d.entries).toHaveLength(1);
+    expect(text(result)).toContain("gate: clean for tree");
+  });
+
+  test("an index at HEAD with a clean working tree still reviews", async () => {
+    const dir = committedRepo();
+    const d = deps();
+    const result = await runReview({ task: "review", proposedMessage: MESSAGE }, ctxAt(dir), d);
+    expect(d.entries).toHaveLength(1);
+    expect(text(result)).toContain("gate: clean for tree");
+  });
+
+  test("a first commit with an unborn HEAD reviews", async () => {
+    const dir = unbornRepo();
+    const d = deps();
+    const result = await runReview({ task: "review", proposedMessage: MESSAGE }, ctxAt(dir), d);
+    expect(d.entries).toHaveLength(1);
+    expect(text(result)).toContain("gate: clean for tree");
+  });
+});
 
 describe("review tool", () => {
   test("a clean round records the tree, the normalized message and the verdict", async () => {
@@ -316,6 +401,6 @@ describe("review tool", () => {
     const result = await runReview({ task: "review", proposedMessage: MESSAGE }, ctxAt(dir), d);
     expect(ran).toBe(false);
     expect(d.entries).toHaveLength(0);
-    expect(text(result)).toContain("cannot read the staged tree");
+    expect(text(result)).toContain("cannot read the index tree or HEAD's tree");
   });
 });

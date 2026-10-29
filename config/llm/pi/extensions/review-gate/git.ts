@@ -49,6 +49,32 @@ export function writeTree(cwd: string): string {
 }
 
 /**
+ * HEAD's tree, or null when HEAD is unborn: a first commit has nothing the
+ * index can be identical to.
+ *
+ * The existence check is separate so a HEAD that resolves but whose tree cannot
+ * be read throws into the caller's fail-closed path instead of reading as a
+ * first commit.
+ */
+export function headTree(cwd: string): string | null {
+  try {
+    git(["rev-parse", "--verify", "--quiet", "HEAD"], cwd);
+  } catch {
+    return null;
+  }
+  return git(["rev-parse", "HEAD^{tree}"], cwd).trim();
+}
+
+/**
+ * Whether `git status` reports a tracked change. Untracked files never enter a
+ * commit, so they do not count; an intent-to-add entry does, and it survives
+ * this filter.
+ */
+export function worktreeDirty(cwd: string): boolean {
+  return git(["status", "--porcelain", "--untracked-files=no"], cwd).trim() !== "";
+}
+
+/**
  * The reviewed message and the committed message must compare equal. Both sides
  * normalize with plain `stripspace` (edge blanks and runs of blank lines), so
  * a comment line is compared as written: `commit-msg` never sees the message

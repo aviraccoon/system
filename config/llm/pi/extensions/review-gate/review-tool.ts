@@ -15,7 +15,7 @@ import type { AgentToolResult, AgentToolUpdateCallback, ExtensionToolContext } f
 import { Type } from "typebox";
 import type { ReviewLedgerEntry } from "../shared/review-ledger";
 import { formatGateNote, type GateOutcome } from "./gate";
-import { hooksInactiveReason, normalizeMessage, repoToplevel, writeTree } from "./git";
+import { headTree, hooksInactiveReason, normalizeMessage, repoToplevel, worktreeDirty, writeTree } from "./git";
 
 export const ReviewParams = Type.Object({
   task: Type.String({
@@ -63,6 +63,20 @@ export interface ReviewDeps {
   record: (entry: ReviewLedgerEntry) => void;
   now: () => Date;
   sessionId: string;
+}
+
+/**
+ * Why a round must not start, or null when the index holds a change.
+ *
+ * An index identical to HEAD's tree means the round would be recorded against
+ * the last commit while the child reads the working tree, and the commit would
+ * then be refused with the whole change as an unreviewed delta. A clean working
+ * tree at HEAD is a message-only amend and still reviews.
+ */
+export function nothingStagedRefusal(tree: string, head: string | null, dirty: boolean): string | null {
+  // An unborn HEAD is null, which no tree can equal.
+  if (head !== tree || !dirty) return null;
+  return `review: nothing is staged. The index tree is HEAD's (${tree.slice(0, 8)}), so this round would be recorded against the last commit, and the change you are preparing would show as an unreviewed delta. Stage it, then call the \`review\` tool again. To review a working tree without recording a verdict (a path-scoped round), dispatch the \`reviewer\` agent through the \`subagent\` tool instead.`;
 }
 
 /**
@@ -142,17 +156,25 @@ export async function runReview(
   // useful; run it and record nothing.
   const repo = repoToplevel(cwd);
   let tree: string | null = null;
+  let head: string | null = null;
+  let dirty = false;
   if (repo) {
     try {
       tree = writeTree(cwd);
+      head = headTree(cwd);
+      // Only the nothing-staged guard reads the status, so a normal round does
+      // not pay for it.
+      if (head === tree) dirty = worktreeDirty(cwd);
     } catch (err) {
       return textResult(
-        `review: cannot read the staged tree (${String(err)}). Resolve the index first.`,
+        `review: cannot read the index tree or HEAD's tree (${String(err)}). Resolve the repository state first.`,
         undefined,
         true,
       );
     }
   }
+  const refusal = tree ? nothingStagedRefusal(tree, head, dirty) : null;
+  if (refusal) return textResult(refusal, undefined, true);
 
   // The child's partials stream through unchanged: the tool's renderResult
   // delegates to the subagent renderer, so the live feed (tool calls, thinking,

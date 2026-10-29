@@ -96,6 +96,12 @@ refuse_tree() { # repo tree entry
     if [ -n "$last" ]; then
       printf '%s\n' "  last reviewed tree: $(short "$last")" "  unreviewed delta:" >&2
       git diff --stat "$last" "$2" 2>/dev/null | sed 's/^/    /' >&2
+      # The last review's tree is HEAD's, so the delta above is everything since
+      # that commit. Name the baseline; the cause is not derivable from it.
+      last_head=$(git rev-parse --verify 'HEAD^{tree}' 2>/dev/null) || last_head=""
+      if [ -n "$last_head" ] && [ "$last_head" = "$last" ]; then
+        printf '%s\n' "  the last review covered HEAD's tree ($(short "$last")), so the delta above is everything since that commit." >&2
+      fi
     else
       printf '%s\n' "  no review is recorded for this repository." >&2
     fi

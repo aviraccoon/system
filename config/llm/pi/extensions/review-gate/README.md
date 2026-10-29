@@ -11,6 +11,12 @@ which asks whether the report judged the message at all. A question that does no
 nothing. The injected block states that the message is judged in every round, whatever the task says
 about it, because a delta-scoped round that calls it settled still needs a verdict for that tree.
 
+A round dispatched with nothing staged is refused before the reviewer runs when the working tree holds
+a tracked change: it could only be recorded against `HEAD`'s tree, and the commit would then show the
+whole change as an unreviewed delta. An index equal to `HEAD` with a clean working tree still reviews,
+so a message-only amend works. A round that must not record a verdict, such as a path-scoped parallel
+review, goes through the `subagent` tool with the `reviewer` agent instead.
+
 ## Ledger
 
 `~/.pi/agent/state/review-ledger.json`, keyed by repository and git tree. Each entry stores the tree,

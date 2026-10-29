@@ -6,12 +6,14 @@ import { join } from "node:path";
 import {
   expandTilde,
   GATE_HOOKS_PATH,
+  headTree,
   hooksInactiveReason,
   hooksPath,
   localHooksPath,
   normalizeMessage,
   repoHooks,
   repoToplevel,
+  worktreeDirty,
   writeTree,
 } from "./git";
 import { isolateGitConfig } from "./test-git-config";
@@ -53,6 +55,41 @@ describe("git plumbing", () => {
     execFileSync("git", ["commit", "-qm", "feat: change"], { cwd: dir });
     const committed = execFileSync("git", ["rev-parse", "HEAD^{tree}"], { cwd: dir, encoding: "utf-8" }).trim();
     expect(tree).toBe(committed);
+  });
+
+  test("HEAD's tree is the committed tree, and null before the first commit", () => {
+    const dir = repoWithStagedFile();
+    const staged = writeTree(dir);
+    execFileSync("git", ["commit", "-qm", "feat: change"], { cwd: dir });
+    expect(headTree(dir)).toBe(staged);
+    const unborn = mkdtempSync(join(tmpdir(), "review-git-unborn-"));
+    dirs.push(unborn);
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: unborn });
+    expect(headTree(unborn)).toBeNull();
+  });
+
+  test("a HEAD whose tree cannot be read throws instead of reading as a first commit", () => {
+    const dir = repoWithStagedFile();
+    execFileSync("git", ["commit", "-qm", "feat: change"], { cwd: dir });
+    const tree = headTree(dir) as string;
+    rmSync(join(dir, ".git", "objects", tree.slice(0, 2), tree.slice(2)));
+    expect(() => headTree(dir)).toThrow();
+  });
+
+  test("the working tree is dirty for tracked changes, untracked files excluded", () => {
+    const dir = repoWithStagedFile();
+    execFileSync("git", ["commit", "-qm", "chore: init"], { cwd: dir });
+    expect(worktreeDirty(dir)).toBe(false);
+    // An untracked file never enters a commit, so it does not count.
+    writeFileSync(join(dir, "untracked.txt"), "x\n");
+    expect(worktreeDirty(dir)).toBe(false);
+    // Intent-to-add is the index saying a path is about to be committed.
+    execFileSync("git", ["add", "-N", "untracked.txt"], { cwd: dir });
+    expect(worktreeDirty(dir)).toBe(true);
+    writeFileSync(join(dir, "a.txt"), "c\n");
+    expect(worktreeDirty(dir)).toBe(true);
+    execFileSync("git", ["add", "a.txt"], { cwd: dir });
+    expect(worktreeDirty(dir)).toBe(true);
   });
 
   test("a directory outside a repository has no toplevel", () => {

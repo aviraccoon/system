@@ -261,6 +261,40 @@ describe("review gate hooks", () => {
     expect(commit.status).not.toBe(0);
     expect(commit.out).toContain(`last reviewed tree: ${reviewed.slice(0, 8)}`);
     expect(commit.out).toContain("a.txt");
+    // An unborn HEAD has no tree, so the refusal cannot name it as the baseline.
+    expect(commit.out).not.toContain("the last review covered HEAD's tree");
+  });
+
+  test("a refusal names HEAD as the last review's baseline", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "one\n");
+    record(fx, tree(fx), "chore: one");
+    expect(git(fx, ["commit", "-m", "chore: one"]).status).toBe(0);
+    const headTree = git(fx, ["rev-parse", "HEAD^{tree}"]).stdout.trim();
+    // What the review tool records when the working tree is dirty and the index
+    // is HEAD's tree.
+    record(fx, headTree, "chore: two");
+    stage(fx, "a.txt", "two\n");
+    const commit = git(fx, ["commit", "-m", "chore: two"]);
+    expect(commit.status).not.toBe(0);
+    expect(commit.out).toContain(`last reviewed tree: ${headTree.slice(0, 8)}`);
+    expect(commit.out).toContain(`the last review covered HEAD's tree (${headTree.slice(0, 8)})`);
+    expect(commit.out).toContain("so the delta above is everything since that commit");
+  });
+
+  test("a refusal whose last review covered another tree leaves HEAD out of it", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "one\n");
+    record(fx, tree(fx), "chore: one");
+    expect(git(fx, ["commit", "-m", "chore: one"]).status).toBe(0);
+    stage(fx, "a.txt", "two\n");
+    const reviewed = tree(fx);
+    record(fx, reviewed, "chore: two");
+    stage(fx, "a.txt", "three\n");
+    const commit = git(fx, ["commit", "-m", "chore: three"]);
+    expect(commit.status).not.toBe(0);
+    expect(commit.out).toContain(`last reviewed tree: ${reviewed.slice(0, 8)}`);
+    expect(commit.out).not.toContain("the last review covered HEAD's tree");
   });
 
   test("a changed message blocks even when the tree is reviewed", () => {
