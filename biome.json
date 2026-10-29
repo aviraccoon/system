@@ -33,6 +33,7 @@
     "includes": [
       "config/llm/**/*.ts",
       "config/cli/**/*.ts",
+      "config/shared/**/*.ts",
       "modules/home-manager/git-hooks/**/*.ts",
       "scripts/**/*.ts",
       "!!**/node_modules",

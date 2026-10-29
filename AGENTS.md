@@ -20,6 +20,7 @@ mise cpu              # Check custom packages for upstream updates
 | Add nixpkgs packages | `modules/home-manager/default.nix` |
 | Add Homebrew casks/brews | `modules/darwin/brew.nix` |
 | Add custom package | `packages/` (see @docs/custom-packages.md) |
+| Add a CLI or script's arguments | `config/shared/cli.ts` (one spec per tool: flags, commands, help, dispatch) |
 | Modify shell config | `modules/home-manager/shell.nix` |
 | Add git aliases/config | `modules/home-manager/git.nix` |
 | macOS system preferences | `modules/darwin/preferences.nix` |
@@ -46,6 +47,7 @@ mise cpu              # Check custom packages for upstream updates
 - Stage new files with `git add` before running nix-switch. Flakes only see git-tracked files. Run `mise run _check-git` to verify.
 - Run `mise nix-diff` before `mise nix-switch` when testing changes. Shows what would change without applying.
 - Use `callPackage` pattern for custom packages. See existing `packages/*.nix` for examples.
+- CLIs and scripts declare their arguments in a `config/shared/cli.ts` spec. Do not hand-roll `process.argv` parsing, and do not call `node:util` `parseArgs` directly (existing sites migrate as they are touched).
 - macOS app bundles from custom packages need symlinks in `modules/home-manager/default.nix` to appear in `~/Applications`.
 - Test format with `mise fmt-check` before proposing changes.
 - When adding Homebrew casks, prefer nixpkgs if the package is available and works well on macOS.
