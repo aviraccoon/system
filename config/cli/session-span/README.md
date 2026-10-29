@@ -54,6 +54,6 @@ Exit codes: `0` reported; `1` nothing to report (for the day, or in the given fi
 ## Development
 
 ```bash
-mise tree-check config/cli/session-span   # tsc + bun test (lint via `mise check`)
+mise tree-check config/cli/session-span   # this tree's tests (tsc is repo-wide; lint via `mise check`)
 bun run session-span.ts --help   # without the symlink
 ```

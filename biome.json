@@ -30,15 +30,7 @@
     }
   },
   "files": {
-    "includes": [
-      "config/llm/**/*.ts",
-      "config/cli/**/*.ts",
-      "config/shared/**/*.ts",
-      "modules/home-manager/git-hooks/**/*.ts",
-      "scripts/**/*.ts",
-      "!!**/node_modules",
-      "!!**/dist"
-    ],
+    "includes": ["**/*.ts", "!!**/node_modules", "!!**/dist"],
     "ignoreUnknown": true
   },
   "vcs": {

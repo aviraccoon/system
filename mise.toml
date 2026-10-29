@@ -53,23 +53,15 @@ description = "Biome-format the TypeScript trees"
 run = "biome check --write"
 
 [tasks.tree-check]
-description = "Type-check and test the TypeScript trees (optional arg: one directory)"
+description = "Type-check the repo and run its tests (optional arg: a directory to scope the tests)"
 run = """
 #!/usr/bin/env bash
 set -euo pipefail
-if [ -n "${1:-}" ]; then
-  trees="$1"
-else
-  # Every tree with a tsconfig gets its own tsc scope; bun-types resolves from the root.
-  trees=$(fd -t f -g 'tsconfig.json' config modules scripts | xargs -n1 dirname | sort)
-fi
-[ -n "$trees" ] || { echo "no TypeScript trees found under config/, modules/ or scripts/" >&2; exit 1; }
-for dir in $trees; do
-  echo "==> $dir: tsc --noEmit"
-  (cd "$dir" && tsc --noEmit)
-  echo "==> $dir: bun test"
-  (cd "$dir" && bun test)
-done
+# One root tsconfig covers every tree; tests run from the repo root unless a directory is given.
+echo "==> tsc --noEmit"
+tsc --noEmit
+echo "==> bun test ${1:-.}"
+bun test "${1:-.}"
 """
 
 [tasks.nix-diff]

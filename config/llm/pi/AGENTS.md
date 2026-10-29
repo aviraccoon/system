@@ -5,7 +5,7 @@ Pi coding agent extensions and configuration, deployed via Nix (`modules/home-ma
 ## Quick Reference
 
 ```bash
-mise tree-check config/llm/pi   # this tree's tsc + tests
+mise tree-check config/llm/pi   # this tree's tests (tsc is repo-wide)
 mise biome-fmt                  # biome auto-fix all trees
 mise nix-diff    # verify Nix build after changes
 ```

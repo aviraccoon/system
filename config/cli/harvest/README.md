@@ -64,6 +64,6 @@ Project and task matches are fuzzy (name, code, or client; a number is an id), a
 ## Development
 
 ```bash
-mise tree-check config/cli/harvest   # tsc + bun test (lint via `mise check`)
+mise tree-check config/cli/harvest   # this tree's tests (tsc is repo-wide; lint via `mise check`)
 bun run harvest.ts <command>   # without the symlink
 ```

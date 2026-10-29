@@ -132,5 +132,5 @@ has no shell profile.
 ## Checks
 
 ```sh
-mise tree-check config/cli/raccache   # tsc --noEmit + bun test
+mise tree-check config/cli/raccache   # this tree's tests (tsc is repo-wide; lint via `mise check`)
 ```
