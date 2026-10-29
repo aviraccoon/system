@@ -30,7 +30,6 @@ import { execSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseArgs } from "node:util";
 import {
   ENDPOINT_CACHE_TTL,
   fetchModelEndpoints,
@@ -44,6 +43,7 @@ import {
   writeCache,
   type ZdrCatalog,
 } from "../config/llm/pi/extensions/shared/or-catalog";
+import { type CliSpec, scriptCli } from "../config/shared/cli";
 
 // ── ANSI helpers ──
 
@@ -133,67 +133,69 @@ interface JoinedModel {
 
 // ── CLI args ──
 
-const parsed = parseArgs({
-  args: process.argv.slice(2),
-  options: {
-    drift: { type: "boolean", default: false },
-    local: { type: "boolean", default: false },
-    model: { type: "string", default: [], short: "m", multiple: true },
-    endpoints: { type: "string", default: [], short: "e", multiple: true },
-    range: { type: "string", default: "" },
-    quant: { type: "string", default: "" },
-    json: { type: "boolean", default: false },
-    quiet: { type: "boolean", default: false },
-    verbose: { type: "boolean", default: false, short: "v" },
-    help: { type: "boolean", default: false, short: "h" },
-  },
-  strict: true,
-  allowPositionals: true,
-});
-
-if (parsed.values.help) {
-  console.log(
-    `
-${BOLD}model-scan${RESET} — discover LLM models, detect config drift, find local MLX options
-
-${BOLD}USAGE${RESET}
-  bun run scripts/model-scan.ts [options]
-
-${BOLD}OPTIONS${RESET}
-  --drift       Check current pi.nix config for price/spec drift
-  --local       Find trending MLX models via oMLX admin API
-  --model, -m   Estimate specific HF repo (repeatable, e.g. --model mlx-community/Qwen3.6-27B-4bit)
-  --endpoints, -e  Fetch OpenRouter provider endpoints for a model (throughput/latency/pricing).
-                  Repeatable and comma-separated: two or more -> cross-model comparison.
-  --range         With --endpoints: window for traffic-weighted effective pricing
-                  (default: today UTC; 1w | 1m | 3m | all)
-  --quant           With --endpoints: comma-separated quantization filter (e.g. fp8,bf16)
-  --json        Output machine-readable JSON instead of formatted table
-  --quiet       Suppress status messages on stderr
-  --verbose, -v Include low-scoring models in output
-  --help, -h    Show this help message
-
-${BOLD}DATA SOURCES${RESET}
+const SPEC: CliSpec = {
+  name: "model-scan",
+  summary: "discover LLM models, detect config drift, find local MLX options",
+  usage: "bun run scripts/model-scan.ts [options]",
+  intro: `DATA SOURCES
   OpenRouter    /api/v1/models (public) + /api/v1/endpoints/zdr (global ZDR
                 endpoint pricing) + /api/v1/models/user (account ZDR filter)
-  AA            /api/v2/language/models/free (benchmarks, speed, pricing) —
-                free-tier shape, documented at https://artificialanalysis.ai/data-api/docs
+  AA            /api/v2/language/models/free (benchmarks, speed, pricing),
+                free-tier shape: https://artificialanalysis.ai/data-api/docs
   oMLX          Admin API at localhost:8124 (local MLX models, HF search)
-  pi.nix        ~/.pi/agent/models.json (current config for drift check)
-`.trim(),
-  );
-  process.exit(0);
+  pi.nix        ~/.pi/agent/models.json (current config for drift check)`,
+  flags: [
+    { key: "drift", type: "boolean", usage: "--drift", help: "check current pi.nix config for price/spec drift" },
+    { key: "local", type: "boolean", usage: "--local", help: "find trending MLX models via the oMLX admin API" },
+    {
+      key: "model",
+      type: "string",
+      short: "m",
+      multiple: true,
+      usage: "-m, --model <repo>",
+      help: "estimate a specific HF repo (repeatable, e.g. mlx-community/Qwen3.6-27B-4bit)",
+    },
+    {
+      key: "endpoints",
+      type: "string",
+      short: "e",
+      multiple: true,
+      usage: "-e, --endpoints <model>",
+      help: "fetch OpenRouter provider endpoints (throughput/latency/pricing); repeat or comma-separate to compare",
+    },
+    {
+      key: "range",
+      type: "string",
+      usage: "--range <window>",
+      help: "with --endpoints: traffic window (today UTC, 1w, 1m, 3m, all)",
+    },
+    {
+      key: "quant",
+      type: "string",
+      usage: "--quant <list>",
+      help: "with --endpoints: quantization filter (e.g. fp8,bf16)",
+    },
+    { key: "json", type: "boolean", usage: "--json", help: "machine-readable JSON output instead of a table" },
+    { key: "quiet", type: "boolean", usage: "--quiet", help: "suppress status messages on stderr" },
+    { key: "verbose", type: "boolean", short: "v", usage: "-v, --verbose", help: "include low-scoring models" },
+    { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" },
+  ],
+};
+const { values } = scriptCli(SPEC);
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
-const modeDrift = parsed.values.drift;
-const modeLocal = parsed.values.local;
-const modeModels = parsed.values.model;
+const modeDrift = values.drift === true;
+const modeLocal = values.local === true;
+const modeModels = stringList(values.model);
 // -e accepts repeats and commas: "-e a/b -e c/d" or "-e a/b,c/d"
-const modeEndpointSlugs = (Array.isArray(parsed.values.endpoints) ? parsed.values.endpoints : [parsed.values.endpoints])
-  .flatMap((s: string) => s.split(","))
-  .map((s: string) => s.trim())
+const modeEndpointSlugs = stringList(values.endpoints)
+  .flatMap((s) => s.split(","))
+  .map((s) => s.trim())
   .filter(Boolean);
-const modeRange = parsed.values.range;
+const modeRange = typeof values.range === "string" ? values.range : "";
 if (modeRange && !modeEndpointSlugs.length) {
   console.error(`${RED}--range only applies to --endpoints${RESET}`);
   process.exit(1);
@@ -202,9 +204,10 @@ if (modeRange && !["1w", "1m", "3m", "all"].includes(modeRange)) {
   console.error(`${RED}--range must be one of 1w, 1m, 3m, all (default: today UTC)${RESET}`);
   process.exit(1);
 }
-const modeJson = parsed.values.json;
-const modeQuiet = parsed.values.quiet;
-const verbose = parsed.values.verbose;
+const modeJson = values.json === true;
+const modeQuiet = values.quiet === true;
+const verbose = values.verbose === true;
+const modeQuant = typeof values.quant === "string" ? values.quant : "";
 
 // ── Key resolution ──
 
@@ -1312,7 +1315,7 @@ function rowCols(eps: OREndpoint[]): string[] {
 }
 
 function applyQuant(eps: OREndpoint[], slugForErr: string): OREndpoint[] {
-  const q = parsed.values.quant.trim();
+  const q = modeQuant.trim();
   const quantFilter = q ? q.split(",").map((s) => s.trim().toLowerCase()) : null;
   if (!quantFilter) return eps;
   const filtered = eps.filter((e) => e.quantization != null && quantFilter.includes(e.quantization.toLowerCase()));
@@ -1539,7 +1542,7 @@ async function endpoints(): Promise<void> {
     }
 
     console.log(
-      `\n${BOLD}${r.id} — ${r.name}${RESET}  ${DIM}(${r.eps.length} endpoints, provider-sorted${parsed.values.quant.trim() ? `, quant=${parsed.values.quant.trim()}` : ""})${RESET}`,
+      `\n${BOLD}${r.id} — ${r.name}${RESET}  ${DIM}(${r.eps.length} endpoints, provider-sorted${modeQuant.trim() ? `, quant=${modeQuant.trim()}` : ""})${RESET}`,
     );
     console.log(
       Bun.inspect.table(
@@ -1623,7 +1626,7 @@ async function endpoints(): Promise<void> {
   }
 
   console.log(
-    `\n${BOLD}${results.map((r) => r.slug).join(" vs ")}${RESET}  ${DIM}(${agg.reduce((n, a) => n + a.routable.length, 0)} routable endpoints, provider-sorted${parsed.values.quant.trim() ? `, quant=${parsed.values.quant.trim()}` : ""})${RESET}`,
+    `\n${BOLD}${results.map((r) => r.slug).join(" vs ")}${RESET}  ${DIM}(${agg.reduce((n, a) => n + a.routable.length, 0)} routable endpoints, provider-sorted${modeQuant.trim() ? `, quant=${modeQuant.trim()}` : ""})${RESET}`,
   );
 
   // Merged view. Same-provider rows land adjacent, so one provider's pricing of

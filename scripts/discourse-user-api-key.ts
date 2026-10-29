@@ -8,9 +8,7 @@
  * your logged-in browser, paste the returned encrypted payload back, and it
  * decrypts to the API key.
  *
- * Usage:
- *   bun scripts/discourse-user-api-key.ts https://forum.example.com <username> \
- *     [--app-name <name>] [--client-id <id>]
+ * Usage: run with --help.
  *
  * --app-name (shown on the forum's authorization page and key list) and
  * --client-id (key rotation identity — re-authorizing with the same id
@@ -32,25 +30,28 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "n
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
-import { parseArgs } from "node:util";
+import { type CliSpec, scriptCli } from "../config/shared/cli";
 
-const {
-  values: { "app-name": appName, "client-id": clientId },
-  positionals,
-} = parseArgs({
-  allowPositionals: true,
-  options: {
-    "app-name": { type: "string" },
-    "client-id": { type: "string" },
-  },
-});
-const [forum, username] = positionals as [string?, string?];
+const SPEC: CliSpec = {
+  name: "discourse-user-api-key",
+  summary: "request a Discourse user API key with RSA-OAEP",
+  usage: "bun scripts/discourse-user-api-key.ts <forum-origin> [username] [flags]",
+  args: "<forum-origin> [username]",
+  flags: [
+    { key: "app-name", type: "string", usage: "--app-name <name>", help: "application name shown in Discourse" },
+    { key: "client-id", type: "string", usage: "--client-id <id>", help: "client id sent with the request" },
+    { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" },
+  ],
+};
+const cli = scriptCli(SPEC);
+const [forum, username] = cli.args;
+const appName = typeof cli.values["app-name"] === "string" ? cli.values["app-name"] : undefined;
+const clientId = typeof cli.values["client-id"] === "string" ? cli.values["client-id"] : undefined;
 
 if (!forum || !/^https?:\/\//.test(forum)) {
-  console.error(
-    "usage: bun scripts/discourse-user-api-key.ts <forum-origin> [username] [--app-name <name>] [--client-id <id>]",
-  );
-  process.exit(1);
+  const problem = forum ? `invalid forum origin "${forum}"` : "missing <forum-origin>";
+  console.error(`error: discourse-user-api-key: ${problem}`);
+  process.exit(2);
 }
 
 const host = forum.replace(/^https?:\/\//, "").replace(/\/.*$/, "");

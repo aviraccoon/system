@@ -14,6 +14,19 @@ import {
   resolvePart,
 } from "./journal-context";
 
+describe("CLI process", () => {
+  it("a bad flag exits 2 with one line", async () => {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "journal-context.ts"), "--bogus"], {
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    expect(code).toBe(2);
+    expect(stderr.trim().split("\n")).toHaveLength(1);
+    expect(stderr).toContain("error: journal-context: Unknown option");
+  });
+});
+
 describe("loadHarvestPolicy", () => {
   it("reads the sibling policy file", () => {
     const policy = loadHarvestPolicy();

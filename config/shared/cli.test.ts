@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   type CliSpec,
   type CommandSpec,
@@ -177,8 +181,11 @@ describe("parseCli", () => {
 
   test("a single-command flag error names the app once", () => {
     const spec: CliSpec = { name: "bare", summary: "bare", flags: FLAGS, handler: { min: 0, max: 9, run: noop } };
-    expect(() => parseCli(spec, ["--bogus"])).toThrow(/bare --help shows its flags/);
-    expect(() => parseCli(spec, ["--bogus"])).not.toThrow(/bare bare/);
+    expect(() => parseCli(spec, ["--bogus"])).toThrow(/\(--help shows its flags\)/);
+    expect(() => parseCli(spec, ["--bogus"])).not.toThrow(/bare --help/);
+    // A positional is an argument, never the app name, and the app name is not a command.
+    expect(() => parseCli(spec, ["value", "--bogus"])).toThrow(/\(--help shows its flags\)/);
+    expect(() => parseCli(spec, ["value", "--bogus"])).not.toThrow(/value --help/);
   });
 });
 
@@ -312,6 +319,13 @@ describe("helpText", () => {
     for (const line of text.split("\n")) expect(line.length).toBeLessThanOrEqual(100);
   });
 
+  test("a spec's usage override is rendered verbatim", () => {
+    const spec = app({ usage: "bun scripts/example.ts [flags]" });
+    const text = helpText(spec, { help: true, positionals: [] }) ?? "";
+    expect(text).toContain("usage: bun scripts/example.ts [flags]");
+    expect(text).not.toContain("[<command>]");
+  });
+
   test("a single-command app has no commands section", () => {
     const spec: CliSpec = {
       name: "bare",
@@ -323,6 +337,8 @@ describe("helpText", () => {
     };
     const text = helpText(spec, { help: true, positionals: [] }) ?? "";
     expect(text).toContain("usage: bare <path>... [flags]");
+    // The argument synopsis belongs in the usage line once, not again as a body line.
+    expect(text.split("<path>...")).toHaveLength(2);
     expect(text).not.toContain("commands:");
     expect(text).toContain("prose about the tool");
   });
@@ -404,6 +420,75 @@ describe("load invariants", () => {
       },
     ];
     expect(() => parseCli(app({ commands }), ["x"])).toThrow(/default subcommand "nope"/);
+  });
+});
+
+describe("scriptCli", () => {
+  const dir = mkdtempSync(join(tmpdir(), "scriptcli-"));
+  const fixture = join(dir, "fixture.ts");
+  const cliUrl = pathToFileURL(join(import.meta.dir, "cli.ts")).href;
+  writeFileSync(
+    fixture,
+    `import { scriptCli } from ${JSON.stringify(cliUrl)};\n` +
+      `const spec = { name: "s", summary: "s", flags: [\n` +
+      `  { key: "x", type: "boolean", usage: "--x", help: "x" },\n` +
+      `  { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "help" },\n` +
+      `] };\n` +
+      `console.log(JSON.stringify(scriptCli(spec).values));\n`,
+  );
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  async function run(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    const proc = Bun.spawn([process.execPath, fixture, ...args], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { code, stdout, stderr };
+  }
+
+  test("help prints and exits 0", async () => {
+    const result = await run("--help");
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("usage: s [flags]");
+  });
+
+  test("a usage error is one line and exit 2", async () => {
+    const result = await run("--bogus");
+    expect(result.code).toBe(2);
+    expect(result.stderr.trim().split("\n")).toHaveLength(1);
+    expect(result.stderr).toContain("error: s: Unknown option");
+  });
+
+  test("a spec with no positional part rejects a stray word", async () => {
+    const result = await run("stray");
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('error: s: unexpected argument "stray"');
+    expect(result.stderr).toContain("(--help shows its flags)");
+    expect(result.stderr).not.toContain("s --help");
+  });
+
+  test("a spec with a positional part accepts it", async () => {
+    const argsFixture = join(dir, "args.ts");
+    writeFileSync(
+      argsFixture,
+      `import { scriptCli } from ${JSON.stringify(cliUrl)};\n` +
+        `const spec = { name: "s", summary: "s", args: "<p>", flags: [] };\n` +
+        `console.log(scriptCli(spec).positionals.join(","));\n`,
+    );
+    const proc = Bun.spawn([process.execPath, argsFixture, "value"], { stdout: "pipe", stderr: "pipe" });
+    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+    expect(code).toBe(0);
+    expect(stdout.trim()).toBe("value");
+  });
+
+  test("parsed values reach the script", async () => {
+    const result = await run("--x");
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe('{"x":true}');
   });
 });
 

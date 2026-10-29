@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { getEnvApiKey } from "@earendil-works/pi-ai/compat";
 import { type BuiltinProvider, getBuiltinModels, getBuiltinProviders } from "@earendil-works/pi-ai/providers/all";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { type CliSpec, scriptCli } from "../../../shared/cli";
 import { loadConfig } from "../extensions/shared/model-roles";
 
 // ── Config types ──
@@ -245,17 +246,22 @@ export function resolveRoleModels(
   });
 }
 
+const BENCH_SPEC: CliSpec = {
+  name: "benchmark",
+  summary: "run a decision-model benchmark",
+  usage: "bun config/llm/pi/benchmarks/<runner>.ts [--model <id>]",
+  flags: [
+    { key: "model", type: "string", multiple: true, usage: "--model <id>", help: "model to benchmark (repeatable)" },
+    { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" },
+  ],
+};
+
 /** Parse --model args from process.argv. */
 export function parseModelArgs(): string[] | undefined {
-  const args = process.argv.slice(2);
-  const models: string[] = [];
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--model" && args[i + 1]) {
-      models.push(args[++i]);
-    } else if (args[i]?.startsWith("--model=")) {
-      models.push(args[i].slice("--model=".length));
-    }
-  }
+  const parsed = scriptCli(BENCH_SPEC);
+  const models = Array.isArray(parsed.values.model)
+    ? parsed.values.model.filter((item): item is string => typeof item === "string")
+    : [];
   return models.length > 0 ? models : undefined;
 }
 

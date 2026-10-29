@@ -14,6 +14,7 @@
 import { readFileSync } from "node:fs";
 import { applyEditFloor } from "../../config/llm/pi/extensions/permission-gate/explain";
 import { SEVERITY_DANGEROUS, verdictFromFactors } from "../../config/llm/pi/extensions/shared/risk-factors";
+import { type CliSpec, scriptCli } from "../../config/shared/cli";
 
 interface Row {
   input: string;
@@ -33,12 +34,23 @@ function load(path: string): Row[] {
     .map((line) => JSON.parse(line) as Row);
 }
 
+const SPEC: CliSpec = {
+  name: "bench-sweep",
+  summary: "print a sweep table from benchmark dump files",
+  usage: "bun scripts/llm/bench-sweep.ts <dump.jsonl>... [flags]",
+  args: "<dump.jsonl>...",
+  flags: [{ key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" }],
+};
+
 /** Matches the benchmark's own fixture-state predicate (see benchmarks/explain-cases.ts). */
 const isEditLike = (state: string): boolean => /^(write to|edit |patch )/.test(state);
 const wants = (row: Row, verdict: string): boolean => row.expected.split("|").includes(verdict);
 
-const paths = process.argv.slice(2);
-if (paths.length === 0) throw new Error("usage: bench-sweep.ts <dump.jsonl> [<dump2.jsonl>]");
+const paths = scriptCli(SPEC).positionals;
+if (paths.length === 0) {
+  console.error("error: bench-sweep: missing <dump.jsonl>");
+  process.exit(2);
+}
 
 const runs = paths.map(load);
 

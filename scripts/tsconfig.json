@@ -1,0 +1,4 @@
+{
+  "extends": "../config/llm/pi/tsconfig.json",
+  "include": ["**/*.ts"]
+}

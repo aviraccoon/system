@@ -289,8 +289,9 @@ function allOptions<Ctx, R, C>(compiled: Compiled<Ctx, R, C>): ParseArgsOptionsC
 /** node's "place it after --" advice turns a rejected flag into a positional that fails too. */
 function withHelpHint(error: unknown, label: string, appName: string): string {
   const message = (error instanceof Error ? error.message : String(error)).split(". To specify")[0];
-  const page = label === appName ? appName : `${appName} ${label}`;
-  return `${label}: ${message} (${page} --help shows its flags)`;
+  // A single-command app's name is not a command: point at the flag itself, not a fake page.
+  const pointer = label === appName ? "--help shows its flags" : `${appName} ${label} --help shows its flags`;
+  return `${label}: ${message} (${pointer})`;
 }
 
 /** Strict parse; throws `UsageError` on an unknown flag, a bad value or a misplaced argument. */
@@ -304,7 +305,9 @@ export function parseCli<Ctx, R, C>(spec: CliSpec<Ctx, R, C>, argv: string[]): P
     // Malformed before the command; the strict pass reports the real error.
   }
   const found = resolve(compiled, probe);
-  const label = found.path.at(-1)?.name ?? probe[0] ?? spec.default ?? spec.name;
+  // A positional is only a command name when the app has commands; otherwise it is an argument.
+  const label =
+    found.path.at(-1)?.name ?? (compiled.groups.length > 0 ? probe[0] : undefined) ?? spec.default ?? spec.name;
   let values: Values = {};
   let positionals: string[] = [];
   try {
@@ -431,8 +434,6 @@ function fullHelp<Ctx, R, C>(compiled: Compiled<Ctx, R, C>): string {
     pushFlags(blocks, compiled, globalKeys(compiled));
     blocks.push("", `run ${spec.name} <command> --help for that command's usage and flags.`);
   } else {
-    const body = wrap(spec.args ?? "", WRAP_COL);
-    if (body.length > 0) blocks.push("", ...body);
     pushFlags(
       blocks,
       compiled,
@@ -461,6 +462,30 @@ function groupHelp<Ctx, R, C>(compiled: Compiled<Ctx, R, C>, path: Group<Ctx, R,
   pushFlags(blocks, compiled, keys);
   blocks.push("", `run ${spec.name} --help for all commands`);
   return blocks.join("\n").trimEnd();
+}
+
+/**
+ * Parse a one-off script's argv: `--help` prints and exits 0, a usage error is one line and
+ * exit 2, and a spec that declares no positional part rejects stray words the same way.
+ */
+export function scriptCli<Ctx, R, C>(spec: CliSpec<Ctx, R, C>, argv: string[] = process.argv.slice(2)): ParsedCli {
+  let parsed: ParsedCli;
+  try {
+    parsed = parseCli(spec, argv);
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(2);
+  }
+  if (parsed.help) {
+    console.log(helpText(spec, parsed));
+    process.exit(0);
+  }
+  // A spec with no positional part takes none: a stray word is a usage error, not noise.
+  if (spec.args === undefined && parsed.positionals.length > 0) {
+    console.error(`error: ${spec.name}: unexpected argument "${parsed.positionals[0]}" (--help shows its flags)`);
+    process.exit(2);
+  }
+  return parsed;
 }
 
 /** Names of every declared command at the top level, once each. */

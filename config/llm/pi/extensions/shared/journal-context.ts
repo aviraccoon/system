@@ -25,7 +25,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "node:util";
+import type { CliSpec } from "../../../../shared/cli";
 import { projectInstructions } from "./extra-instructions";
 import {
   emptyProjectMeta,
@@ -368,19 +368,47 @@ export function resolvePart(parts: JournalParts, name: string): string {
   return `unknown context part: ${name}`;
 }
 
+/**
+ * CLI shape. Plain data with a type-only import: the value import happens inside
+ * `main`, so loading this module as a library never pulls the CLI code in.
+ */
+const CLI_SPEC: CliSpec = {
+  name: "journal-context",
+  summary: "print the journal context for a project directory",
+  args: "[<cwd>]",
+  flags: [
+    {
+      key: "part",
+      type: "string",
+      synopsis: "[--part <name>]",
+      usage: "--part <name>",
+      help: "one part: instructions, project-settings, metadata, journal:0-2",
+    },
+    { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" },
+  ],
+};
+
 /** CLI entry point. Exported for testing. */
 export async function main(args: string[]): Promise<string> {
-  const { values, positionals } = parseArgs({
-    args,
-    options: { part: { type: "string" } },
-    allowPositionals: true,
-  });
-  const cwd = positionals[0] || process.cwd();
+  const { helpText, parseCli, UsageError } = await import("../../../../shared/cli");
+  let parsed: ReturnType<typeof parseCli>;
+  try {
+    parsed = parseCli(CLI_SPEC, args);
+  } catch (error) {
+    if (error instanceof UsageError) {
+      process.stderr.write(`error: ${error.message}\n`);
+      process.exit(2);
+    }
+    throw error;
+  }
+  if (parsed.help) return `${helpText(CLI_SPEC, parsed) ?? ""}\n`;
+  const cwd = parsed.args[0] || process.cwd();
   const config = loadJournalConfig();
 
-  if (values.part) {
+  const part = typeof parsed.values.part === "string" ? parsed.values.part : undefined;
+  if (part) {
     const parts = await buildJournalParts(config, cwd);
-    return resolvePart(parts, values.part);
+    return resolvePart(parts, part);
   }
   return buildJournalContext(config, cwd);
 }
@@ -388,6 +416,7 @@ export async function main(args: string[]): Promise<string> {
 // CLI mode:
 //   bun .../journal-context.ts [cwd]                  -- full context (Pi, legacy)
 //   bun .../journal-context.ts --part <name> [cwd]    -- single part (Claude Code hooks)
+//   bun .../journal-context.ts --help
 //     Parts: instructions, project-settings, metadata, journal:0, journal:1, journal:2
 const isMainModule = typeof process !== "undefined" && process.argv[1]?.includes("journal-context");
 

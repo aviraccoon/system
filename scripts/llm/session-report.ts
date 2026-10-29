@@ -21,7 +21,7 @@ import { createReadStream, readdirSync, type Stats, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
-import { parseArgs } from "node:util";
+import { type CliSpec, scriptCli } from "../../config/shared/cli";
 
 interface Month {
   sessions: number;
@@ -79,18 +79,22 @@ function textOf(content: unknown): string {
   return content.map((part) => (part && typeof part === "object" && (part as { text?: string }).text) || "").join("\n");
 }
 
-const { values } = parseArgs({
-  options: {
-    since: { type: "string" },
-    root: { type: "string" },
-    examples: { type: "boolean", default: false },
-  },
-});
+const SPEC: CliSpec = {
+  name: "session-report",
+  summary: "aggregate pi session counts and tool events by month",
+  usage: "bun scripts/llm/session-report.ts [flags]",
+  flags: [
+    { key: "since", type: "string", usage: "--since <YYYY-MM>", help: "only months from this one on" },
+    { key: "root", type: "string", usage: "--root <dir>", help: "sessions root (default: both pi session dirs)" },
+    { key: "examples", type: "boolean", usage: "--examples", help: "print example snippets" },
+    { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" },
+  ],
+};
+const values = scriptCli(SPEC).values;
 
-const roots = values.root
-  ? [values.root]
-  : [join(homedir(), ".pi/agent/sessions"), join(homedir(), ".pi/agent/subagent-sessions")];
-const since = values.since ?? "";
+const root = typeof values.root === "string" ? values.root : undefined;
+const roots = root ? [root] : [join(homedir(), ".pi/agent/sessions"), join(homedir(), ".pi/agent/subagent-sessions")];
+const since = typeof values.since === "string" ? values.since : "";
 if (since && !MONTH.test(since)) throw new Error(`--since takes YYYY-MM, got: ${since}`);
 
 const months = new Map<string, Month>();

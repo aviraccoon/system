@@ -16,7 +16,7 @@
 import { readdirSync, readFileSync, type Stats, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseArgs } from "node:util";
+import { type CliSpec, scriptCli } from "../../config/shared/cli";
 
 interface Record_ {
   file: string;
@@ -94,15 +94,21 @@ function count<T>(items: T[], key: (item: T) => string): Record<string, number> 
   return Object.fromEntries(Object.entries(out).sort((a, b) => b[1] - a[1]));
 }
 
-const { values } = parseArgs({
-  options: {
-    since: { type: "string" },
-    tool: { type: "string" },
-    detail: { type: "boolean", default: false },
-  },
-});
-const since = values.since ? Date.parse(values.since) : Date.now() - 30 * 24 * 3600 * 1000;
-if (Number.isNaN(since)) throw new Error(`--since is not a date: ${values.since}`);
+const SPEC: CliSpec = {
+  name: "gate-report",
+  summary: "summarize review-gate classifier calls and their verdicts",
+  usage: "bun scripts/llm/gate-report.ts [flags]",
+  flags: [
+    { key: "since", type: "string", usage: "--since <date>", help: "only calls at or after this date" },
+    { key: "tool", type: "string", usage: "--tool <name>", help: "only calls from this tool" },
+    { key: "detail", type: "boolean", usage: "--detail", help: "print per-call detail" },
+    { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" },
+  ],
+};
+const values = scriptCli(SPEC).values;
+const sinceRaw = typeof values.since === "string" ? values.since : undefined;
+const since = sinceRaw ? Date.parse(sinceRaw) : Date.now() - 30 * 24 * 3600 * 1000;
+if (Number.isNaN(since)) throw new Error(`--since is not a date: ${sinceRaw}`);
 
 const roots = [join(homedir(), ".pi/agent/sessions"), join(homedir(), ".pi/agent/subagent-sessions")];
 const byCallId = new Map<string, Record_>();

@@ -23,7 +23,7 @@ import { createReadStream, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
-import { parseArgs } from "node:util";
+import { type CliSpec, scriptCli } from "../config/shared/cli";
 
 interface ToolCallPart {
   type?: string;
@@ -66,18 +66,23 @@ interface Event {
   text: string;
 }
 
-const { values } = parseArgs({
-  args: process.argv.slice(2),
-  options: {
-    root: { type: "string" },
-    since: { type: "string" },
-    json: { type: "boolean" },
-    top: { type: "string" },
-  },
-});
+const SPEC: CliSpec = {
+  name: "patch-usage-audit",
+  summary: "audit how often patch calls fail or need retries",
+  usage: "bun scripts/patch-usage-audit.ts [flags]",
+  flags: [
+    { key: "root", type: "string", usage: "--root <dir>", help: "sessions root (default: ~/.pi/agent/sessions)" },
+    { key: "since", type: "string", usage: "--since <date>", help: "only sessions at or after this date" },
+    { key: "json", type: "boolean", usage: "--json", help: "machine-readable output" },
+    { key: "top", type: "string", usage: "--top <n>", help: "rows to show (default 12)" },
+    { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" },
+  ],
+};
+const values = scriptCli(SPEC).values;
 
-const ROOT = (values.root ?? join(homedir(), ".pi", "agent", "sessions")).replace(/\/$/, "");
-const TOP = values.top ? Number(values.top) : 12;
+const root = typeof values.root === "string" ? values.root : undefined;
+const ROOT = (root ?? join(homedir(), ".pi", "agent", "sessions")).replace(/\/$/, "");
+const TOP = typeof values.top === "string" ? Number(values.top) : 12;
 
 function* walk(dir: string): Generator<string> {
   for (const name of readdirSync(dir)) {
@@ -203,7 +208,7 @@ const patches = events.filter((e) => e.kind === "patch");
 const edits = events.filter((e) => e.kind === "edit");
 const writes = events.filter((e) => e.kind === "write");
 const firstPatch = patches.map((e) => e.date).sort()[0] ?? "";
-const cut = values.since ?? firstPatch;
+const cut = typeof values.since === "string" ? values.since : firstPatch;
 
 const isReal = (e: Event): boolean => !e.blocked && !e.schema;
 const pct = (n: number, d: number): string => (d === 0 ? "n/a" : `${((100 * n) / d).toFixed(1)}%`);
