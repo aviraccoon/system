@@ -35,6 +35,7 @@ export interface TimeEntry {
   billable: boolean;
   billable_rate: number | null;
   cost_rate: number | null;
+  updated_at: string;
   project: { id: number; name: string };
   task: { id: number; name: string };
   client: { id: number; name: string } | null;
@@ -79,6 +80,7 @@ export interface HarvestClient {
   timeEntry(id: number): Promise<TimeEntry>;
   createTimeEntry(body: Record<string, unknown>): Promise<TimeEntry>;
   stopEntry(id: number): Promise<TimeEntry>;
+  restartEntry(id: number): Promise<TimeEntry>;
   deleteEntry(id: number): Promise<void>;
   projectAssignments(): Promise<ProjectAssignment[]>;
 }
@@ -152,6 +154,7 @@ export function createClient(auth: HarvestAuth, userAgent: string, fetchImpl: ty
     timeEntry: (id) => request<TimeEntry>("GET", `/time_entries/${id}`),
     createTimeEntry: (body) => request<TimeEntry>("POST", "/time_entries", body),
     stopEntry: (id) => request<TimeEntry>("PATCH", `/time_entries/${id}/stop`),
+    restartEntry: (id) => request<TimeEntry>("PATCH", `/time_entries/${id}/restart`),
     deleteEntry: async (id) => {
       await request<null>("DELETE", `/time_entries/${id}`);
     },

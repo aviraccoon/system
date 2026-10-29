@@ -29,6 +29,7 @@ Override `vault`, `item`, or the field names if your 1Password item differs. `ho
 | `harvest start acme dev -n "fixing login"` | start a timer (stops any running one) |
 | `harvest start acme dev --offset 25m` | start, crediting time already spent |
 | `harvest stop` | stop the running timer |
+| `harvest resume [<id>]` | continue a stopped entry (default: today's stopped entry touched most recently); stops any running timer |
 | `harvest log 1:30 acme dev --date 2026-09-14` | log past time; hours: `1.5`, `1:30`, `90m` |
 | `harvest edit <id> [--hours H] [-n text] [--date D] [--project P] [--task T]` | edit an entry; `--project`/`--task` move it |
 | `harvest delete <id> [--force]` | delete; prompts on a TTY, agents use `--force` |
@@ -51,6 +52,8 @@ Project and task matches are fuzzy (name, code, or client; a number is an id), a
 
 ## Notes
 
+- `resume` continues a stopped entry: its project, task, note and hours carry over, and the timer adds to the same entry instead of creating a second one after a pause. `start` always creates a new entry.
+- Without an id, `resume` continues today's stopped entry touched most recently; an edit to one of today's stopped entries counts as a touch. Pass an id for an entry from an earlier day; the new time books to that date, and the output prints its `spent_date`.
 - `requireNoteLinks: true` in the config warns when a created or updated note has no http(s) link. It never blocks — some entries legitimately have no link — and the warning names the `harvest edit <id> -n` fix.
 - Duration accounts count hours; start/end accounts record `started_time`, and `log` derives a range ending now. `harvest whoami` shows the mode.
 - Projects and tasks cache in `~/.cache/harvest/cache.json`, 24 h TTL, refreshed by `harvest projects` and on a lookup miss. The list is your Harvest project assignments; Member roles cannot see account-wide projects. Neither file holds credentials.

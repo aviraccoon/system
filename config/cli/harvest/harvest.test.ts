@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { createClient, HarvestApiError, type HarvestClient, type TimeEntry } from "./api";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createClient, HarvestApiError, type HarvestClient, type QueryParams, type TimeEntry } from "./api";
 import {
   aliasList,
   aliasRemove,
@@ -11,6 +14,7 @@ import {
   cmdEdit,
   cmdLog,
   cmdMonth,
+  cmdResume,
   cmdStart,
   cmdStatus,
   cmdStop,
@@ -34,7 +38,15 @@ import {
   spentDateClockToDate,
   weekDates,
 } from "./format";
-import { concealMoney, isAliasListForm, parseCli } from "./harvest";
+import {
+  concealMoney,
+  documentedCommands,
+  handledCommands,
+  handlerFor,
+  helpText,
+  isAliasListForm,
+  parseCli,
+} from "./harvest";
 import { type Candidate, formatCandidates, matchOne } from "./resolve";
 
 // ---------- format ----------
@@ -328,6 +340,15 @@ describe("createClient", () => {
     expect(entries.map((e) => e.id)).toEqual([1, 2]);
   });
 
+  test("restart PATCHes the restart endpoint", async () => {
+    const { impl, calls } = fetchStub([{ status: 200, body: { id: 5, is_running: true } }]);
+    const client = createClient(auth, "ua", impl);
+    const entry = await client.restartEntry(5);
+    expect(entry.id).toBe(5);
+    expect(calls[0]?.init.method).toBe("PATCH");
+    expect(new URL(calls[0]?.url ?? "").pathname).toBe("/v2/time_entries/5/restart");
+  });
+
   test("error body becomes message; 429 includes retry hint", async () => {
     const { impl } = fetchStub([{ status: 422, body: { message: "bad request" } }]);
     const client = createClient(auth, "ua", impl);
@@ -376,6 +397,7 @@ function timeEntry(overrides: Partial<TimeEntry>): TimeEntry {
     billable: false,
     billable_rate: null,
     cost_rate: null,
+    updated_at: "2026-09-15T08:00:00Z",
     project: { id: 10, name: "Website" },
     task: { id: 20, name: "Development" },
     client: { id: 30, name: "Acme" },
@@ -616,6 +638,148 @@ describe("cmdStop", () => {
     });
     const { deps } = makeDeps(api);
     expect(cmdStop(deps)).rejects.toThrow("no running timer");
+  });
+});
+
+describe("cmdResume", () => {
+  const me = { id: 7, first_name: "A", last_name: "B", email: "a@b.c" };
+
+  test("continues the last stopped entry by updated_at, stopping the running timer", async () => {
+    const running = timeEntry({
+      id: 90,
+      is_running: true,
+      hours: 0.25,
+      updated_at: "2026-09-15T10:30:00Z",
+    });
+    const untouched = timeEntry({
+      id: 300,
+      hours: 2,
+      notes: "unrelated",
+      updated_at: "2026-09-15T08:00:00Z",
+    });
+    const yesterday = timeEntry({
+      id: 999,
+      hours: 3,
+      spent_date: "2026-09-14",
+      notes: "yesterday",
+      updated_at: "2026-09-15T10:40:00Z",
+    });
+    const target = timeEntry({
+      id: 200,
+      hours: 1.5,
+      notes: "fixing bug",
+      updated_at: "2026-09-15T09:30:00Z",
+    });
+    const resumed = timeEntry({
+      id: 200,
+      is_running: true,
+      hours: 1.5,
+      notes: "fixing bug",
+      timer_started_at: "2026-09-15T10:00:00Z",
+    });
+    const restarted: number[] = [];
+    const queries: QueryParams[] = [];
+    const api = apiStub({
+      me: [me],
+      timeEntries: [
+        (params: QueryParams) => {
+          queries.push(params);
+          // Model the API's date filter: the unbounded query also returns yesterday's entry.
+          return Promise.resolve(
+            params.from === "2026-09-15" ? [running, untouched, target] : [running, yesterday, untouched, target],
+          );
+        },
+        (params: QueryParams) => {
+          queries.push(params);
+          return Promise.resolve([running]);
+        },
+      ],
+      stopEntry: [running],
+      restartEntry: [
+        (id: number) => {
+          restarted.push(id);
+          return Promise.resolve(resumed);
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdResume(deps);
+    expect(queries[0]).toMatchObject({ from: "2026-09-15", to: "2026-09-15" });
+    expect(restarted).toEqual([200]);
+    expect(r.text).toContain("■ stopped Acme / Website / Development (id 90) at 0:15");
+    expect(r.text).toContain(
+      "▶ resumed Acme / Website / Development (2026-09-15, id 200) — 1:30 so far, started 10:00am — fixing bug",
+    );
+    const json = r.json as { entry: { id: number; is_running: boolean }; stopped: { id: number }[] };
+    expect(json.entry.id).toBe(200);
+    expect(json.entry.is_running).toBe(true);
+    expect(json.stopped.map((s) => s.id)).toEqual([90]);
+  });
+
+  test("an explicit id resumes that entry", async () => {
+    const target = timeEntry({ id: 123, hours: 0.75, spent_date: "2026-09-14", notes: "yesterday's thread" });
+    const restarted: number[] = [];
+    const api = apiStub({
+      timeEntry: [target],
+      me: [me],
+      timeEntries: [[]],
+      restartEntry: [
+        (id: number) => {
+          restarted.push(id);
+          return Promise.resolve({ ...target, is_running: true, timer_started_at: "2026-09-15T10:00:00Z" });
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    const r = await cmdResume(deps, "123");
+    expect(restarted).toEqual([123]);
+    expect(r.text).toContain("▶ resumed Acme / Website / Development (2026-09-14, id 123) — 0:45 so far");
+    expect(r.text).toContain("yesterday's thread");
+  });
+
+  test("the id breaks an updated_at tie", async () => {
+    const first = timeEntry({ id: 200, updated_at: "2026-09-15T09:30:00Z" });
+    const second = timeEntry({ id: 201, updated_at: "2026-09-15T09:30:00Z" });
+    const restarted: number[] = [];
+    const api = apiStub({
+      me: [me],
+      timeEntries: [[first, second], []],
+      restartEntry: [
+        (id: number) => {
+          restarted.push(id);
+          return Promise.resolve(timeEntry({ id, is_running: true }));
+        },
+      ],
+    });
+    const { deps } = makeDeps(api);
+    await cmdResume(deps);
+    expect(restarted).toEqual([201]);
+  });
+
+  test("a running target is left alone", async () => {
+    const running = timeEntry({ id: 123, is_running: true, timer_started_at: "2026-09-15T09:30:00Z" });
+    const api = apiStub({ timeEntry: [running] });
+    const { deps } = makeDeps(api);
+    const r = await cmdResume(deps, "123");
+    expect(r.text).toBe("▶ already running: Acme / Website / Development (id 123) — 0:30 elapsed");
+    const json = r.json as { stopped: unknown[] };
+    expect(json.stopped).toEqual([]);
+  });
+
+  test("no stopped entry today fails with the id hint", async () => {
+    const api = apiStub({
+      me: [me],
+      timeEntries: [[timeEntry({ id: 90, is_running: true })]],
+      stopEntry: [],
+    });
+    const { deps } = makeDeps(api);
+    expect(cmdResume(deps)).rejects.toThrow(/no stopped entry today/);
+  });
+
+  test("a bad id fails before any request", async () => {
+    const { deps } = makeDeps(apiStub({}));
+    expect(cmdResume(deps, "abc")).rejects.toThrow(/bad entry id/);
+    expect(cmdResume(deps, "0")).rejects.toThrow(/bad entry id/);
   });
 });
 
@@ -1234,6 +1398,132 @@ describe("parseCli", () => {
     expect([r.from, r.to]).toEqual(["2026-08-01", "2026-08-15"]);
     expect(() => parseCli(["audit", "--from", "yesterday"])).toThrow(/yyyy-mm-dd/);
     expect(() => parseCli(["audit", "--to", "2026/08/15"])).toThrow(/yyyy-mm-dd/);
+  });
+
+  test("per-command flags parse", () => {
+    const e = parseCli([
+      "edit",
+      "1",
+      "--hours",
+      "1:30",
+      "--project",
+      "acme",
+      "--task",
+      "dev",
+      "-n",
+      "x",
+      "--date",
+      "2026-09-15",
+    ]);
+    expect([e.hours, e.project, e.task, e.note, e.date]).toEqual(["1:30", "acme", "dev", "x", "2026-09-15"]);
+    expect(parseCli(["delete", "1", "-f"]).force).toBe(true);
+    expect(parseCli(["alias", "-r", "acme"]).remove).toBe(true);
+    expect(parseCli(["resume", "123", "--json"]).json).toBe(true);
+  });
+
+  test("a flag the command does not take is rejected", () => {
+    expect(() => parseCli(["resume", "123", "-n", "x"])).toThrow(/harvest resume --help/);
+    expect(() => parseCli(["resume", "123", "-n", "x"])).not.toThrow(/To specify/);
+    expect(() => parseCli(["resume", "--bogus"])).toThrow(/harvest resume --help/);
+    expect(() => parseCli(["stop", "--force"])).toThrow(/Unknown option/);
+    expect(() => parseCli(["status", "--offset", "25m"])).toThrow(/Unknown option/);
+    expect(() => parseCli(["delete", "1", "--hours", "1:30"])).toThrow(/Unknown option/);
+  });
+});
+
+describe("helpText", () => {
+  test("resume --help shows the resume usage and only its flags", () => {
+    const text = helpText(parseCli(["resume", "--help"]));
+    expect(text).toContain("usage: harvest resume [<entry-id>]");
+    expect(text).toContain("--json");
+    expect(text).not.toContain("--offset");
+  });
+
+  test("help <command> and -h reach the same text", () => {
+    expect(helpText(parseCli(["log", "-h"]))).toBe(helpText(parseCli(["help", "log"])));
+    expect(helpText(parseCli(["start", "--help"]))).toContain("--offset");
+  });
+
+  test("the help table and the dispatch handle the same commands", () => {
+    expect([...handledCommands()].sort()).toEqual([...documentedCommands()].sort());
+  });
+
+  test("full help wraps long summaries", () => {
+    const text = helpText(parseCli(["--help"])) ?? "";
+    for (const line of text.split("\n")) expect(line.length).toBeLessThanOrEqual(100);
+  });
+
+  test("every command the dispatch handles has its own help", () => {
+    const full = helpText(parseCli(["--help"]));
+    for (const name of handledCommands()) {
+      expect(helpText(parseCli([name, "--help"]))).not.toBe(full);
+    }
+  });
+
+  test("a command with several forms lists every usage", () => {
+    const text = helpText(parseCli(["alias", "--help"]));
+    expect(text).toContain("harvest alias [list|ls]");
+    expect(text).toContain("harvest alias <name> <project> [<task>]");
+    expect(text).toContain("harvest alias -r <name>");
+  });
+
+  test("delete has its own help", () => {
+    const text = helpText(parseCli(["delete", "--help"]));
+    expect(text).toContain("usage: harvest delete <entry-id> [--force]");
+    expect(text).toContain("-f, --force");
+  });
+
+  test("bare --help lists every command and points at per-command help", () => {
+    const text = helpText(parseCli(["--help"]));
+    expect(text).toContain("usage: harvest [<command>]");
+    expect(text).toContain("run harvest <command> --help");
+    expect(text).toContain("alias <name> <project> [<task>]");
+    expect(text).toContain("resume [<entry-id>]");
+    expect(text).toContain("delete <entry-id> [--force]");
+    expect(text).toContain("start <project> [<task>] [-n text] [--offset DUR]");
+    expect(text).toContain("today [--conceal] [--group-by DIM]");
+    expect(text).not.toContain("hide money amounts");
+  });
+
+  test("no help flag means no help text", () => {
+    expect(helpText(parseCli(["resume"]))).toBeNull();
+    expect(helpText(parseCli(["status", "--conceal"]))).toBeNull();
+  });
+});
+
+describe("handlerFor", () => {
+  test("prototype names are not commands", () => {
+    for (const name of ["constructor", "toString", "__proto__", "hasOwnProperty"]) {
+      expect(handlerFor(name)).toBeUndefined();
+    }
+    expect(handlerFor("resume")).toBeDefined();
+  });
+});
+
+describe("CLI process", () => {
+  async function runHarvest(...args: string[]): Promise<{ stderr: string; code: number }> {
+    const home = mkdtempSync(join(tmpdir(), "harvest-test-"));
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "harvest.ts"), ...args], {
+      env: { ...process.env, HOME: home },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stderr, code };
+  }
+
+  test("a usage error exits 2", async () => {
+    expect((await runHarvest("alias", "x")).code).toBe(2);
+  });
+
+  test("a prototype name is an unknown command, not a crash", async () => {
+    const result = await runHarvest("constructor");
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('unknown command "constructor"');
   });
 });
 

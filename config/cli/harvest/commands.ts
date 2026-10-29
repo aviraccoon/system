@@ -339,6 +339,55 @@ export async function cmdStop(deps: Deps): Promise<CmdResult> {
   };
 }
 
+/**
+ * Most recently touched stopped entry. Harvest exposes no stop timestamp, so
+ * updated_at is the closest proxy, with id (creation order) as tie-break.
+ */
+function lastStopped(entries: TimeEntry[]): TimeEntry | undefined {
+  return [...entries]
+    .filter((e) => !e.is_running)
+    .sort((a, b) => Date.parse(b.updated_at) - Date.parse(a.updated_at) || b.id - a.id)[0];
+}
+
+/**
+ * Continue a stopped entry: the restart endpoint reopens it, so its project,
+ * task, note and hours carry over instead of a pause splitting one thread
+ * into two entries. No id means today's stopped entry touched most recently.
+ */
+export async function cmdResume(deps: Deps, entryId?: string): Promise<CmdResult> {
+  let target: TimeEntry;
+  if (entryId !== undefined) {
+    const id = Number(entryId);
+    if (!Number.isInteger(id) || id <= 0) fail(`bad entry id "${entryId}"`);
+    target = await deps.getApi().timeEntry(id);
+  } else {
+    const candidate = lastStopped(await todayEntries(deps));
+    if (!candidate) fail("no stopped entry today (pass an entry id, or use harvest start)");
+    target = candidate;
+  }
+  if (target.is_running) {
+    const elapsed = entryElapsed(target, deps.now.getTime()) ?? "?";
+    return {
+      text: withNotes(
+        `▶ already running: ${entryLabel(target)} (id ${target.id}) — ${elapsed} elapsed`,
+        target.notes,
+      ).join("\n"),
+      json: { entry: target, stopped: [] },
+    };
+  }
+  const stopped = await stopRunning(deps);
+  const entry = await deps.getApi().restartEntry(target.id);
+  const lines: string[] = [];
+  for (const s of stopped) lines.push(`■ stopped ${entryLabel(s)} (id ${s.id}) at ${formatHours(s.hours)}`);
+  lines.push(
+    ...withNotes(
+      `▶ resumed ${entryLabel(entry)} (${entry.spent_date}, id ${entry.id}) — ${formatHours(entry.hours)} so far, started ${clockTime(deps.now)}`,
+      entry.notes,
+    ),
+  );
+  return { text: lines.join("\n"), json: { entry, stopped } };
+}
+
 export async function cmdLog(
   deps: Deps,
   hoursInput: string,

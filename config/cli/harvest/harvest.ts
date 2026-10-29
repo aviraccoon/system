@@ -3,7 +3,7 @@
 // harvest — CLI for Harvest time tracking (API v2). Runs under bun.
 
 import { createInterface } from "node:readline";
-import { parseArgs } from "node:util";
+import { type ParseArgsOptionsConfig, parseArgs } from "node:util";
 import { createClient, HarvestApiError } from "./api";
 import {
   aliasList,
@@ -16,6 +16,7 @@ import {
   cmdLog,
   cmdMonth,
   cmdProjects,
+  cmdResume,
   cmdStart,
   cmdStatus,
   cmdStop,
@@ -27,45 +28,256 @@ import {
 } from "./commands";
 import { DEFAULT_USER_AGENT, loadCache, loadConfig, resolveAuth, saveCache, saveConfig } from "./config";
 
+interface FlagSpec {
+  key: string;
+  type: "string" | "boolean";
+  short?: string;
+  /** Every command takes it; rendered globally rather than in a command's flag list. */
+  global?: boolean;
+  /** Token as it appears in a command synopsis; empty when the usage line lists it. */
+  synopsis: string;
+  usage: string;
+  help: string;
+}
+
+const FLAGS: FlagSpec[] = [
+  {
+    key: "note",
+    type: "string",
+    short: "n",
+    synopsis: "[-n text]",
+    usage: "-n, --note <text>",
+    help: "note for start/log/edit",
+  },
+  { key: "date", type: "string", synopsis: "[--date D]", usage: "--date <yyyy-mm-dd>", help: "date for log/edit" },
+  {
+    key: "from",
+    type: "string",
+    synopsis: "[--from D --to D]",
+    usage: "--from <yyyy-mm-dd>",
+    help: "audit range start (with --to)",
+  },
+  { key: "to", type: "string", synopsis: "", usage: "--to <yyyy-mm-dd>", help: "audit range end (with --from)" },
+  {
+    key: "days",
+    type: "string",
+    synopsis: "[--days N]",
+    usage: "--days <n>",
+    help: "audit: last n days including today",
+  },
+  { key: "hours", type: "string", synopsis: "[--hours H]", usage: "--hours <hours>", help: "hours for edit" },
+  {
+    key: "project",
+    type: "string",
+    synopsis: "[--project P]",
+    usage: "--project <query>",
+    help: "with edit: project to move the entry to",
+  },
+  {
+    key: "task",
+    type: "string",
+    synopsis: "[--task T]",
+    usage: "--task <query>",
+    help: "with edit: task on the target (or current) project",
+  },
+  {
+    key: "offset",
+    type: "string",
+    synopsis: "[--offset DUR]",
+    usage: "--offset <duration>",
+    help: "with start: time already spent (25m, 1:30, 1h30m)",
+  },
+  {
+    key: "force",
+    type: "boolean",
+    short: "f",
+    synopsis: "[--force]",
+    usage: "-f, --force",
+    help: "with delete: skip the confirm prompt",
+  },
+  {
+    key: "group-by",
+    type: "string",
+    synopsis: "[--group-by DIM]",
+    usage: "--group-by <dim>",
+    help: "group today/week/month by project|task|note",
+  },
+  {
+    key: "remove",
+    type: "boolean",
+    short: "r",
+    synopsis: "-r <name>",
+    usage: "-r, --remove",
+    help: "with alias: remove it",
+  },
+  {
+    key: "conceal",
+    type: "boolean",
+    synopsis: "[--conceal]",
+    usage: "--conceal",
+    help: "hide money amounts (status/today/week/month)",
+  },
+  { key: "json", type: "boolean", global: true, synopsis: "", usage: "--json", help: "machine-readable output" },
+  { key: "help", type: "boolean", short: "h", global: true, synopsis: "", usage: "-h, --help", help: "this help" },
+];
+
+const FLAG_BY_KEY = new Map(FLAGS.map((f) => [f.key, f]));
+
+interface CommandSpec {
+  name: string;
+  /** Positional part of the synopsis; flags are appended from `flags`. */
+  args: string;
+  summary: string;
+  flags: string[];
+}
+
+/** One table for help, per-command flags and the parser's option sets. */
+const COMMANDS: CommandSpec[] = [
+  { name: "status", args: "status", summary: "running timer + today's entries and total", flags: ["conceal"] },
+  {
+    name: "start",
+    args: "start <project> [<task>]",
+    summary: "start a timer (stops the running one)",
+    flags: ["note", "offset"],
+  },
+  { name: "stop", args: "stop", summary: "stop the running timer", flags: [] },
+  {
+    name: "resume",
+    args: "resume [<entry-id>]",
+    summary:
+      "continue a stopped entry after a pause (default: today's stopped entry touched most recently); stops any running timer and keeps its project, task, note and hours",
+    flags: [],
+  },
+  {
+    name: "log",
+    args: "log <hours> <project> [<task>]",
+    summary: "log past time (1.5, 1:30, 90m)",
+    flags: ["note", "date"],
+  },
+  {
+    name: "edit",
+    args: "edit <entry-id>",
+    summary: "edit an entry; --project/--task move it",
+    flags: ["note", "date", "hours", "project", "task"],
+  },
+  { name: "today", args: "today", summary: "today's entries and total", flags: ["conceal", "group-by"] },
+  {
+    name: "week",
+    args: "week",
+    summary: "this ISO week, per-day and per-project totals",
+    flags: ["conceal", "group-by"],
+  },
+  {
+    name: "month",
+    args: "month [YYYY-MM]",
+    summary: "monthly overview, per-project hours and money",
+    flags: ["conceal", "group-by"],
+  },
+  {
+    name: "audit",
+    args: "audit [YYYY-MM]",
+    summary: "entries needing attention: missing/URL-less note, whole-hour duration",
+    flags: ["from", "to", "days"],
+  },
+  {
+    name: "delete",
+    args: "delete <entry-id>",
+    summary: "delete an entry; --force skips the confirm prompt",
+    flags: ["force"],
+  },
+  { name: "projects", args: "projects", summary: "list active projects (refreshes the cache)", flags: [] },
+  { name: "tasks", args: "tasks <project>", summary: "list tasks assigned to a project", flags: [] },
+  { name: "alias", args: "alias [list|ls]", summary: "list aliases", flags: [] },
+  {
+    name: "alias",
+    args: "alias <name> <project> [<task>]",
+    summary: "set an alias (resolved once, stored by id)",
+    flags: [],
+  },
+  { name: "alias", args: "alias", summary: "remove an alias", flags: ["remove"] },
+  { name: "whoami", args: "whoami", summary: "auth check: user, timer mode, cache state", flags: [] },
+];
+
+function synopsis(spec: CommandSpec): string {
+  const tokens = [spec.args];
+  for (const key of spec.flags) {
+    const flag = FLAG_BY_KEY.get(key);
+    if (flag?.synopsis) tokens.push(flag.synopsis);
+  }
+  return tokens.filter((t) => t !== "").join(" ");
+}
+
+function optionSpec(flag: FlagSpec): ParseArgsOptionsConfig[string] {
+  return flag.type === "string"
+    ? { type: "string", ...(flag.short ? { short: flag.short } : {}) }
+    : { type: "boolean", ...(flag.short ? { short: flag.short } : {}) };
+}
+
+const GLOBAL_FLAGS = FLAGS.filter((f) => f.global === true);
+const GLOBAL_KEYS = GLOBAL_FLAGS.map((f) => f.key);
+const GLOBAL_OPTIONS: ParseArgsOptionsConfig = {};
+for (const flag of GLOBAL_FLAGS) GLOBAL_OPTIONS[flag.key] = optionSpec(flag);
+
+/** Options per command, derived from the COMMANDS table so help and parsing cannot drift. */
+const COMMAND_OPTIONS: Record<string, ParseArgsOptionsConfig> = {};
+for (const command of COMMANDS) {
+  const options = COMMAND_OPTIONS[command.name] ?? {};
+  COMMAND_OPTIONS[command.name] = options;
+  for (const key of command.flags) {
+    const flag = FLAG_BY_KEY.get(key);
+    if (!flag) throw new Error(`unknown flag "${key}" on ${command.name}`);
+    options[key] = optionSpec(flag);
+  }
+}
+
+const ALL_OPTIONS: ParseArgsOptionsConfig = Object.assign({}, GLOBAL_OPTIONS, ...Object.values(COMMAND_OPTIONS));
+
+const USAGE_COL = 40;
+const FLAG_COL = Math.max(...FLAGS.map((f) => f.usage.length)) + 4;
+
+function wrap(text: string, width: number): string[] {
+  const lines: string[] = [];
+  let line = "";
+  for (const word of text.split(/\s+/)) {
+    if (line === "") line = word;
+    else if (line.length + 1 + word.length <= width) line += ` ${word}`;
+    else {
+      lines.push(line);
+      line = word;
+    }
+  }
+  if (line !== "") lines.push(line);
+  return lines;
+}
+
+function renderCommand(spec: CommandSpec): string {
+  const head = `  ${synopsis(spec)}`;
+  const lines = wrap(spec.summary, 100 - USAGE_COL);
+  if (head.length < USAGE_COL) {
+    return [`${head.padEnd(USAGE_COL)}${lines[0] ?? ""}`, ...lines.slice(1).map((l) => " ".repeat(USAGE_COL) + l)].join(
+      "\n",
+    );
+  }
+  return [head, ...lines.map((l) => " ".repeat(USAGE_COL) + l)].join("\n");
+}
+
+function renderFlags(keys: string[]): string {
+  return FLAGS.filter((f) => keys.includes(f.key))
+    .map((f) => `  ${f.usage.padEnd(FLAG_COL)}${f.help}`)
+    .join("\n");
+}
+
 const HELP = `harvest — Harvest time tracking from the terminal
 
 usage: harvest [<command>] [args] [flags]
 
 commands:
-  status                      running timer + today's entries and total
-  start <project> [<task>]    start a timer (stops the running one; --offset 25m credits prior time)
-  stop                        stop the running timer
-  log <hours> <project> [<task>] [--date D]   log past time (1.5, 1:30, 90m)
-  edit <entry-id> [--hours H] [-n text] [--date D] [--project P] [--task T]
-                              edit an entry; --project/--task move it
-  today                       today's entries and total
-  week                        this ISO week, per-day and per-project totals
-  month [YYYY-MM]             monthly overview, per-project hours and money
-  audit [YYYY-MM]             entries needing attention: missing/URL-less note, whole-hour duration
-                              ranges: --days 7, or --from D --to D
-  projects                    list active projects (refreshes the cache)
-  tasks <project>             list tasks assigned to a project
-  alias [list|ls]             list aliases
-  alias <name> <project> [<task>]   set an alias (resolved once, stored by id)
-  alias -r <name>             remove an alias
-  whoami                      auth check: user, timer mode, cache state
+${COMMANDS.map(renderCommand).join("\n")}
 
 flags:
-  -n, --note <text>           note for start/log
-  --date <yyyy-mm-dd>         date for log
-  --from <yyyy-mm-dd>         audit range start (with --to)
-  --to <yyyy-mm-dd>           audit range end (with --from)
-  --days <n>                  audit: last n days including today
-  --hours <hours>             hours for edit
-  --project <query>           with edit: project to move the entry to
-  --task <query>              with edit: task on the target (or current) project
-  --offset <duration>         with start: time already spent (25m, 1:30, 1h30m)
-  -f, --force                 with delete: skip the confirm prompt
-  --group-by <dim>            group today/week/month by project|task|note
-  -r, --remove                with alias
-  --json                      machine-readable output
-  --conceal                   hide money amounts (status/today/week/month)
-  -h, --help                  this help
+${renderFlags(GLOBAL_KEYS)}
+
+run harvest <command> --help for that command's usage and flags.
 
 no command = status. Project/task args are fuzzy-matched; a numeric arg
 matches by id. Set aliases for the common cases (harvest alias acme
@@ -76,6 +288,24 @@ https://id.getharvest.com/developers (Developers section), then store it via
 1Password (item "Harvest API" with fields token + account-id), or see the
 error message for other options.
 `;
+
+function commandHelp(name: string): string | null {
+  const specs = COMMANDS.filter((c) => c.name === name);
+  if (specs.length === 0) return null;
+  const usage =
+    specs.length === 1 && specs[0]
+      ? `usage: harvest ${synopsis(specs[0])}`
+      : ["usage:", ...specs.map((s) => `  harvest ${synopsis(s)}`)].join("\n");
+  const summary = specs.flatMap((s) => wrap(s.summary, 80));
+  return `${usage}
+
+${summary.join("\n")}
+
+flags:
+${renderFlags([...new Set([...specs.flatMap((s) => s.flags), ...GLOBAL_KEYS])])}
+
+run harvest --help for all commands`;
+}
 
 interface Cli {
   note?: string;
@@ -96,35 +326,35 @@ interface Cli {
   positionals: string[];
 }
 
-/** Strict parse; throws on unknown flags. Exported for tests. */
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+/** node's "place it after --" advice turns a flag into a positional, which fails too. */
+function parseOrThrow(args: string[], options: ParseArgsOptionsConfig, cmd: string): ReturnType<typeof parseArgs> {
+  try {
+    return parseArgs({ args, allowPositionals: true, options });
+  } catch (e) {
+    const message = (e as Error).message.split(". To specify")[0];
+    throw new Error(`${cmd}: ${message} (harvest ${cmd} --help shows its flags)`);
+  }
+}
+
+/** Strict parse; throws on a flag the command does not take. Exported for tests. */
 export function parseCli(argv: string[]): Cli {
-  const { values, positionals } = parseArgs({
-    args: argv,
-    allowPositionals: true,
-    options: {
-      note: { type: "string", short: "n" },
-      date: { type: "string" },
-      from: { type: "string" },
-      to: { type: "string" },
-      days: { type: "string" },
-      hours: { type: "string" },
-      project: { type: "string" },
-      task: { type: "string" },
-      offset: { type: "string" },
-      remove: { type: "boolean", short: "r" },
-      force: { type: "boolean", short: "f" },
-      "group-by": { type: "string" },
-      conceal: { type: "boolean" },
-      json: { type: "boolean" },
-      help: { type: "boolean", short: "h" },
-    },
-  });
-  const note = values.note;
-  const date = values.date;
-  const from = values.from;
-  const to = values.to;
-  if (typeof note !== "string" && note !== undefined) throw new Error("--note takes a string");
-  if (typeof date !== "string" && date !== undefined) throw new Error("--date takes a string");
+  // A non-strict pass only locates the command; the strict one parses its flags.
+  let cmd = "status";
+  try {
+    const probe = parseArgs({ args: argv, allowPositionals: true, options: ALL_OPTIONS, strict: false });
+    cmd = probe.positionals[0] ?? "status";
+  } catch {
+    // Malformed before the command; the strict pass reports the real error.
+  }
+  const { values, positionals } = parseOrThrow(argv, { ...GLOBAL_OPTIONS, ...(COMMAND_OPTIONS[cmd] ?? {}) }, cmd);
+  const note = stringValue(values.note);
+  const date = stringValue(values.date);
+  const from = stringValue(values.from);
+  const to = stringValue(values.to);
   if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     throw new Error(`--date must be yyyy-mm-dd, got "${date}"`);
   }
@@ -139,19 +369,27 @@ export function parseCli(argv: string[]): Cli {
     date,
     from,
     to,
-    days: values.days,
-    hours: values.hours,
-    project: values.project,
-    task: values.task,
-    offset: values.offset,
+    days: stringValue(values.days),
+    hours: stringValue(values.hours),
+    project: stringValue(values.project),
+    task: stringValue(values.task),
+    offset: stringValue(values.offset),
     remove: values.remove === true,
     force: values.force === true,
-    groupBy: parseGroupBy(values["group-by"]),
+    groupBy: parseGroupBy(stringValue(values["group-by"])),
     conceal: values.conceal === true,
     json: values.json === true,
     help: values.help === true,
     positionals: positionals.filter((p): p is string => typeof p === "string"),
   };
+}
+
+/** Help text for a help invocation (`--help`, or `help [command]`), otherwise null. */
+export function helpText(cli: Pick<Cli, "help" | "positionals">): string | null {
+  if (!cli.help && cli.positionals[0] !== "help") return null;
+  const target = cli.positionals[0] === "help" ? cli.positionals[1] : cli.positionals[0];
+  if (target === undefined) return HELP.trimEnd();
+  return commandHelp(target) ?? HELP.trimEnd();
 }
 
 /** Deep-clone with money fields removed — --conceal applies to JSON too. */
@@ -185,6 +423,98 @@ function arity(cmd: string, positionals: string[], min: number, max: number): st
   return null;
 }
 
+/** A bad invocation, distinct from a failed command (exit 2, not 1). */
+class UsageError extends Error {}
+
+interface Handler {
+  min: number;
+  max: number;
+  run(deps: Deps, positionals: string[], cli: Cli): Promise<CmdResult>;
+}
+
+/** One entry per command: dispatch, arity and (via COMMANDS) help. */
+const HANDLERS: Record<string, Handler> = {
+  status: { min: 0, max: 0, run: async (deps, _p, cli) => cmdStatus(deps, { conceal: cli.conceal }) },
+  start: {
+    min: 1,
+    max: 2,
+    run: async (deps, p, cli) => cmdStart(deps, p[0] ?? "", p[1], cli.note, { offset: cli.offset }),
+  },
+  stop: { min: 0, max: 0, run: async (deps) => cmdStop(deps) },
+  resume: { min: 0, max: 1, run: async (deps, p) => cmdResume(deps, p[0]) },
+  log: {
+    min: 2,
+    max: 3,
+    run: async (deps, p, cli) => cmdLog(deps, p[0] ?? "", p[1] ?? "", p[2], cli.date, cli.note),
+  },
+  edit: {
+    min: 1,
+    max: 1,
+    run: async (deps, p, cli) =>
+      cmdEdit(deps, p[0] ?? "", {
+        hours: cli.hours,
+        notes: cli.note,
+        date: cli.date,
+        project: cli.project,
+        task: cli.task,
+      }),
+  },
+  today: {
+    min: 0,
+    max: 0,
+    run: async (deps, _p, cli) => cmdToday(deps, { conceal: cli.conceal, groupBy: cli.groupBy }),
+  },
+  week: { min: 0, max: 0, run: async (deps, _p, cli) => cmdWeek(deps, { conceal: cli.conceal, groupBy: cli.groupBy }) },
+  month: {
+    min: 0,
+    max: 1,
+    run: async (deps, p, cli) => cmdMonth(deps, p[0], { conceal: cli.conceal, groupBy: cli.groupBy }),
+  },
+  audit: {
+    min: 0,
+    max: 1,
+    run: async (deps, p, cli) => cmdAudit(deps, { month: p[0], from: cli.from, to: cli.to, days: cli.days }),
+  },
+  delete: {
+    min: 1,
+    max: 1,
+    run: async (deps, p, cli) =>
+      cmdDelete(deps, p[0] ?? "", { force: cli.force, confirm: cli.force ? undefined : confirmDelete }),
+  },
+  projects: { min: 0, max: 0, run: async (deps) => cmdProjects(deps) },
+  tasks: { min: 1, max: 1, run: async (deps, p) => cmdTasks(deps, p[0] ?? "") },
+  alias: {
+    min: 0,
+    max: 3,
+    run: async (deps, p, cli) => {
+      if (cli.remove) {
+        const err = arity("alias -r", p, 1, 1);
+        if (err) throw new UsageError(err);
+        return aliasRemove(deps, p[0] ?? "");
+      }
+      if (isAliasListForm(p)) return aliasList(deps);
+      if (p.length === 2 || p.length === 3) return aliasSet(deps, p[0] ?? "", p[1] ?? "", p[2]);
+      throw new UsageError("alias: expected nothing, list/ls, or <name> <project> [<task>]");
+    },
+  },
+  whoami: { min: 0, max: 0, run: async (deps) => cmdWhoami(deps) },
+};
+
+/** Command names from the dispatch map. */
+export function handledCommands(): string[] {
+  return Object.keys(HANDLERS);
+}
+
+/** Command names from the help table. */
+export function documentedCommands(): string[] {
+  return [...new Set(COMMANDS.map((c) => c.name))];
+}
+
+/** Handler for a command name; inherited object properties are not commands. */
+export function handlerFor(name: string): Handler | undefined {
+  return Object.hasOwn(HANDLERS, name) ? HANDLERS[name] : undefined;
+}
+
 async function run(argv: string[]): Promise<number> {
   let cli: Cli;
   try {
@@ -193,8 +523,9 @@ async function run(argv: string[]): Promise<number> {
     console.error(`error: ${(e as Error).message}\n(run harvest --help for usage)`);
     return 2;
   }
-  if (cli.help || (cli.positionals[0] ?? null) === "help") {
-    console.log(HELP.trimEnd());
+  const help = helpText(cli);
+  if (help !== null) {
+    console.log(help);
     return 0;
   }
   const cmd = cli.positionals[0] ?? "status";
@@ -217,113 +548,11 @@ async function run(argv: string[]): Promise<number> {
     now,
   };
 
-  let result: CmdResult;
-  switch (cmd) {
-    case "status": {
-      const err = arity("status", p, 0, 0);
-      if (err) return failArg(err);
-      result = await cmdStatus(deps, { conceal: cli.conceal });
-      break;
-    }
-    case "start": {
-      const err = arity("start", p, 1, 2);
-      if (err) return failArg(err);
-      result = await cmdStart(deps, p[0] ?? "", p[1], cli.note, { offset: cli.offset });
-      break;
-    }
-    case "stop": {
-      const err = arity("stop", p, 0, 0);
-      if (err) return failArg(err);
-      result = await cmdStop(deps);
-      break;
-    }
-    case "log": {
-      const err = arity("log", p, 2, 3);
-      if (err) return failArg(err);
-      result = await cmdLog(deps, p[0] ?? "", p[1] ?? "", p[2], cli.date, cli.note);
-      break;
-    }
-    case "edit": {
-      const err = arity("edit", p, 1, 1);
-      if (err) return failArg(err);
-      result = await cmdEdit(deps, p[0] ?? "", {
-        hours: cli.hours,
-        notes: cli.note,
-        date: cli.date,
-        project: cli.project,
-        task: cli.task,
-      });
-      break;
-    }
-    case "today": {
-      const err = arity("today", p, 0, 0);
-      if (err) return failArg(err);
-      result = await cmdToday(deps, { conceal: cli.conceal, groupBy: cli.groupBy });
-      break;
-    }
-    case "week": {
-      const err = arity("week", p, 0, 0);
-      if (err) return failArg(err);
-      result = await cmdWeek(deps, { conceal: cli.conceal, groupBy: cli.groupBy });
-      break;
-    }
-    case "month": {
-      const err = arity("month", p, 0, 1);
-      if (err) return failArg(err);
-      result = await cmdMonth(deps, p[0], { conceal: cli.conceal, groupBy: cli.groupBy });
-      break;
-    }
-    case "audit": {
-      const err = arity("audit", p, 0, 1);
-      if (err) return failArg(err);
-      result = await cmdAudit(deps, { month: p[0], from: cli.from, to: cli.to, days: cli.days });
-      break;
-    }
-    case "delete": {
-      const err = arity("delete", p, 1, 1);
-      if (err) return failArg(err);
-      result = await cmdDelete(deps, p[0] ?? "", {
-        force: cli.force,
-        confirm: cli.force ? undefined : confirmDelete,
-      });
-      break;
-    }
-    case "projects": {
-      const err = arity("projects", p, 0, 0);
-      if (err) return failArg(err);
-      result = await cmdProjects(deps);
-      break;
-    }
-    case "tasks": {
-      const err = arity("tasks", p, 1, 1);
-      if (err) return failArg(err);
-      result = await cmdTasks(deps, p[0] ?? "");
-      break;
-    }
-    case "alias": {
-      if (cli.remove) {
-        const err = arity("alias -r", p, 1, 1);
-        if (err) return failArg(err);
-        result = aliasRemove(deps, p[0] ?? "");
-      } else if (isAliasListForm(p)) {
-        result = aliasList(deps);
-      } else if (p.length === 2 || p.length === 3) {
-        result = await aliasSet(deps, p[0] ?? "", p[1] ?? "", p[2]);
-      } else {
-        return failArg("alias: expected nothing, list/ls, or <name> <project> [<task>]");
-      }
-      break;
-    }
-    case "whoami": {
-      const err = arity("whoami", p, 0, 0);
-      if (err) return failArg(err);
-      result = await cmdWhoami(deps);
-      break;
-    }
-    default:
-      console.error(`error: unknown command "${cmd}"\n(run harvest --help for usage)`);
-      return 2;
-  }
+  const handler = handlerFor(cmd);
+  if (!handler) return failArg(`unknown command "${cmd}"`);
+  const arityErr = arity(cmd, p, handler.min, handler.max);
+  if (arityErr) return failArg(arityErr);
+  const result = await handler.run(deps, p, cli);
 
   if (cli.json) {
     const json = cli.conceal ? concealMoney(result.json) : result.json;
@@ -361,6 +590,10 @@ async function main(): Promise<number> {
   try {
     return await run(process.argv.slice(2));
   } catch (e) {
+    if (e instanceof UsageError) {
+      console.error(`error: ${e.message}\n(run harvest --help for usage)`);
+      return 2;
+    }
     if (e instanceof HarvestApiError) {
       console.error(`harvest api error ${e.status}: ${e.message}`);
       if (e.status === 401)
