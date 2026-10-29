@@ -138,7 +138,7 @@ describe("review tool", () => {
     expect(text(result)).toContain("severity 0.97 ≥ 0.85");
   });
 
-  test("the message is injected into the child task, normalized", async () => {
+  test("the message and the requirement are injected into the child task, normalized", async () => {
     const dir = repo();
     let dispatched = "";
     const d = deps({
@@ -150,6 +150,19 @@ describe("review tool", () => {
     await runReview({ task: "review the change", proposedMessage: `${MESSAGE}\n\n   \n` }, ctxAt(dir), d);
     expect(dispatched).toBe(taskWithMessage("review the change", MESSAGE));
     expect(dispatched).toContain(MESSAGE);
+    // Each fragment guards one clause the requirement cannot lose: the imperative, the consequence of
+    // skipping it, its override of whatever the task says, the shortcut's precondition, its default,
+    // and the judgment it must name.
+    for (const fragment of [
+      "Judge the message against the diff in this round's report",
+      "a round that does not address it blocks the commit",
+      "whatever the task above says about it",
+      "If the task says an earlier round judged this message and it is unchanged",
+      "otherwise judge it here",
+      "saying that the message judgment holds against this diff is enough",
+    ]) {
+      expect(dispatched).toContain(fragment);
+    }
   });
 
   test("an empty message fails before the reviewer runs", async () => {

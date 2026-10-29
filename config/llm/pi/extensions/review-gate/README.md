@@ -8,7 +8,8 @@ deployed by `modules/home-manager/git-hooks`, because `--no-verify` skips `pre-c
 The tool injects the proposed commit message into the child task, then classifies the report with a
 decision model: the three verdict questions (`severity`, `behavior`, `unfinished`) plus `message`,
 which asks whether the report judged the message at all. A question that does not answer records
-nothing.
+nothing. The injected block states that the message is judged in every round, whatever the task says
+about it, because a delta-scoped round that calls it settled still needs a verdict for that tree.
 
 ## Ledger
 

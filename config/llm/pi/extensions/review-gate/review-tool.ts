@@ -65,9 +65,15 @@ export interface ReviewDeps {
   sessionId: string;
 }
 
-/** A message the reviewer can quote, injected where the task ends. */
+/**
+ * A message the reviewer can quote, injected where the task ends.
+ *
+ * The requirement is stated here, not only in the classifier's question, and it
+ * overrides whatever the task says about the message: a delta-scoped round that
+ * lists it as settled still judges it, or the commit is refused.
+ */
 export function taskWithMessage(task: string, message: string): string {
-  return `${task}\n\nProposed commit message (verbatim, as it will be committed; judge it against the diff):\n\n${message}`;
+  return `${task}\n\nProposed commit message (verbatim, as it will be committed):\n\n${message}\n\nJudge the message against the diff in this round's report, whatever the task above says about it: a round that does not address it blocks the commit. If the task says an earlier round judged this message and it is unchanged, saying that the message judgment holds against this diff is enough; otherwise judge it here.`;
 }
 
 function textResult(text: string, details?: unknown, isError = false): AgentToolResult<unknown> {
