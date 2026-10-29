@@ -378,7 +378,7 @@ function reviewerNames(input: Record<string, unknown>): string[] {
 }
 
 const OUTSIDE_GATE_NOTE =
-  "review-gate: no commit coverage was recorded for this dispatch. If this was a pre-commit review, call the `review` tool instead.";
+  'review-gate: no commit coverage was recorded for this dispatch. Use the `review` tool instead: scope "staged" for a pre-commit round, scope "paths" for a working-tree pre-review.';
 
 function gateStatePath(path: string): boolean {
   return path.startsWith(`${STATE_DIR}${sep}`) && path.slice(STATE_DIR.length + 1).startsWith("review-");
@@ -389,11 +389,11 @@ export default function reviewGateExtension(pi: ExtensionAPI) {
     name: "review",
     label: "Review",
     description:
-      "Dispatch the code reviewer for the staged change and record the commit-gate verdict. Use it for every pre-commit review and every re-review round. Pass the commit message as proposedMessage; the reviewer judges it against the diff and the gate records it so the commit can be checked against it.",
+      'Dispatch the code reviewer for a change and record the commit-gate verdict. Use scope "staged" (the default) for every pre-commit review and re-review round: it records the index tree and the proposed message, and the commit is checked against both. Use scope "paths" for a path-scoped pre-review of a working-tree change; it records nothing, so the commit still needs a staged round.',
     parameters: ReviewParams,
     renderResult: renderReviewResult,
     promptGuidelines: [
-      "Pass the proposed commit message exactly as it will be committed; a message changed after the round invalidates the recorded review.",
+      "A staged round needs proposedMessage, passed exactly as it will be committed; a message changed after the round invalidates the recorded review. A paths round takes none, so name the paths in `task` instead.",
       "Put the change, the verification state, prior-round findings with resolutions, and the journal path in `task`; never paste the diff.",
     ],
     async execute(_toolCallId, params, signal, onUpdate, ctx) {

@@ -7,7 +7,15 @@ import type { AgentToolResult, ExtensionToolContext } from "@earendil-works/pi-c
 import type { ReviewLedgerEntry } from "../shared/review-ledger";
 import { type GateOutcome, gateFromAnswers } from "./gate";
 import { gateNoteColor } from "./render";
-import { type DispatchResult, nothingStagedRefusal, type ReviewDeps, runReview, taskWithMessage } from "./review-tool";
+import {
+  type DispatchResult,
+  nothingStagedRefusal,
+  PATHS_ROUND_NOTE,
+  type ReviewDeps,
+  runReview,
+  taskWithMessage,
+  taskWithPathsScope,
+} from "./review-tool";
 import { isolateGitConfig } from "./test-git-config";
 
 const dirs: string[] = [];
@@ -157,7 +165,7 @@ describe("nothing staged", () => {
     expect(text(result)).toContain("nothing is staged");
     expect(text(result)).toContain("Stage it, then call the `review` tool again");
     // A working-tree round that records nothing is a real case: the parallel review.
-    expect(text(result)).toContain("dispatch the `reviewer` agent through the `subagent` tool");
+    expect(text(result)).toContain('pass scope "paths" instead');
   });
 
   test("a staged change reviews even when the working tree holds more", async () => {
@@ -192,6 +200,94 @@ describe("nothing staged", () => {
     const result = await runReview({ task: "review", proposedMessage: MESSAGE }, ctxAt(dir), d);
     expect(d.entries).toHaveLength(1);
     expect(text(result)).toContain("gate: clean for tree");
+  });
+});
+
+describe("paths scope", () => {
+  test("a paths round reviews the unstaged working tree and records nothing", async () => {
+    const dir = repo();
+    execFileSync("git", ["restore", "--staged", "a.txt"], { cwd: dir });
+    let dispatchedTask = "";
+    let classified = false;
+    const dispatched = report();
+    const d = deps({
+      dispatch: async (args) => {
+        dispatchedTask = args.task;
+        return dispatched;
+      },
+      classify: async () => {
+        classified = true;
+        return outcome();
+      },
+    });
+    const result = await runReview({ task: "review src/a.ts", scope: "paths" }, ctxAt(dir), d);
+    expect(d.entries).toHaveLength(0);
+    expect(classified).toBe(false);
+    expect(dispatchedTask).toBe(taskWithPathsScope("review src/a.ts"));
+    // Each fragment keeps the reviewer prompt's pre-commit rules from firing: the
+    // round's scope, its target, that it records nothing, the two states it
+    // expects, and where the message is judged instead.
+    for (const fragment of [
+      "This is a path-scoped round",
+      "review the paths the task names against the working tree",
+      "new files with `git status --short --untracked-files=all -- <paths>`",
+      "records no verdict, so the index is not its target",
+      "expected here, not findings",
+      "judged in the staged round that follows",
+    ]) {
+      expect(dispatchedTask).toContain(fragment);
+    }
+    expect(result.isError).toBeFalsy();
+    expect(text(result)).toContain("gate: nothing recorded");
+    expect(text(result)).toContain('scope "staged"');
+    expect(result.details).toBe(dispatched.details);
+  });
+
+  test("the paths note is what a commit cannot use", () => {
+    expect(PATHS_ROUND_NOTE).toContain("records no verdict for a commit");
+    expect(PATHS_ROUND_NOTE).toContain('call `review` with scope "staged"');
+    expect(PATHS_ROUND_NOTE).toContain("before it is committed");
+  });
+
+  test("a paths round outside a repository still runs", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "review-tool-paths-plain-"));
+    dirs.push(dir);
+    const d = deps();
+    const result = await runReview({ task: "review notes.md", scope: "paths" }, ctxAt(dir), d);
+    expect(d.entries).toHaveLength(0);
+    expect(text(result)).toContain("gate: nothing recorded");
+  });
+
+  test("a paths round refuses a proposed message before the reviewer runs", async () => {
+    const dir = repo();
+    let ran = false;
+    const d = deps({
+      dispatch: async () => {
+        ran = true;
+        return report();
+      },
+    });
+    const result = await runReview({ task: "review", scope: "paths", proposedMessage: MESSAGE }, ctxAt(dir), d);
+    expect(ran).toBe(false);
+    expect(d.entries).toHaveLength(0);
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("a paths round records nothing, so it takes no proposedMessage");
+  });
+
+  test("a staged round refuses to run without a message", async () => {
+    const dir = repo();
+    let ran = false;
+    const d = deps({
+      dispatch: async () => {
+        ran = true;
+        return report();
+      },
+    });
+    const result = await runReview({ task: "review", scope: "staged" }, ctxAt(dir), d);
+    expect(ran).toBe(false);
+    expect(d.entries).toHaveLength(0);
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain("proposedMessage is required for a staged round");
   });
 });
 

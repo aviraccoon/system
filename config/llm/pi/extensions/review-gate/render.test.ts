@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentToolResult, Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
 import { gateNoteColor, gateNoteText, renderReviewResult } from "./render";
+import { PATHS_ROUND_NOTE } from "./review-tool";
 
 const theme = {
   fg: (_color: string, text: string) => text,
@@ -35,6 +36,9 @@ describe("review tool rendering", () => {
     expect(gateNoteColor("gate: clean for tree abc")).toBe("success");
     expect(gateNoteColor("gate: not a git repository — no commit gate applies")).toBe("warning");
     expect(gateNoteColor("gate: blocked for tree abc — severity 0.95")).toBe("warning");
+    // The emitted note, not a hand-copied prefix: rewording it must not leave the
+    // color branch silently stranded on the error fallback.
+    expect(gateNoteColor(PATHS_ROUND_NOTE)).toBe("warning");
     expect(gateNoteColor("gate: the reviewer did not complete a review run")).toBe("error");
   });
 

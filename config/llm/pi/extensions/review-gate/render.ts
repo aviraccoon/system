@@ -47,6 +47,7 @@ export function gateNoteColor(note: string): "success" | "warning" | "error" {
     return note.includes("the gate's hooks are not active") ? "warning" : "success";
   }
   if (note.startsWith("gate: not a git repository")) return "warning";
+  if (note.startsWith("gate: nothing recorded")) return "warning";
   if (note.startsWith("gate: blocked")) return "warning";
   return "error";
 }
