@@ -264,8 +264,14 @@ function optionSpec(flag: FlagSpec): ParseArgsOptionsConfig[string] {
 }
 
 function optionsFor<Ctx, R, C>(compiled: Compiled<Ctx, R, C>, path: Group<Ctx, R, C>[]): ParseArgsOptionsConfig {
-  const keys = new Set(compiled.spec.flags.filter((flag) => flag.global).map((flag) => flag.key));
-  for (const group of path) for (const key of group.flags) keys.add(key);
+  const keys = new Set<string>();
+  if (compiled.groups.length === 0) {
+    // A single-command app has no path to hang flags on: every declared flag applies.
+    for (const flag of compiled.spec.flags) keys.add(flag.key);
+  } else {
+    for (const flag of compiled.spec.flags) if (flag.global) keys.add(flag.key);
+    for (const group of path) for (const key of group.flags) keys.add(key);
+  }
   const options: ParseArgsOptionsConfig = {};
   for (const key of keys) {
     const flag = compiled.flagByKey.get(key);
@@ -283,7 +289,8 @@ function allOptions<Ctx, R, C>(compiled: Compiled<Ctx, R, C>): ParseArgsOptionsC
 /** node's "place it after --" advice turns a rejected flag into a positional that fails too. */
 function withHelpHint(error: unknown, label: string, appName: string): string {
   const message = (error instanceof Error ? error.message : String(error)).split(". To specify")[0];
-  return `${label}: ${message} (${appName} ${label} --help shows its flags)`;
+  const page = label === appName ? appName : `${appName} ${label}`;
+  return `${label}: ${message} (${page} --help shows its flags)`;
 }
 
 /** Strict parse; throws `UsageError` on an unknown flag, a bad value or a misplaced argument. */
@@ -382,9 +389,9 @@ function renderFlags<Ctx, R, C>(compiled: Compiled<Ctx, R, C>, keys: string[]): 
   const col = Math.max(...compiled.spec.flags.map((flag) => flag.usage.length)) + 4;
   return flags
     .map((flag) => {
-      const lines = wrap(flag.help, WRAP_COL - col);
+      const lines = wrap(flag.help, WRAP_COL - col - 2);
       const [first = "", ...rest] = lines;
-      return [`  ${flag.usage.padEnd(col)}${first}`, ...rest.map((line) => " ".repeat(col) + line)].join("\n");
+      return [`  ${flag.usage.padEnd(col)}${first}`, ...rest.map((line) => " ".repeat(col + 2) + line)].join("\n");
     })
     .join("\n");
 }

@@ -166,6 +166,20 @@ describe("parseCli", () => {
     expect(parsed.positionals).toEqual(["a", "b"]);
     expect(parsed.args).toEqual(["a", "b"]);
   });
+
+  test("a single-command app accepts its own flags", () => {
+    const spec: CliSpec = { name: "bare", summary: "bare", flags: FLAGS, handler: { min: 0, max: 9, run: noop } };
+    const parsed = parseCli(spec, ["--note", "hi", "--path", "a", "--path", "b", "x"]);
+    expect(parsed.values.note).toBe("hi");
+    expect(parsed.values.path).toEqual(["a", "b"]);
+    expect(parsed.args).toEqual(["x"]);
+  });
+
+  test("a single-command flag error names the app once", () => {
+    const spec: CliSpec = { name: "bare", summary: "bare", flags: FLAGS, handler: { min: 0, max: 9, run: noop } };
+    expect(() => parseCli(spec, ["--bogus"])).toThrow(/bare --help shows its flags/);
+    expect(() => parseCli(spec, ["--bogus"])).not.toThrow(/bare bare/);
+  });
 });
 
 describe("helpText", () => {
@@ -232,6 +246,25 @@ describe("helpText", () => {
     expect(text).toContain("usage: tool sim");
     expect(text).toContain("start");
     expect(text).toContain("end");
+  });
+
+  test("a wrapped flag description aligns under the description column", () => {
+    const spec: CliSpec = {
+      name: "bare",
+      summary: "bare tool",
+      flags: [{ key: "x", type: "string", usage: "--long <value>", help: "word ".repeat(30).trim() }],
+      handler: { min: 0, max: 9, run: noop },
+    };
+    const lines = (helpText(spec, { help: true, positionals: [] }) ?? "").split("\n");
+    const start = lines.findIndex((line) => line.includes("--long <value>"));
+    expect(start).toBeGreaterThan(-1);
+    const column = "  --long <value>    ".length;
+    for (const line of lines.slice(start + 1)) {
+      if (line.trim() === "") break;
+      expect(line.startsWith(" ".repeat(column))).toBe(true);
+      expect(line.startsWith(" ".repeat(column + 1))).toBe(false);
+    }
+    for (const line of lines) expect(line.length).toBeLessThanOrEqual(100);
   });
 
   test("a page with no flags omits the flags heading", () => {

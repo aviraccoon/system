@@ -422,6 +422,10 @@ describe("parseCli", () => {
     expect(() => parseCli(["--date", "01-01-2026"])).toThrow(/--date/);
     expect(() => parseCli(["--idle", "soon"])).toThrow(/--idle/);
   });
+
+  test("rejects a stray positional", () => {
+    expect(() => parseCli(["bogus"])).toThrow(/unexpected argument "bogus"/);
+  });
 });
 
 // ---------- discovery / analyze / run ----------

@@ -3,12 +3,7 @@
  * mobile — observe and act on iOS simulators, Android emulators/devices, and (read-only)
  * physical iPhones.
  *
- *   mobile devices [--json]                            list every target
- *   mobile ui [--device D] [--json]                    screen outline with @N refs
- *   mobile tap @N | X,Y | --label "Text" [--device D]  act
- *   mobile shot [--out FILE] [--device D]              screenshot (also on physical phones)
- *   mobile sim start --project PATH [--device NAME]    open the project + start a session
- *   mobile sim end                                     close the session (they are expensive)
+ *   run `mobile --help` for the command list and flags.
  *
  * Backends:
  *   iOS simulator   Xcode 27 MCP tools through `xcrun mcpbridge` (hierarchy, taps, typing,
@@ -26,7 +21,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { parseArgs } from "node:util";
+import { type CliSpec, type CommandSpec, type FlagSpec, type ParsedCli, runCli } from "../../../../shared/cli";
 
 const BRIDGE_WAIT_MS = 10_000;
 const SH_TIMEOUT_S = 15;
@@ -928,92 +923,220 @@ async function cmdShot(target: Target, out?: string): Promise<void> {
 
 // ---------------------------------------------------------------- main
 
-function usage(): void {
-  console.log(`mobile — observe and act on simulators, emulators and (screenshot-only) phones
+const FLAGS: FlagSpec[] = [
+  {
+    key: "device",
+    type: "string",
+    short: "d",
+    synopsis: "[--device D]",
+    usage: "-d, --device <name>",
+    help: "simulator name/UDID, adb serial, or devicectl device name (default: first booted simulator, else Android, else a physical iPhone)",
+  },
+  {
+    key: "out",
+    type: "string",
+    short: "o",
+    synopsis: "[--out FILE]",
+    usage: "-o, --out <file>",
+    help: "shot: where to write the screenshot",
+  },
+  {
+    key: "label",
+    type: "string",
+    short: "l",
+    synopsis: "[--label TEXT]",
+    usage: "-l, --label <text>",
+    help: "tap: find the element by its label",
+  },
+  { key: "ref", type: "string", synopsis: "[--ref @N]", usage: "--ref <@N>", help: "type: focus this element first" },
+  {
+    key: "duration",
+    type: "string",
+    synopsis: "[--duration S]",
+    usage: "--duration <s>",
+    help: "swipe: gesture duration in seconds (default 0.3)",
+  },
+  {
+    key: "grep",
+    type: "string",
+    short: "g",
+    synopsis: "[--grep TEXT]",
+    usage: "-g, --grep <text>",
+    help: "logs: only lines containing this text",
+  },
+  {
+    key: "project",
+    type: "string",
+    synopsis: "[--project PATH]",
+    usage: "--project <path>",
+    help: "sim start: project to open",
+  },
+  { key: "json", type: "boolean", synopsis: "[--json]", usage: "--json", help: "machine-readable output" },
+  { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" },
+];
 
-  mobile devices [--json]                            list every target
-  mobile ui [--device D] [--json]                    screen outline with @N refs
-  mobile tap @N | X,Y | --label "Text" [--device D]  tap a ref, a point, or a unique label
-  mobile type "Text" [--ref @N] [--device D]         type (optionally focusing a field first)
-  mobile swipe X1,Y1 X2,Y2 [--duration 0.3]          swipe or drag between two points
-  mobile logs [--grep TEXT] [--device D]             recent app log lines
-  mobile shot [--out FILE] [--device D]              screenshot (also on physical phones)
-  mobile sim start --project PATH [--device NAME]    open the project + start a session
-  mobile sim end                                     close the sim session
-
-  --device takes a simulator name/UDID, an adb serial, or a devicectl device name.
-  Default: first booted simulator, else Android, else a physical iPhone.
-  Build and install with the project's build task, not the commands it wraps; if the project
-  has none, run them directly and say which.`);
+/** Typed view the handlers consume. */
+interface Cli {
+  device?: string;
+  out?: string;
+  label?: string;
+  ref?: string;
+  duration?: string;
+  grep?: string;
+  project?: string;
+  json: boolean;
 }
 
-async function main(): Promise<void> {
-  const { values, positionals } = parseArgs({
-    args: process.argv.slice(2),
-    options: {
-      device: { type: "string", short: "d" },
-      out: { type: "string", short: "o" },
-      label: { type: "string", short: "l" },
-      ref: { type: "string" },
-      duration: { type: "string" },
-      grep: { type: "string", short: "g" },
-      project: { type: "string" },
-      json: { type: "boolean", default: false },
-      help: { type: "boolean", short: "h", default: false },
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function toCli(parsed: ParsedCli): Cli {
+  return {
+    device: stringValue(parsed.values.device),
+    out: stringValue(parsed.values.out),
+    label: stringValue(parsed.values.label),
+    ref: stringValue(parsed.values.ref),
+    duration: stringValue(parsed.values.duration),
+    grep: stringValue(parsed.values.grep),
+    project: stringValue(parsed.values.project),
+    json: parsed.values.json === true,
+  };
+}
+
+const COMMANDS: CommandSpec<void, void, Cli>[] = [
+  {
+    name: "devices",
+    args: "devices",
+    summary: "list every target",
+    flags: ["json"],
+    handler: { min: 0, max: 0, run: (_ctx, _args, cli) => cmdDevices(cli.json) },
+  },
+  {
+    name: "ui",
+    args: "ui",
+    summary: "screen outline with @N refs",
+    flags: ["device", "json"],
+    handler: { min: 0, max: 0, run: (_ctx, _args, cli) => cmdUi(resolveTarget(cli.device), cli.json) },
+  },
+  {
+    name: "tap",
+    args: "tap @N | X,Y",
+    summary: "tap a ref, a point, or a unique label",
+    flags: ["device", "label"],
+    handler: {
+      min: 0,
+      max: 1,
+      run: (_ctx, args, cli) => {
+        const spec = cli.label ?? args[0];
+        if (!spec) throw new MobileError("specify @N, X,Y or --label TEXT");
+        return cmdTap(resolveTarget(cli.device), spec);
+      },
     },
-    allowPositionals: true,
-  });
-  const [command, ...rest] = positionals;
-  if (values.help || !command) return usage();
+  },
+  {
+    name: "type",
+    args: 'type "Text"',
+    summary: "type (optionally focusing a field first)",
+    flags: ["device", "ref", "label"],
+    handler: {
+      min: 1,
+      max: 1,
+      run: (_ctx, args, cli) => cmdType(resolveTarget(cli.device), args[0] ?? "", cli.ref ?? cli.label),
+    },
+  },
+  {
+    name: "swipe",
+    args: "swipe X1,Y1 X2,Y2",
+    summary: "swipe or drag between two points",
+    flags: ["device", "duration"],
+    handler: {
+      min: 2,
+      max: 2,
+      run: (_ctx, args, cli) => {
+        const duration = cli.duration === undefined ? 0.3 : Number(cli.duration);
+        if (Number.isNaN(duration)) throw new MobileError(`--duration must be seconds (got '${cli.duration}')`);
+        return cmdSwipe(resolveTarget(cli.device), args[0] ?? "", args[1] ?? "", duration);
+      },
+    },
+  },
+  {
+    name: "logs",
+    args: "logs",
+    summary: "recent app log lines",
+    flags: ["device", "grep"],
+    handler: { min: 0, max: 0, run: (_ctx, _args, cli) => cmdLogs(resolveTarget(cli.device), cli.grep) },
+  },
+  {
+    name: "shot",
+    args: "shot",
+    summary: "screenshot (also on physical phones)",
+    flags: ["device", "out"],
+    handler: { min: 0, max: 0, run: (_ctx, _args, cli) => cmdShot(resolveTarget(cli.device), cli.out) },
+  },
+  {
+    name: "sim",
+    args: "sim",
+    summary: "simulator session (they are expensive; end it when done)",
+    commands: [
+      {
+        name: "start",
+        args: "start [<path>]",
+        summary: "open the project and start a session",
+        flags: ["project", "device"],
+        handler: {
+          min: 0,
+          max: 1,
+          run: async (_ctx, args, cli) => {
+            const session = await cmdSimStart(cli.project ?? args[0] ?? "", cli.device);
+            console.log(`session: ${session.interactionSessionKey} device: ${session.deviceUUID ?? "current"}`);
+          },
+        },
+      },
+      {
+        name: "end",
+        args: "end",
+        summary: "close the sim session",
+        handler: { min: 0, max: 0, run: () => cmdSimEnd() },
+      },
+    ],
+  },
+];
 
-  switch (command) {
-    case "devices":
-      return cmdDevices(values.json);
-    case "sim": {
-      if (rest[0] === "start") {
-        const session = await cmdSimStart(values.project ?? rest[1] ?? "", values.device);
-        console.log(`session: ${session.interactionSessionKey} device: ${session.deviceUUID ?? "current"}`);
-        return;
+const SPEC: CliSpec<void, void, Cli> = {
+  name: "mobile",
+  summary: "observe and act on simulators, emulators and (screenshot-only) phones",
+  intro: `build and install with the project's build task, not the commands this wraps; if the project
+has none, run them directly and say which.`,
+  flags: FLAGS,
+  commands: COMMANDS,
+};
+
+async function main(): Promise<number> {
+  return runCli<void, void, Cli>({
+    spec: SPEC,
+    argv: process.argv.slice(2),
+    adapt: toCli,
+    mapError: (error) => {
+      if (error instanceof MobileError) {
+        const lines = [`mobile: ${error.message}`];
+        if (error.hint) lines.push(`  hint: ${error.hint}`);
+        return { code: 1, lines };
       }
-      if (rest[0] === "end") return cmdSimEnd();
-      throw new MobileError("usage: mobile sim start --project PATH | mobile sim end");
-    }
-    case "ui":
-      return cmdUi(resolveTarget(values.device), values.json);
-    case "tap": {
-      const spec = values.label ?? rest[0];
-      if (!spec) throw new MobileError("specify @N, X,Y or --label TEXT");
-      return cmdTap(resolveTarget(values.device), spec);
-    }
-    case "type": {
-      const text = rest[0];
-      if (text === undefined) throw new MobileError('usage: mobile type "Text" [--ref @N]');
-      return cmdType(resolveTarget(values.device), text, values.ref ?? values.label);
-    }
-    case "swipe": {
-      const [from, to] = rest;
-      if (!from || !to) throw new MobileError("usage: mobile swipe X1,Y1 X2,Y2 [--duration 0.3]");
-      const duration = values.duration === undefined ? 0.3 : Number(values.duration);
-      if (Number.isNaN(duration)) throw new MobileError(`--duration must be seconds (got '${values.duration}')`);
-      return cmdSwipe(resolveTarget(values.device), from, to, duration);
-    }
-    case "logs":
-      return cmdLogs(resolveTarget(values.device), values.grep);
-    case "shot":
-      return cmdShot(resolveTarget(values.device), values.out);
-    default:
-      throw new MobileError(`unknown command '${command}'`, "run `mobile --help`");
-  }
+      // A bridge or assertion failure: keep the stack, the only trace a live run leaves.
+      const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+      return { code: 1, lines: ["mobile: unexpected failure:", detail] };
+    },
+  });
 }
 
-try {
-  await main();
-} catch (err) {
-  if (err instanceof MobileError) {
-    console.error(`mobile: ${err.message}`);
-    if (err.hint) console.error(`  hint: ${err.hint}`);
-  } else {
-    console.error("mobile: unexpected failure:", err);
-  }
-  process.exit(1);
+if (import.meta.main) {
+  main()
+    .then((code) => {
+      process.exitCode = code;
+    })
+    .catch((error: unknown) => {
+      console.error("mobile: unexpected failure:", error);
+      process.exit(1);
+    });
 }

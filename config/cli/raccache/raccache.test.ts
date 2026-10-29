@@ -1,4 +1,7 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Device } from "./config";
 import { parseCli, selectDevices } from "./raccache";
 
@@ -35,6 +38,12 @@ describe("parseCli", () => {
     expect(cli.target).toBe("dev");
   });
 
+  test("a flag the command does not take is rejected", () => {
+    expect(() => parseCli(["run", "--watch"])).toThrow(/Unknown option/);
+    expect(() => parseCli(["status", "--dry-run"])).toThrow(/Unknown option/);
+    expect(() => parseCli(["pause", "--only", "dev"])).toThrow(/Unknown option/);
+  });
+
   test("--device is repeatable", () => {
     const cli = parseCli(["pause", "--device", "a", "--device", "b"]);
     expect(cli.command).toBe("pause");
@@ -49,6 +58,47 @@ describe("parseCli", () => {
 
   test("rejects unknown commands", () => {
     expect(() => parseCli(["frobnicate"])).toThrow();
+  });
+});
+
+describe("CLI process", () => {
+  let home = "";
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "raccache-test-"));
+  });
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  async function runRaccache(...args: string[]): Promise<{ stderr: string; code: number }> {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "raccache.ts"), ...args], {
+      env: {
+        ...process.env,
+        HOME: home,
+        XDG_CONFIG_HOME: join(home, ".config"),
+        XDG_CACHE_HOME: join(home, ".cache"),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    return { stderr, code };
+  }
+
+  test("an unknown command exits 2", async () => {
+    const result = await runRaccache("frob");
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('unknown command "frob"');
+  });
+
+  test("a flag on the wrong command exits 2", async () => {
+    const result = await runRaccache("run", "--json");
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("raccache run --help");
   });
 });
 

@@ -5,30 +5,82 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { parseArgs } from "node:util";
+import {
+  type CliSpec,
+  type FlagSpec,
+  helpText as sharedHelpText,
+  parseCli as sharedParseCli,
+  UsageError,
+} from "../../shared/cli";
 import { localDay, renderJson, renderText, shiftDay, zonedEpoch } from "./format";
 import { buildReport, groupLineages, type LineageReport, parseSessionFile } from "./sessions";
 
-const HELP = `session-span — measure pi session spans
+const FLAGS: FlagSpec[] = [
+  {
+    key: "project",
+    type: "string",
+    usage: "--project <name>",
+    help: "only session dirs whose name contains <name>",
+  },
+  {
+    key: "file",
+    type: "string",
+    multiple: true,
+    usage: "--file <path>",
+    help: "explicit session file (repeatable; skips discovery)",
+  },
+  {
+    key: "session-dir",
+    type: "string",
+    usage: "--session-dir <dir>",
+    help: "sessions root (default: $PI_SESSION_DIR or ~/.pi/agent/sessions)",
+  },
+  { key: "date", type: "string", usage: "--date <d>", help: "today (default) or YYYY-MM-DD" },
+  {
+    key: "idle",
+    type: "string",
+    usage: "--idle <minutes>",
+    help: "gap length that counts as idle (default 15)",
+  },
+  {
+    key: "report",
+    type: "string",
+    usage: "--report <minutes>",
+    help: "shortest gap listed (default 5)",
+  },
+  {
+    key: "since",
+    type: "string",
+    usage: "--since <t>",
+    help: "keep rows from t on; HH:MM[:SS] on the report day or a local datetime",
+  },
+  {
+    key: "until",
+    type: "string",
+    usage: "--until <t>",
+    help: "keep rows up to t; same forms as --since",
+  },
+  { key: "json", type: "boolean", usage: "--json", help: "machine-readable output" },
+  { key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" },
+];
 
-usage: session-span [--project <name>] [--date today|YYYY-MM-DD] [--since <t>] [--until <t>]
+const SPEC: CliSpec = {
+  name: "session-span",
+  summary: "measure pi session spans",
+  usage: "session-span [--project <name>] [--date today|YYYY-MM-DD] [--since <t>] [--until <t>]",
+  intro: `selects sessions whose rows fall on the day (default: today) and reports, per
+conversation: files, rows, first/last, span, gaps >= --report minutes classified
+as work/idle/unknown, and active time.`,
+  flags: FLAGS,
+};
 
-selects sessions whose rows fall on the day (default: today) and reports, per
-conversation: files, rows, first/last, span, gaps ≥ --report minutes classified
-as work/idle/unknown, and active time.
+function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
 
-flags:
-  --project <name>      only session dirs whose name contains <name>
-  --file <path>         explicit session file (repeatable; skips discovery)
-  --session-dir <dir>   sessions root (default: $PI_SESSION_DIR or ~/.pi/agent/sessions)
-  --date <d>            today (default) or YYYY-MM-DD
-  --idle <minutes>      gap length that counts as idle (default 15)
-  --report <minutes>    shortest gap listed (default 5)
-  --since <t>           keep rows from t on; HH:MM[:SS] on the report day or a local datetime
-  --until <t>           keep rows up to t; same forms as --since
-  --json                machine-readable output
-  -h, --help            this help
-`;
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
 
 export interface Cli {
   project?: string;
@@ -61,30 +113,24 @@ export interface RunResult {
 
 /** Strict parse; throws on unknown flags or bad values. Exported for tests. */
 export function parseCli(argv: string[]): Cli {
-  const { values } = parseArgs({
-    args: argv,
-    options: {
-      project: { type: "string" },
-      file: { type: "string", multiple: true },
-      "session-dir": { type: "string" },
-      date: { type: "string" },
-      idle: { type: "string" },
-      report: { type: "string" },
-      since: { type: "string" },
-      until: { type: "string" },
-      json: { type: "boolean" },
-      help: { type: "boolean", short: "h" },
-    },
-  });
-  const date = values.date;
+  const parsed = sharedParseCli(SPEC, argv);
+  if (parsed.positionals.length > 0) {
+    throw new UsageError(`unexpected argument "${parsed.positionals[0]}"`);
+  }
+  const { values } = parsed;
+  const date = stringValue(values.date);
   if (date !== undefined && date !== "today" && !(DAY.test(date) && validDay(date))) {
     throw new Error(`--date must be today or yyyy-mm-dd, got "${date}"`);
   }
-  const idle = values.idle === undefined ? 15 : positiveNumber("--idle", values.idle);
-  const report = values.report === undefined ? 5 : positiveNumber("--report", values.report);
+  const rawIdle = stringValue(values.idle);
+  const rawReport = stringValue(values.report);
+  const idle = rawIdle === undefined ? 15 : positiveNumber("--idle", rawIdle);
+  const report = rawReport === undefined ? 5 : positiveNumber("--report", rawReport);
+  const since = stringValue(values.since);
+  const until = stringValue(values.until);
   for (const [flag, value] of [
-    ["--since", values.since],
-    ["--until", values.until],
+    ["--since", since],
+    ["--until", until],
   ] as const) {
     if (value === undefined) continue;
     const clockPart = CLOCK.test(value) ? value : DATETIME.test(value) ? (value.split("T")[1] ?? "") : null;
@@ -94,16 +140,16 @@ export function parseCli(argv: string[]): Cli {
     }
   }
   return {
-    project: values.project,
-    files: values.file ?? [],
-    sessionDir: values["session-dir"],
+    project: stringValue(values.project),
+    files: stringList(values.file),
+    sessionDir: stringValue(values["session-dir"]),
     date,
     idle,
     report,
-    since: values.since,
-    until: values.until,
-    json: values.json ?? false,
-    help: values.help ?? false,
+    since,
+    until,
+    json: values.json === true,
+    help: values.help === true,
   };
 }
 
@@ -222,7 +268,10 @@ export function run(argv: string[], deps: Deps): RunResult {
     const message = error instanceof Error ? error.message : String(error);
     return { text: `error: ${message}`, json: { error: message }, code: 1, jsonMode };
   }
-  if (cli.help) return { text: HELP, json: { help: HELP }, code: 0, jsonMode: false };
+  if (cli.help) {
+    const help = sharedHelpText(SPEC, { help: true, positionals: [] }) ?? "";
+    return { text: help, json: { help }, code: 0, jsonMode: false };
+  }
   try {
     const { reports, matchedBeforeWindow } = analyze(deps, cli);
     if (reports.length === 0) {
