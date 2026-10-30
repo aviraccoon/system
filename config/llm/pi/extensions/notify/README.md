@@ -12,7 +12,7 @@ Both triggers are pi events:
 - `ui_prompt_start`: any extension opened a blocking dialog, `custom()` included,
   so a dialog added later needs no cooperation here. `ui_prompt_end` closes it.
 
-## Two transports
+## Frame and push
 
 **Terminal frame.** Written for every trigger, in the interactive UI, when the
 environment identifies a notification protocol (see Terminal support). It carries
@@ -35,6 +35,30 @@ nobody answers costs the run.
   `PI_NOTIFY_MIN_RUN_SECONDS`.
 - A run ended with Escape is a decision, not news: it never notifies.
 
+## Sound
+
+A cue plays when a run finishes, or when a dialog starts waiting, in the
+interactive UI, once the user is away. It is generated rather than taken from a
+sound file, and played with `afplay`: a terminal notification frame has no sound
+field, so the terminal never hears about it.
+
+The melody is a function of the project directory name, the same name the frame
+and the push carry: five notes from a major pentatonic, so no project gets a
+dissonant interval. A finished run plays the motif as a bell arpeggio that
+resolves. A waiting dialog plays the first four notes a fifth up, twice, with a
+hard attack and a cut tail: the repetition is the "again" signal, and the cut
+tail leaves it unresolved.
+
+Cues are cached in `~/Library/Caches/llm/notify/`, one file per project and
+shape. The cache is disposable: a missing cue is regenerated on next use. The
+synthesis version is in the filename, and a file from another version is deleted
+on the next cue.
+
+A cue waits for the same silence a push does, at a lower threshold, and does not
+require a long run: a stray cue costs a sound, a stray push buzzes a phone.
+
+Cues play on macOS only: the player is `afplay`. Elsewhere they stay off.
+
 ## Terminal support
 
 - Ghostty, WezTerm, foot, rxvt-unicode: OSC 777.
@@ -50,9 +74,10 @@ nobody answers costs the run.
 
 ## Configuration
 
-Environment only; nothing is written to disk except the optional topic file.
+The cue cache under `~/Library/Caches/llm/notify/` and the optional topic file
+are the only files it touches.
 
-- `PI_NOTIFY_OFF=1` turns both transports off.
+- `PI_NOTIFY_OFF=1` turns every channel off.
 - `PI_NOTIFY_NTFY_URL` is an ntfy topic or a full URL; a bare topic means ntfy.sh.
 - `PI_NOTIFY_NTFY_FILE` is a file holding the topic, read when the variable is
   unset. Default `~/.config/llm/notify-ntfy-url`.
@@ -62,6 +87,10 @@ Environment only; nothing is written to disk except the optional topic file.
   means always away.
 - `PI_NOTIFY_MIN_RUN_SECONDS` is the shortest run worth a push. Default 300; `0`
   sets no minimum, and the away gate still applies.
+- `PI_NOTIFY_SOUNDS` set to `0`, `off` or `false` silences the cues. Unset, they
+  play.
+- `PI_NOTIFY_SOUNDS_IDLE_SECONDS` is the idle time that counts as away for a cue.
+  Default 20; `0` plays a cue whenever a run settles or a dialog opens.
 
 The topic is a secret: export `PI_NOTIFY_NTFY_URL` from the environment that
 starts pi, or keep it in the file. No URL configured means no push, silently. A
@@ -70,6 +99,7 @@ message.
 
 ## Testing
 
-`/notify test` writes a terminal frame and, when a topic is configured, sends a
-push. It reports which of the two it reached, including a terminal with no
-protocol or a protocol forced off.
+`/notify test` writes a terminal frame, plays both cues in order (finished run,
+then waiting dialog) and, when a topic is configured, sends a push. It reports
+what each channel reached: a terminal with no protocol, a protocol forced off,
+and a cue that could not be written or played.

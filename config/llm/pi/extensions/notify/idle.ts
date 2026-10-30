@@ -31,7 +31,8 @@ export function parseHidIdleSeconds(output: string): number | null {
   return Number.isFinite(nanos) ? nanos / 1e9 : null;
 }
 
-function seconds(raw: string | undefined, fallback: number): number {
+/** A non-negative number from the environment, or the fallback. */
+export function seconds(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw.trim() === "") return fallback;
   const value = Number(raw);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
@@ -45,7 +46,7 @@ export function readPolicy(env: Record<string, string | undefined>): PushPolicy 
   };
 }
 
-export function away(idleSeconds: number | null, policy: PushPolicy): boolean {
+export function away(idleSeconds: number | null, policy: Pick<PushPolicy, "idleSeconds">): boolean {
   return idleSeconds === null || idleSeconds >= policy.idleSeconds;
 }
 

@@ -9,10 +9,13 @@
  *   for every dialog kind, `custom()` included, so a dialog added later needs no
  *   cooperation from this extension.
  *
- * Two transports, gated differently: the terminal frame is local and always
- * written; a push leaves the machine (ntfy.sh by default, where anyone holding
- * the topic can read it) and only fires when nobody is at the keyboard. See
- * `idle.ts` for that rule and `format.ts` for what each transport carries.
+ * Two transports and a local cue, gated differently: the terminal frame is local
+ * and always written; a push leaves the machine (ntfy.sh by default, where anyone
+ * holding the topic can read it) and only fires when nobody is at the keyboard; a
+ * cue plays locally when the user is away, at a lower idle threshold and with no
+ * minimum run, and carries the project and which event fired rather than the
+ * run's facts. See `idle.ts` for that rule, `format.ts` for what the frame and the
+ * push carry, and `sound.ts` for the cue.
  *
  * The interactive UI only: an rpc client renders those dialogs itself, and a
  * terminal frame written into its stdout would corrupt the JSON-RPC stream.
@@ -35,11 +38,14 @@ import {
   settledNote,
   settledPushBody,
 } from "./format";
-import { hidIdleSeconds, pushBlocked, pushSettled, readPolicy } from "./idle";
+import { away, hidIdleSeconds, pushBlocked, pushSettled, readPolicy } from "./idle";
 import { push, resolveNtfyUrl } from "./ntfy";
 import { noFrameReason, notificationBytes, parseTmuxProgram } from "./osc";
+import { type CueKind, playCue, playCueAndWait, soundEnabled, soundIdleSeconds } from "./sound";
 
 type RunState = RunFacts & AnswerFacts;
+
+const CUE_KINDS: CueKind[] = ["done", "needsyou"];
 
 function off(env: NodeJS.ProcessEnv): boolean {
   return env.PI_NOTIFY_OFF === "1";
@@ -71,6 +77,10 @@ function outerProgram(env: NodeJS.ProcessEnv): string | null {
 
 export default function notify(pi: ExtensionAPI) {
   const policy = readPolicy(process.env);
+  // A cue is gated lower than a push, and has no minimum run: it costs a sound,
+  // not a buzz on a phone.
+  const cuePolicy = { idleSeconds: soundIdleSeconds(process.env) };
+  const cues = soundEnabled(process.env);
   const terminal = off(process.env) ? null : outerProgram(process.env);
   let run: RunState | null = null;
   let warned = false;
@@ -83,6 +93,25 @@ export default function notify(pi: ExtensionAPI) {
       return null;
     }
     return noFrameReason(process.env.PI_NOTIFY_PROTOCOL);
+  }
+
+  /**
+   * Play a project cue once the user is away. Never blocks and never throws: the
+   * idle probe runs in the background, and a cue that cannot be written or played
+   * is simply absent.
+   */
+  function playWhenAway(project: string, kind: CueKind, idle: () => Promise<number | null>): void {
+    void idle()
+      .then((seconds) => {
+        if (away(seconds, cuePolicy)) playCue(project, kind);
+      })
+      .catch(() => undefined);
+  }
+
+  /** The `ioreg` probe, started on first use and shared by both gates. */
+  function idleProbe(): () => Promise<number | null> {
+    let pending: Promise<number | null> | null = null;
+    return () => (pending ??= hidIdleSeconds());
   }
 
   /** Never rejects and never blocks a run: a push is best effort. */
@@ -132,24 +161,31 @@ export default function notify(pi: ExtensionAPI) {
     run.truncated = answer.truncated;
   });
 
-  // Both push helpers are called as `void`: never rejects and never blocks the
+  // The push helpers are called as `void`: never rejects and never blocks the
   // caller. The idle probe waits on a subprocess, and pi awaits the settled event
   // before the session goes idle, so nothing here may add a throw or an await at
-  // a call site.
-  // The gates that cost nothing run before the idle probe, which spawns `ioreg`:
-  // most settled runs are below the length threshold and most machines have no
-  // topic configured.
-  async function pushSettledNote(ctx: ExtensionContext, facts: RunFacts, context: SettledContext): Promise<void> {
-    const url = pushUrl(process.env);
-    if (!url || context.now - facts.startedAt < policy.minRunMs) return;
-    if (!pushSettled(context.now - facts.startedAt, await hidIdleSeconds(), policy)) return;
+  // a call site. The caller probes idle once and hands the promise to both gates,
+  // but only when a cue or a topic makes the answer matter.
+  async function pushSettledNote(
+    ctx: ExtensionContext,
+    url: string,
+    facts: RunFacts,
+    context: SettledContext,
+    idle: () => Promise<number | null>,
+  ): Promise<void> {
+    if (context.now - facts.startedAt < policy.minRunMs) return;
+    if (!pushSettled(context.now - facts.startedAt, await idle(), policy)) return;
     await sendPush(ctx, url, "pi done", settledPushBody(facts, context), "default");
   }
 
-  async function pushBlockedNote(ctx: ExtensionContext, context: { project: string }, kind: string): Promise<void> {
-    const url = pushUrl(process.env);
-    if (!url) return;
-    if (!pushBlocked(await hidIdleSeconds(), policy)) return;
+  async function pushBlockedNote(
+    ctx: ExtensionContext,
+    url: string,
+    context: { project: string },
+    kind: string,
+    idle: () => Promise<number | null>,
+  ): Promise<void> {
+    if (!pushBlocked(await idle(), policy)) return;
     await sendPush(ctx, url, "pi needs you", blockedPushBody(context, kind), "high");
   }
 
@@ -165,18 +201,29 @@ export default function notify(pi: ExtensionAPI) {
       snippet: facts.snippet,
     };
     writeFrame(settledNote(facts, context));
-    void pushSettledNote(ctx, facts, context);
+    const url = pushUrl(process.env);
+    if (!url && !cues) return;
+    // One probe per event, shared by both gates. The push helper calls it after
+    // its min-run gate; a cue needs it up front, since the away gate is what
+    // decides whether the cue plays at all.
+    const idle = idleProbe();
+    if (cues) playWhenAway(context.project, "done", idle);
+    if (url) void pushSettledNote(ctx, url, facts, context, idle);
   });
 
   pi.on("ui_prompt_start", (event, ctx) => {
     if (off(process.env) || ctx.mode !== "tui") return;
     const context = { project: basename(ctx.cwd) };
     writeFrame(blockedNote({ kind: event.kind, title: event.title }, context));
-    void pushBlockedNote(ctx, context, event.kind);
+    const url = pushUrl(process.env);
+    if (!url && !cues) return;
+    const idle = idleProbe();
+    if (cues) playWhenAway(context.project, "needsyou", idle);
+    if (url) void pushBlockedNote(ctx, url, context, event.kind, idle);
   });
 
   pi.registerCommand("notify", {
-    description: "Send a test notification through the terminal frame and the push channel",
+    description: "Send a test notification through the terminal frame, the cues and the push channel",
     handler: async (_args, ctx) => {
       if (off(process.env) || ctx.mode !== "tui") {
         ctx.ui.notify("notify: disabled, or outside the interactive UI", "info");
@@ -185,14 +232,26 @@ export default function notify(pi: ExtensionAPI) {
       const project = basename(ctx.cwd);
       const frame =
         writeFrame({ title: "pi notify test", body: `${project}, terminal frame` }) ?? "terminal frame written";
+      // Awaited one at a time: the fire-and-forget player returns immediately, so
+      // looping through both would mix the two shapes instead of comparing them.
+      const sound: string[] = [];
+      if (cues) {
+        for (const kind of CUE_KINDS) {
+          const result = await playCueAndWait(project, kind);
+          sound.push(`${kind} ${result.played ? "played" : result.reason}`);
+        }
+      }
+      const sounds = sound.length > 0 ? sound.join(", ") : "disabled";
       const url = pushUrl(process.env);
       if (!url) {
-        ctx.ui.notify(`notify: ${frame}; no push URL configured`, "info");
+        ctx.ui.notify(`notify: ${frame}; sounds: ${sounds}; no push URL configured`, "info");
         return;
       }
       const result = await push(url, { title: "pi notify test", body: `${project}, push` });
       ctx.ui.notify(
-        result.sent ? `notify: ${frame}, push sent` : `notify: ${frame}, push failed: ${result.reason}`,
+        result.sent
+          ? `notify: ${frame}; sounds: ${sounds}; push sent`
+          : `notify: ${frame}; sounds: ${sounds}; push failed: ${result.reason}`,
         result.sent ? "info" : "warning",
       );
     },
