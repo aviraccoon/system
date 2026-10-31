@@ -7,8 +7,10 @@ description: Create or edit agent skills - global skills in the ~/system repo (c
 
 Create and edit agent skills. Each skill is a directory with SKILL.md following the Agent Skills specification. Two targets exist:
 
-- **Global** — source of truth is the ~/system repo at `config/llm/skills/<name>/`; home-manager deploys it to `~/.pi/agent/skills` (nix-store symlinks). Edit the repo source, never the deployed copy (nix store is read-only); changes go live on the next home-manager switch. Commit per ~/system conventions.
+- **Global** — a shared skills directory owned by the user's dotfiles manager, linked into `~/.pi/agent/skills/`. On this machine it is usually `~/system/config/llm/skills/<name>`; otherwise follow the deployed symlink to its end to find the source.
 - **Project-local** — `<project>/.agents/skills/<name>/SKILL.md`, the cross-harness standard location (Claude Code and Codex read it too). pi loads project skills only after the project is trusted. Always use the `<name>/SKILL.md` directory shape — bare root `.md` files in `.agents/skills/` are ignored. Commit in the project repo per its conventions.
+
+A deployed chain that ends at a repo directory makes a file edit live, with no deployment step; one that ends in a store path is read-only. A new global skill directory appears only after the deployment step (`mise nix-switch`), which the user runs. Removing or renaming one takes effect at once: the stale entry dangles and agents skip it, and a renamed skill reappears only after the step. Commit a global skill's change in its source repo, per that repo's conventions.
 
 Ask which target when ambiguous. Heuristic: the skill is about one project's domain or machinery → project-local; it would make sense in any repo → global.
 
@@ -31,9 +33,11 @@ Ask which target when ambiguous. Heuristic: the skill is about one project's dom
 
 4. **Review with user** — present the draft, ask what's missing or unclear
 
+5. **Deploy a new global skill**: stage the directory in the source repo, add it to the deployment's skill list if that list is explicit, then ask the user to run the deployment step
+
 ### Edit Mode
 
-1. Read the existing SKILL.md and any referenced files (from the global source or the project path — for global skills, edit the ~/system source, not the deployed nix-store symlink)
+1. Read the existing SKILL.md and any referenced files (for a global skill, the deployed path and the source are the same file; see the deployment rule above for which are editable)
 2. Make changes per user request
 3. Preserve existing structure (references/, scripts/) unless restructuring is needed
 
