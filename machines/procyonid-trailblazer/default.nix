@@ -31,18 +31,11 @@
         max-free = lib.mkForce 0;
         auto-optimise-store = true; # hardlink identical files, saves space with GNOME+KDE overlap
       };
-      # sshd defaults assume many clients. Here every connection arrives from one
-      # address (the slirp gateway, 10.0.2.2), and nix opens a burst of them for
-      # parallel remote builds: past 10 unauthenticated connections sshd drops a
-      # share of new ones ("banner exchange: Broken pipe" on the client), and
-      # OpenSSH's per-source penalties then refuse the address outright ("Not
-      # allowed at this time"). Losing a connection while a derivation with
-      # allowSubstitutes = false is due (etc-host.conf, the pam files) fails the
-      # whole switch.
-      services.openssh.settings = {
-        PerSourcePenalties = "no";
-        MaxStartups = "100:30:200";
-      };
+      # sshd's default MaxStartups throttles past 10 unauthenticated
+      # connections, and a burst of parallel remote builds can exceed that: it
+      # drops a share of new ones before the banner, which libssh reports as
+      # `banner exchange: Broken pipe`.
+      services.openssh.settings.MaxStartups = "100:30:200";
     };
   };
 
