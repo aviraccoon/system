@@ -12,6 +12,7 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **edit-guard** | Content-policy checks on edited files and bash commands; prose edits gated on the writing-style skill, dispatches gated on a current, linked journal |
 | **env-guard** | Refuses `bash` calls that break a project's environment policy (dependency, build, test or dev-server work a project keeps in a container); policy is prose in `~/notes/llm/<project>/.agents/environment.json`, the refusal cites the clause when the judge names one, `/guard` grants host work for a session |
 | **harvest** | Timer status pill (running/idle) in sessions whose journal meta.json sets a `harvest` flag; refreshed after each turn |
+| **jobs** | `bash` that promotes a command still running after 60 s to a background job; completion is pushed as a message, `/jobs` lists, tails and kills, and the footer shows this directory's running jobs |
 | **journal** | Journal notes, project instructions and cross-project context injected at session start, re-injected after compaction, env var overrides |
 | **lsp** | Language server integration -- auto-diagnostics on edit/write, go-to-definition, hover, references, symbols, rename, code actions. Also runs CLI linters |
 | **model-policy** | Per-project model policies based on provider tags. Blocks non-compliant models for sensitive projects (e.g., local/ZDR only) |
