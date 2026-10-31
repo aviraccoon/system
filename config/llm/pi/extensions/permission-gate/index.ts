@@ -43,10 +43,19 @@ import {
   type TirithBanner,
 } from "./confirm-ui";
 import {
+  DIALOG_TIMEOUT_ENV,
+  describeDialogTimeout,
+  formatDuration,
+  nextDialogTimeout,
+  nextTimeoutStreak,
+  parseTimeoutSeconds,
+  resolveDialogBudget,
+} from "./dialog-timeout";
+import {
   applyEditFloor,
-  blockReason,
   classificationEntry,
   classifierInput,
+  confirmBlockReason,
   describeToolCall,
   factorsToExplanation,
   mergeExplanations,
@@ -98,6 +107,10 @@ const decisionsEnabled = process.env.PI_JEV !== "off";
 /** Mode and auto-classify live here between runs; everything else stays in memory. */
 const SETTINGS_PATH = settingsPath(homedir());
 
+/** Our RPC timer fires this much before pi's own dialog timeout, so the result can say
+ *  which of the two ended it. */
+const RPC_TIMEOUT_MARGIN_MS = 250;
+
 export default function permissionGate(pi: ExtensionAPI) {
   const state: GateState = createInitialState();
   // A missing, unreadable or malformed file leaves the fresh defaults. The read
@@ -115,6 +128,11 @@ export default function permissionGate(pi: ExtensionAPI) {
     if (!saveSettings(SETTINGS_PATH, currentSettings(state))) {
       ctx.ui.notify("Permission settings were not saved; this session keeps them", "warning");
     }
+  }
+
+  /** The dialog deadline in force: the environment wins over the saved preference. */
+  function dialogTimeoutSeconds(): number {
+    return resolveDialogBudget(process.env[DIALOG_TIMEOUT_ENV], state.dialogTimeoutSeconds).seconds;
   }
 
   /** Notes captured this turn, flushed together as one user message. */
@@ -364,7 +382,42 @@ export default function permissionGate(pi: ExtensionAPI) {
     return { promise: Promise.resolve(result), abort: () => {} };
   }
 
-  /** Show confirmation dialog with optional inline note. */
+  /**
+   * The dialog in a mode without a TUI: pi's own confirm, relayed to the parent terminal by
+   * the subagent extension. It has no touch hook, so it counts down from open.
+   */
+  async function confirmOverRpc(
+    ctx: ExtensionContext,
+    title: string,
+    options: string[],
+    seconds: number,
+  ): Promise<ConfirmResult> {
+    const budgetMs = seconds * 1000;
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer =
+      seconds > 0
+        ? setTimeout(
+            () => {
+              timedOut = true;
+              controller.abort();
+            },
+            Math.max(0, budgetMs - RPC_TIMEOUT_MARGIN_MS),
+          )
+        : null;
+    try {
+      const confirmed = await ctx.ui.confirm(
+        title,
+        options.join(", "),
+        seconds > 0 ? { timeout: budgetMs, signal: controller.signal } : undefined,
+      );
+      return { choice: !timedOut && confirmed ? options[0] : null, note: "", explanation: null, timedOut };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  /** Show confirmation dialog with optional inline note, under the dialog deadline. */
   async function confirm(
     ctx: ExtensionContext,
     title: string,
@@ -373,6 +426,8 @@ export default function permissionGate(pi: ExtensionAPI) {
     diffBody?: DiffBody,
     detailsBody?: DetailsBody,
     tirith?: TirithBanner,
+    toolName?: string,
+    toolCallId?: string,
   ): Promise<ConfirmResult> {
     // In non-TUI modes (rpc/print/json), ctx.ui.custom() returns undefined — no
     // TUI to render the multi-option dialog. Fall back to ctx.ui.confirm(), which
@@ -383,18 +438,36 @@ export default function permissionGate(pi: ExtensionAPI) {
     // (confirm/select/input work there), but custom() does not. Guarding on
     // !ctx.hasUI skipped this branch in subagents, so confirm() fell through to
     // custom() → undefined → crash in handleDialogAutoToggle (toggledAutoClassify).
+    const timeoutSeconds = dialogTimeoutSeconds();
+    let result: ConfirmResult;
     if (ctx.mode !== "tui") {
-      const confirmed = await ctx.ui.confirm(title, options.join(", "));
-      return { choice: confirmed ? options[0] : null, note: "", explanation: null };
+      result = await confirmOverRpc(ctx, title, options, timeoutSeconds);
+    } else {
+      const uiOptions: ConfirmUIOptions = {
+        autoClassify: state.autoClassify === "on",
+        hasExplainRole: classifierAvailable,
+        timeoutSeconds,
+      };
+      result = await ctx.ui.custom<ConfirmResult>((tui, theme, kb, done) =>
+        createConfirmUI(tui, theme, kb, done, title, options, explanation, uiOptions, diffBody, detailsBody, tirith),
+      );
     }
-
-    const uiOptions: ConfirmUIOptions = {
-      autoClassify: state.autoClassify === "on",
-      hasExplainRole: classifierAvailable,
-    };
-    return ctx.ui.custom<ConfirmResult>((tui, theme, kb, done) =>
-      createConfirmUI(tui, theme, kb, done, title, options, explanation, uiOptions, diffBody, detailsBody, tirith),
-    );
+    if (result.timedOut) {
+      state.consecutiveTimeouts = nextTimeoutStreak(state.consecutiveTimeouts, true);
+      ctx.ui.notify(
+        `Permission dialog unanswered after ${formatDuration(timeoutSeconds)}; ${title} was denied`,
+        "warning",
+      );
+      pi.appendEntry("permission_gate", {
+        event: "dialog_timeout",
+        toolName,
+        toolCallId,
+        consecutive: state.consecutiveTimeouts,
+      });
+    } else {
+      state.consecutiveTimeouts = nextTimeoutStreak(state.consecutiveTimeouts, false);
+    }
+    return result;
   }
 
   /** Process auto-classify toggle from dialog result. */
@@ -439,6 +512,15 @@ export default function permissionGate(pi: ExtensionAPI) {
     pendingResultNotes.clear();
     pendingAdviceNotes.clear();
     pendingNotes.length = 0;
+    // A streak belongs to the session that saw it; a new session's dialogs start fresh.
+    state.consecutiveTimeouts = 0;
+    const budget = resolveDialogBudget(process.env[DIALOG_TIMEOUT_ENV], state.dialogTimeoutSeconds);
+    if (budget.invalidEnv !== undefined) {
+      ctx.ui.notify(
+        `Ignoring ${DIALOG_TIMEOUT_ENV}=${budget.invalidEnv}; dialogs ${describeDialogTimeout(budget.seconds)}`,
+        "warning",
+      );
+    }
     updateStatus(ctx);
   });
 
@@ -491,6 +573,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         }
 
         msg += `\nAuto-classify: ${state.autoClassify}${classifierAvailable ? "" : " (no classifier configured)"}\n`;
+        msg += `Dialogs: ${describeDialogTimeout(dialogTimeoutSeconds())} unanswered${parseTimeoutSeconds(process.env[DIALOG_TIMEOUT_ENV]) === null ? "" : ` (from ${DIALOG_TIMEOUT_ENV})`}\n`;
         msg += `Explain: ${explainEnabled ? "on" : "off"}${classifierAvailable ? "" : " (no classifier configured)"}\n`;
         const stats = getSidecarStats();
         if (stats.calls > 0) {
@@ -524,6 +607,7 @@ export default function permissionGate(pi: ExtensionAPI) {
           "Toggle write tool (allow/confirm)",
           "Toggle bash tool (allow/confirm)",
           `Toggle explain (${explainEnabled ? "on" : "off"})`,
+          `Dialog deadline (saved: ${describeDialogTimeout(state.dialogTimeoutSeconds)})`,
           "Add path glob rule",
           "Add bash prefix rule",
           ...(state.autoAllowLog.length > 0 ? ["View auto-allow log"] : []),
@@ -594,6 +678,16 @@ export default function permissionGate(pi: ExtensionAPI) {
           state.allowedPathGlobs = [];
           state.toolOverrides = {};
           ctx.ui.notify("Session allows cleared", "info");
+        } else if (choice?.startsWith("Dialog deadline")) {
+          const next = nextDialogTimeout(state.dialogTimeoutSeconds);
+          setPreferences(ctx, { dialogTimeoutSeconds: next });
+          const env = process.env[DIALOG_TIMEOUT_ENV];
+          ctx.ui.notify(
+            env === undefined || parseTimeoutSeconds(env) === null
+              ? `Dialog deadline: ${describeDialogTimeout(next)}`
+              : `Saved ${describeDialogTimeout(next)}; ${DIALOG_TIMEOUT_ENV}=${env} still wins`,
+            "info",
+          );
         } else if (choice === "Reset to Careful") {
           setPreferences(ctx, { mode: "careful", autoClassify: "off" });
           state.allowedBashPrefixes = [];
@@ -720,7 +814,17 @@ export default function permissionGate(pi: ExtensionAPI) {
       }
       options.push("Allow all bash for this session", "Block");
       const title = decision.escalation ? "bash (compound command)" : "bash";
-      const result = await confirm(ctx, title, options, explanation, bashDiffBody, undefined, tirith);
+      const result = await confirm(
+        ctx,
+        title,
+        options,
+        explanation,
+        bashDiffBody,
+        undefined,
+        tirith,
+        event.toolName,
+        event.toolCallId,
+      );
       handleDialogAutoToggle(result, ctx);
       const { choice, note, explanation: explResult } = result;
 
@@ -728,7 +832,10 @@ export default function permissionGate(pi: ExtensionAPI) {
         if (note) queueNote(note, event);
         // The model hears the finding whether the human allowed or refused: tirith is
         // evidence, and this branch is the only place that knows the human saw it.
-        const why = blockReason(explResult, event.toolName);
+        const why = confirmBlockReason(result, explResult, event.toolName, {
+          seconds: dialogTimeoutSeconds(),
+          consecutive: state.consecutiveTimeouts,
+        });
         return { block: true, reason: tirithFacts ? `${why}\n${tirithFacts}` : why };
       }
       if (choice?.startsWith('Allow "') && choice.endsWith('" for this session')) {
@@ -753,13 +860,22 @@ export default function permissionGate(pi: ExtensionAPI) {
         explanation,
         diffBody,
         detailsBody,
+        undefined,
+        event.toolName,
+        event.toolCallId,
       );
       handleDialogAutoToggle(result, ctx);
       const { choice, note, explanation: explResult } = result;
 
       if (choice === "Block" || choice === null) {
         if (note) queueNote(note, event);
-        return { block: true, reason: blockReason(explResult, event.toolName) };
+        return {
+          block: true,
+          reason: confirmBlockReason(result, explResult, event.toolName, {
+            seconds: dialogTimeoutSeconds(),
+            consecutive: state.consecutiveTimeouts,
+          }),
+        };
       }
       if (choice?.startsWith('Allow "')) {
         state.allowedPaths.push(path);
@@ -782,13 +898,22 @@ export default function permissionGate(pi: ExtensionAPI) {
       explanation,
       diffBody,
       detailsBody,
+      undefined,
+      event.toolName,
+      event.toolCallId,
     );
     handleDialogAutoToggle(result, ctx);
     const { choice, note, explanation: explResult } = result;
 
     if (choice === "Block" || choice === null) {
       if (note) queueNote(note, event);
-      return { block: true, reason: blockReason(explResult, event.toolName) };
+      return {
+        block: true,
+        reason: confirmBlockReason(result, explResult, event.toolName, {
+          seconds: dialogTimeoutSeconds(),
+          consecutive: state.consecutiveTimeouts,
+        }),
+      };
     }
     if (choice?.startsWith('Allow "')) {
       state.allowedPaths.push(path);

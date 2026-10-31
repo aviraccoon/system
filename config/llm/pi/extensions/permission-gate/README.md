@@ -172,6 +172,18 @@ arrows, tab↔space) preview correctly.
 - Tab cycles focus between list, note, and diff (diff only when expanded)
 - Lines wrap preserving ANSI colors via `wrapTextWithAnsi`
 
+## Dialog deadline
+
+A confirmation dialog denies the call when nobody answers it: 3 minutes without a keystroke by
+default. The gate's own dialog restarts the countdown on any key, so a person reading a long diff never
+loses it, and shows the remaining seconds in its title for the last 30. The refusal says the dialog
+expired rather than claiming a refusal, carries the classification the dialog was showing, and three
+unanswered dialogs in a row tell the model the user appears to be away and to stop and report.
+
+`PI_GATE_DIALOG_TIMEOUT_SECONDS` sets the deadline (`0` waits forever); `/permissions` cycles the saved
+value. A relayed dialog (a subagent's non-tui session) passes pi's own timeout, which counts down from
+open and cannot see keystrokes.
+
 ## Session rules
 
 Rules accumulate during a session and reset on session switch:

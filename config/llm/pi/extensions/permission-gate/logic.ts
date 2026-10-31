@@ -16,6 +16,7 @@ import { execSync } from "node:child_process";
 import { readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
+import { DEFAULT_DIALOG_TIMEOUT_SECONDS } from "./dialog-timeout";
 
 // ── Types ──
 
@@ -39,6 +40,10 @@ export interface AutoClassifyLog {
 export interface GateState {
   mode: Mode;
   autoClassify: AutoClassifyMode;
+  /** Seconds before a confirmation dialog denies an unanswered call; `0` waits forever. */
+  dialogTimeoutSeconds: number;
+  /** Confirmation dialogs in a row that expired unanswered; any answer resets it. */
+  consecutiveTimeouts: number;
   gitRoot: string | null;
   allowedBashPrefixes: string[];
   allowedPaths: string[];
@@ -516,6 +521,8 @@ export function createInitialState(): GateState {
   return {
     mode: "careful",
     autoClassify: "off",
+    dialogTimeoutSeconds: DEFAULT_DIALOG_TIMEOUT_SECONDS,
+    consecutiveTimeouts: 0,
     gitRoot: null,
     allowedBashPrefixes: [],
     allowedPaths: [],

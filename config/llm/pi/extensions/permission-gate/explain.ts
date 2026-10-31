@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { pluralLines, splitLines } from "../shared/diff";
 import { type FactorDecision, SEVERITY_DANGEROUS } from "../shared/risk-factors";
 import type { ExplanationVerdict } from "./confirm-ui";
+import { AWAY_AFTER_TIMEOUTS, formatDuration } from "./dialog-timeout";
 import { cacheKey, type ExplanationResult } from "./logic";
 
 // ── Tool call description ──
@@ -443,23 +444,64 @@ export function parseExplanation(text: string, strict?: boolean): ExplanationRes
 
 // ── Block reason ──
 
+/** The sentence that tells the model whether anything happened. */
+export function notRunSentence(toolName?: string): string {
+  return toolName === "bash"
+    ? "The command was NOT executed."
+    : toolName === "edit" || toolName === "patch"
+      ? "The file was NOT modified."
+      : toolName === "write"
+        ? "The file was NOT written."
+        : "The action was NOT performed.";
+}
+
+function classificationLine(explanation: ExplanationResult | null): string[] {
+  if (!explanation) return [];
+  return [`[Automated command classification: ${explanation.verdict.toUpperCase()} — ${explanation.short}]`];
+}
+
 /** Build a block reason from the sidecar explanation. User notes are delivered
  * separately as user messages — instructions inside a tool result read as
  * untrusted to the model. */
 export function blockReason(explanation: ExplanationResult | null, toolName?: string): string {
-  const verb =
-    toolName === "bash"
-      ? "The command was NOT executed."
-      : toolName === "edit" || toolName === "patch"
-        ? "The file was NOT modified."
-        : toolName === "write"
-          ? "The file was NOT written."
-          : "The action was NOT performed.";
-  const lines = [`BLOCKED by user. ${verb} Do not retry unless the user asks.`];
-  if (explanation) {
-    lines.push(`[Automated command classification: ${explanation.verdict.toUpperCase()} — ${explanation.short}]`);
-  }
-  return lines.join("\n");
+  return [
+    `BLOCKED by user. ${notRunSentence(toolName)} Do not retry unless the user asks.`,
+    ...classificationLine(explanation),
+  ].join("\n");
+}
+
+/** How long a dialog went unanswered, and how many did in a row. */
+export interface UnansweredDialogs {
+  seconds: number;
+  consecutive: number;
+}
+
+/** Block reason when the dialog expired: nobody answered, which is not the same as a
+ * refusal, and the model has to be told so: otherwise it retries a question nobody is
+ * there to answer. Past the away threshold the reason tells it to stop asking. */
+export function timeoutBlockReason(
+  toolName: string | undefined,
+  unanswered: UnansweredDialogs,
+  explanation?: ExplanationResult | null,
+): string {
+  const away =
+    unanswered.consecutive >= AWAY_AFTER_TIMEOUTS
+      ? ` ${unanswered.consecutive} confirmation dialogs in a row went unanswered, so the user appears to be away. Stop and report what is left.`
+      : " Do not retry unless the user asks.";
+  return [
+    `BLOCKED by timeout: the dialog was not answered within ${formatDuration(unanswered.seconds)}. ${notRunSentence(toolName)}${away}`,
+    ...classificationLine(explanation ?? null),
+  ].join("\n");
+}
+
+/** The reason for a dialog's outcome: a timeout says so, a refusal reads as one. */
+export function confirmBlockReason(
+  outcome: { timedOut?: boolean },
+  explanation: ExplanationResult | null,
+  toolName: string | undefined,
+  unanswered: UnansweredDialogs,
+): string {
+  return outcome.timedOut ? timeoutBlockReason(toolName, unanswered, explanation) : blockReason(explanation, toolName);
 }
 
 /** Block reason when the gate cannot ask at all: with no UI there is no way to grant the

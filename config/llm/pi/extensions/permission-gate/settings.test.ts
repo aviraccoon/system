@@ -25,6 +25,23 @@ describe("parseSettings", () => {
     });
   });
 
+  test("reads the dialog deadline, including wait-forever", () => {
+    expect(parseSettings('{"dialogTimeoutSeconds":600}')).toEqual({ dialogTimeoutSeconds: 600 });
+    expect(parseSettings('{"dialogTimeoutSeconds":0}')).toEqual({ dialogTimeoutSeconds: 0 });
+  });
+
+  test("a dialog deadline that is not whole seconds in range is absent", () => {
+    for (const raw of [
+      '{"dialogTimeoutSeconds":-1}',
+      '{"dialogTimeoutSeconds":1.5}',
+      '{"dialogTimeoutSeconds":"180"}',
+      '{"dialogTimeoutSeconds":null}',
+      '{"dialogTimeoutSeconds":99999}',
+    ]) {
+      expect(parseSettings(raw)).toEqual({});
+    }
+  });
+
   test("an absent or unknown value is absent, not a default", () => {
     expect(parseSettings('{"mode":"careful"}')).toEqual({ mode: "careful" });
     expect(parseSettings('{"mode":"yolo"}')).toEqual({});
@@ -124,13 +141,31 @@ describe("applySettings", () => {
     expect(state.autoClassify).toBe("on");
   });
 
-  test("a persisted pair round-trips through currentSettings", () => {
+  test("a persisted trio round-trips through currentSettings", () => {
     const state = createInitialState();
     state.mode = "allow-all";
     state.autoClassify = "on";
+    state.dialogTimeoutSeconds = 600;
     const restored = createInitialState();
     applySettings(restored, currentSettings(state));
-    expect(currentSettings(restored)).toEqual({ mode: "allow-all", autoClassify: "on" });
+    expect(currentSettings(restored)).toEqual({ mode: "allow-all", autoClassify: "on", dialogTimeoutSeconds: 600 });
+  });
+
+  test("wait-forever is a saved choice, not an absent key", () => {
+    const state = createInitialState();
+    applySettings(state, { dialogTimeoutSeconds: 0 });
+    expect(state.dialogTimeoutSeconds).toBe(0);
+    expect(currentSettings(createInitialState())).toEqual({
+      mode: "careful",
+      autoClassify: "off",
+      dialogTimeoutSeconds: 180,
+    });
+  });
+
+  test("an absent dialog deadline keeps the default", () => {
+    const state = createInitialState();
+    applySettings(state, { mode: "trust-project" });
+    expect(state.dialogTimeoutSeconds).toBe(180);
   });
 
   test("session rules are not part of the persisted pair", () => {
@@ -139,6 +174,6 @@ describe("applySettings", () => {
     state.allowedPaths = ["/tmp/scratch"];
     state.allowedPathGlobs = ["**/*.nix"];
     state.toolOverrides = { bash: "allow" };
-    expect(currentSettings(state)).toEqual({ mode: "careful", autoClassify: "off" });
+    expect(currentSettings(state)).toEqual({ mode: "careful", autoClassify: "off", dialogTimeoutSeconds: 180 });
   });
 });

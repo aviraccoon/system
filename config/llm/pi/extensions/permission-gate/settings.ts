@@ -14,12 +14,15 @@
  */
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { parseTimeoutSeconds } from "./dialog-timeout";
 import { type AutoClassifyMode, type GateState, MODE_CYCLE, type Mode } from "./logic";
 
 /** What survives a restart. Absent keys keep the state's own default. */
 export interface PersistedSettings {
   mode?: Mode;
   autoClassify?: AutoClassifyMode;
+  /** Seconds before a confirmation dialog denies an unanswered call; `0` waits forever. */
+  dialogTimeoutSeconds?: number;
 }
 
 export function settingsPath(home: string): string {
@@ -41,6 +44,10 @@ export function parseSettings(raw: string): PersistedSettings {
     settings.mode = object.mode as Mode;
   }
   if (object.autoClassify === "on" || object.autoClassify === "off") settings.autoClassify = object.autoClassify;
+  const timeout = parseTimeoutSeconds(
+    typeof object.dialogTimeoutSeconds === "number" ? object.dialogTimeoutSeconds : undefined,
+  );
+  if (timeout !== null) settings.dialogTimeoutSeconds = timeout;
   return settings;
 }
 
@@ -87,9 +94,15 @@ export function temporaryPath(file: string): string {
 export function applySettings(state: GateState, settings: PersistedSettings): void {
   if (settings.mode) state.mode = settings.mode;
   if (settings.autoClassify) state.autoClassify = settings.autoClassify;
+  // 0 is a real choice here (wait forever), so absence is what leaves the state alone.
+  if (settings.dialogTimeoutSeconds !== undefined) state.dialogTimeoutSeconds = settings.dialogTimeoutSeconds;
 }
 
 /** The pair to persist for the state as it stands. */
 export function currentSettings(state: GateState): PersistedSettings {
-  return { mode: state.mode, autoClassify: state.autoClassify };
+  return {
+    mode: state.mode,
+    autoClassify: state.autoClassify,
+    dialogTimeoutSeconds: state.dialogTimeoutSeconds,
+  };
 }

@@ -15,6 +15,7 @@ import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, KeybindingsManager } from "@earendil-works/pi-tui";
 import { Container, Editor, matchesKey, type SelectItem, SelectList, Text, type TUI } from "@earendil-works/pi-tui";
 import { ScrollableText } from "../shared/scrollable-text";
+import { createDialogDeadline, type DeadlineDeps, type DialogDeadline } from "./dialog-timeout";
 import type { ExplanationResult, RiskVerdict } from "./logic";
 
 export interface ConfirmResult {
@@ -24,9 +25,14 @@ export interface ConfirmResult {
   explanation: ExplanationResult | null;
   /** Whether the user toggled auto-classify from within the dialog. */
   toggledAutoClassify?: boolean;
+  /** Whether the dialog expired unanswered, rather than the user refusing. */
+  timedOut?: boolean;
 }
 
 export type ExplanationVerdict = RiskVerdict;
+
+/** The dialog component plus the cleanup pi calls when a dialog closes by any path. */
+export type ConfirmComponent = Component & { dispose: () => void };
 
 export interface ExplanationProvider {
   /** Resolves with the first usable result (factor scores when available). */
@@ -42,7 +48,20 @@ export interface ConfirmUIOptions {
   autoClassify?: boolean;
   /** Whether the explain role is available (controls whether Ctrl+A hint shows). */
   hasExplainRole?: boolean;
+  /** Seconds without a keystroke before the dialog denies the call; 0 waits forever. */
+  timeoutSeconds?: number;
+  /** Clock and interval, injected by tests so a deadline needs no waiting. */
+  deadlineDeps?: DeadlineDeps;
 }
+
+/** The real clock. A tick a second, not one shot at the deadline: `touch` moves it. */
+const realDeadlineDeps: DeadlineDeps = {
+  now: () => Date.now(),
+  repeat: (callback, ms) => {
+    const handle = setInterval(callback, ms);
+    return () => clearInterval(handle);
+  },
+};
 
 /** Pre-computed diff lines for display in the confirm dialog. */
 export interface DiffBody {
@@ -83,7 +102,7 @@ export function createConfirmUI(
   diffBody?: DiffBody,
   detailsBody?: DetailsBody,
   tirith?: TirithBanner,
-): Component {
+): ConfirmComponent {
   const blockIndex = options.length - 1; // "Block" is always last
   const container = new Container();
   type Focus = "list" | "note" | "diff";
@@ -91,6 +110,7 @@ export function createConfirmUI(
   let explanationState: "loading" | "ready" | "expanded" | "none" = explanation ? "loading" : "none";
   let explanationResult: ExplanationResult | null = null;
   let didToggleAutoClassify = false;
+  let deadline: DialogDeadline | null = null;
 
   // Diff display state
   const COMPACT_LINES = 6;
@@ -106,7 +126,30 @@ export function createConfirmUI(
 
   // Title
   container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
-  container.addChild(new Text(theme.fg("accent", title), 1, 0));
+  const titleText = new Text(theme.fg("accent", title), 1, 0);
+  container.addChild(titleText);
+
+  /** The title carries the countdown once it is close, so expiry is never silent. */
+  function updateTitle() {
+    const label = deadline?.label();
+    titleText.setText(theme.fg("accent", label ? `${title} (${label})` : title));
+  }
+
+  const timeoutSeconds = uiOptions?.timeoutSeconds ?? 0;
+  if (timeoutSeconds > 0) {
+    deadline = createDialogDeadline(
+      timeoutSeconds,
+      {
+        onExpire: () => finish(null, { timedOut: true }),
+        onTick: () => {
+          updateTitle();
+          tui.requestRender();
+        },
+      },
+      uiOptions?.deadlineDeps ?? realDeadlineDeps,
+    );
+  }
+  updateTitle();
 
   // Diff body (scrollable, shown between title and explanation)
   const scrollable = diffBody
@@ -237,13 +280,16 @@ export function createConfirmUI(
     noMatch: (t) => theme.fg("warning", t),
   });
 
-  function finish(choice: string | null) {
+  function finish(choice: string | null, options?: { timedOut?: boolean }) {
+    deadline?.stop();
     explanation?.abort();
     done({
       choice,
-      note: (lastSubmittedNote || noteInput.getText()).trim(),
+      // An unsent draft is not an instruction: an expiry delivers no note.
+      note: options?.timedOut ? "" : (lastSubmittedNote || noteInput.getText()).trim(),
       explanation: explanationResult,
       toggledAutoClassify: didToggleAutoClassify || undefined,
+      timedOut: options?.timedOut,
     });
   }
 
@@ -293,10 +339,13 @@ export function createConfirmUI(
   }
   updateLabels();
 
-  return {
+  const component: ConfirmComponent = {
     render: (w: number) => container.render(w),
     invalidate: () => container.invalidate(),
     handleInput: (data: string) => {
+      // Any keystroke means someone is at the keyboard: push the deadline out.
+      deadline?.touch();
+
       // Ctrl+O to toggle diff view
       if (matchesKey(data, "ctrl+o") && scrollable && diffBody) {
         diffExpanded = !diffExpanded;
@@ -359,5 +408,7 @@ export function createConfirmUI(
       }
       tui.requestRender();
     },
+    dispose: () => deadline?.stop(),
   };
+  return component;
 }

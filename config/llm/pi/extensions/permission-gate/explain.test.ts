@@ -5,6 +5,7 @@ import {
   blockReason,
   classificationEntry,
   classifierInput,
+  confirmBlockReason,
   contentFrameClose,
   contentFrameOpen,
   describeToolCall,
@@ -15,6 +16,7 @@ import {
   noteMessage,
   notesMessage,
   parseExplanation,
+  timeoutBlockReason,
 } from "./explain";
 
 // ── factorsToExplanation ──
@@ -615,6 +617,55 @@ describe("blockReason", () => {
 
   test("no tool name uses generic verb", () => {
     expect(blockReason(null)).toBe("BLOCKED by user. The action was NOT performed. Do not retry unless the user asks.");
+  });
+});
+
+describe("timeoutBlockReason", () => {
+  test("says the dialog expired rather than that the user refused", () => {
+    expect(timeoutBlockReason("bash", { seconds: 180, consecutive: 1 })).toBe(
+      "BLOCKED by timeout: the dialog was not answered within 3 minutes. " +
+        "The command was NOT executed. Do not retry unless the user asks.",
+    );
+  });
+
+  test("is not away before the threshold", () => {
+    expect(timeoutBlockReason("edit", { seconds: 60, consecutive: 2 })).toContain("Do not retry unless the user asks.");
+    expect(timeoutBlockReason("edit", { seconds: 60, consecutive: 2 })).not.toContain("appears to be away");
+  });
+
+  test("tells the model to stop once the dialogs are going unanswered", () => {
+    const reason = timeoutBlockReason("bash", { seconds: 180, consecutive: 3 });
+    expect(reason).toContain("3 confirmation dialogs in a row went unanswered, so the user appears to be away.");
+    expect(reason).toContain("Stop and report what is left.");
+    expect(reason).not.toContain("Do not retry");
+  });
+
+  test("covers the other not-run sentences", () => {
+    expect(timeoutBlockReason("write", { seconds: 30, consecutive: 1 })).toContain("The file was NOT written.");
+    expect(timeoutBlockReason(undefined, { seconds: 30, consecutive: 1 })).toContain("The action was NOT performed.");
+  });
+});
+
+describe("confirmBlockReason", () => {
+  const unanswered = { seconds: 180, consecutive: 1 };
+
+  test("a timeout reads as a timeout", () => {
+    expect(confirmBlockReason({ timedOut: true }, null, "bash", unanswered)).toStartWith("BLOCKED by timeout:");
+  });
+
+  test("a timeout still carries the classification the user never saw", () => {
+    const expl = { verdict: "dangerous" as const, short: "Deletes the tree", detail: "" };
+    expect(confirmBlockReason({ timedOut: true }, expl, "bash", unanswered)).toContain(
+      "[Automated command classification: DANGEROUS — Deletes the tree]",
+    );
+  });
+
+  test("an answered refusal reads as one, with its classification", () => {
+    const expl = { verdict: "risky" as const, short: "Writes outside the project", detail: "" };
+    expect(confirmBlockReason({}, expl, "write", unanswered)).toBe(
+      "BLOCKED by user. The file was NOT written. Do not retry unless the user asks.\n" +
+        "[Automated command classification: RISKY — Writes outside the project]",
+    );
   });
 });
 
