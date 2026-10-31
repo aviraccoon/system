@@ -21,15 +21,15 @@ The linux-builder is a background NixOS VM managed by nix-darwin that acts as a 
 | `mise nixos-remote-switch -- <host> [target]` | `mise nrs` | Deploy config changes via SSH (fast, seconds) |
 | `mise nixos-build-image -- <host> [variant]` | `mise nbi` | Build a disk image only |
 | `mise nixos-utm -- <host> [variant]` | `mise nbu` | Build image + create/replace UTM VM (slow, initial setup) |
-| `mise nixos-builder-stop` | `mise nbt` | Stop the linux-builder (frees ~16GB RAM) |
+| `mise nixos-builder-stop` | `mise nbt` | Stop the linux-builder (frees 8 GB RAM) |
 | `mise nixos-builder-start` | `mise nbs` | Start the linux-builder |
-| `mise nixos-builder-reset` | `mise nbr` | Reset the linux-builder (recreate disk after config changes) |
+| `mise nixos-builder-reset` | `mise nbr` | Reset the linux-builder (recreate the disk image) |
 
 Examples:
 ```bash
 mise nbu -- phantom-tanuki          # Build image and create UTM VM
 mise nbi -- phantom-tanuki iso      # Build ISO instead of qcow2
-mise nbr                            # Reset builder after changing its config
+mise nbr                            # Reset builder after a diskSize change
 ```
 
 ## Machine configs
@@ -44,43 +44,26 @@ NixOS machine configs live in `machines/<hostname>/` like darwin ones. They use 
 
 ## Linux builder
 
-The linux-builder is configured in the darwin host's machine config:
-
-```nix
-# machines/procyonid-trailblazer/default.nix
-nix.linux-builder = {
-  enable = true;
-  config = {
-    virtualisation = {
-      darwin-builder = {
-        diskSize = 100 * 1024;  # 100 GB
-        memorySize = 8 * 1024;  # 8 GB
-      };
-      cores = 6;
-    };
-    nix.settings = {
-      min-free = lib.mkForce 0;  # Disable auto-GC (races with builds)
-      max-free = lib.mkForce 0;
-      auto-optimise-store = true;
-    };
-  };
-};
-```
+The linux-builder's settings, including the guest's sshd config, live under `nix.linux-builder` in
+`machines/procyonid-trailblazer/default.nix`.
 
 ### Resetting the builder
 
-Changing `diskSize` or other builder config requires a full reset after `nix-switch`:
+`diskSize` needs a full reset after `nix-switch`, since the disk image is created only when absent:
 
 ```bash
 mise nix-switch          # Apply new config
 mise nbr                 # Reset builder (deletes old disk, recreates)
 ```
 
-The disk image lives at `/var/lib/linux-builder/nixos.qcow2` (sparse qcow2 -- only uses actual written size on disk).
+Everything else in the builder config is part of the NixOS system the launchd job starts, so it applies
+when the builder next starts.
+
+The disk image lives at `/var/lib/linux-builder/nixos.qcow2`, a sparse qcow2 that only uses its written size on disk.
 
 ### Starting and stopping
 
-The builder uses ~16GB RAM and runs 24/7 by default. Stop it when not needed:
+The builder uses 8 GB RAM and runs 24/7 by default. Stop it when not needed:
 
 ```bash
 mise nbt    # stop (frees RAM)

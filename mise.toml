@@ -153,12 +153,12 @@ run = "sudo launchctl bootstrap system /Library/LaunchDaemons/org.nixos.linux-bu
 
 [tasks.nixos-builder-stop]
 alias = "nbt"
-description = "Stop the linux-builder VM (frees ~16GB RAM)"
+description = "Stop the linux-builder VM (frees 8 GB RAM)"
 run = "sudo launchctl bootout system/org.nixos.linux-builder 2>/dev/null || echo 'Already stopped'"
 
 [tasks.nixos-builder-reset]
 alias = "nbr"
-description = "Reset the linux-builder VM (recreates disk after config changes)"
+description = "Reset the linux-builder VM (recreate the disk image)"
 run = "./scripts/nixos-builder-reset.sh"
 
 [tasks.gc]
