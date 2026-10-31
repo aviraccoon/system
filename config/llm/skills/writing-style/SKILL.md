@@ -9,6 +9,13 @@ Reference for steering LLM output toward better writing.
 
 Distinguishes between patterns that are always problematic vs. context-dependent choices.
 
+## Bundled references
+
+This file holds the rules that apply to any prose. The two references hold the shape of a repo's documentation; read the one the task needs.
+
+- `references/writing-a-readme.md`: writing, restructuring, or reviewing a README. Purpose, order, lead, examples, no inventories, design decisions, length, what never belongs, before shipping.
+- `references/docs.md`: writing, restructuring, or reviewing any other repo doc, or deciding which file a piece of content belongs in. Doc kinds, file roles, splitting, layout, openings, titles, one fact one home, diagrams, before shipping.
+
 ---
 
 ## Core Problem: Regression to the Mean
@@ -162,7 +169,7 @@ Outside that list, keep a character only when it says something the words cannot
 
 **The problem**: Using 20 words where 8 would do. Restating things multiple ways. Adding unnecessary detail.
 
-**Existence comes before wording**: Is this needed, and does it bring anything the reader lacks? If not, delete it, don't tighten it. What survives often still carries padding: cut until only the important stuff remains. The rule scales to whole documents: keep a README or guide short, and never overexplain.
+**Existence comes before wording**: Is this needed, and does it bring anything the reader lacks? If not, delete it, don't tighten it. What survives often still carries padding: cut until only the important stuff remains. The rule scales to whole documents: keep a guide short, and never overexplain. What that means for a README or a doc set is in the bundled references.
 
 **Example**:
 > "The process of migrating the database involved a series of steps that were undertaken over a period of time in order to ensure that the transition was completed successfully."
@@ -173,9 +180,9 @@ Brevity is not rudeness. Concise writing respects the reader's time.
 
 ### Re-Explaining What the Document Already Shows
 
-**The problem**: Prose that re-walks the document's table, re-transcribes a tool's `--help` output, or repeats one fact across sections. The copies drift until they contradict each other.
+**The problem**: Prose that re-walks the document's table, re-transcribes a tool's `--help` output, or repeats one fact across sections. The copies drift until they contradict each other. The code and the product are another such source: an inventory of what they declare is a copy the source will outgrow.
 
-**Instead**: One fact, one home. A table (or the tool's own help) is the command reference; prose carries only what the table cannot: runtime gotchas and non-obvious defaults. A value maintained elsewhere (a manifest, a config, a registry) stays there; point at it instead of restating it. A useless detail is not improved by moving it; delete it.
+**Instead**: One fact, one home. A table (or the tool's own help) is the command reference; prose carries only what the table cannot: runtime gotchas and non-obvious defaults. A value maintained elsewhere (a manifest, a config, a registry) stays there: point at it, or generate the page from it, instead of restating it. A useless detail is not improved by moving it; delete it.
 
 ### Status Prose
 
@@ -342,7 +349,8 @@ Sometimes three items are genuinely what you need. The problem is padding lists 
 
 Judge the text against its audience, not against a generic notion of good prose. Name the audience before flagging or cutting anything.
 
-- **A README, guide or reference serves someone using the thing.** They came to do a task. Design justification, history, and internal mechanism are not theirs to carry. Cut them, or keep one line where a limitation would otherwise look like a bug.
+- **A README, guide or reference serves someone using the thing.** They came to get it running or to look something up. Design justification, history, and internal mechanism are not theirs to carry. Cut them, or keep one line where a limitation would otherwise look like a bug.
+- **An explanation page serves someone learning why.** Design, constraints, and trade-offs are the content; trimming them to conclusions destroys it.
 - **A decision document (design note, journal entry, review, post) serves a reader who has to agree or disagree.** The reasoning is the content; trimming it to "just the facts" destroys the text. Restating the mechanism is still padding; the argument is not.
 - **Agent-facing text (AGENTS.md, code comments, prompts) serves a reader who acts without you.** It needs the mechanism and the failure it prevents, compressed. Narrative and motivation are waste; specifics are not.
 - Mixed documents exist (a README with an architecture section). Judge section by section, not the file as one voice.
