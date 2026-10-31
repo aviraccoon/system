@@ -409,11 +409,24 @@ const CLIENT_CAPABILITIES = {
   },
 };
 
+export type RootStrategy = "nearest" | "markers";
+
+/** A marker name or glob, or several of them that mark the same kind of project. */
+export type RootMarker = string | string[];
+
 export interface ServerConfig {
   command: string;
   args?: string[];
   fileTypes: string[];
-  rootMarkers: string[];
+  /**
+   * Marker names; an array entry is one tier of equivalent markers, which only matters under
+   * `rootStrategy: "markers"`. See `findProjectRoot`.
+   */
+  rootMarkers: RootMarker[];
+  /**
+   * How to pick the root: `nearest` (default) or `markers`. See `findProjectRoot`.
+   */
+  rootStrategy?: RootStrategy;
   /** Short name for status/footer/diagnostic-header rendering. Keys stay canonical (`.lsp/<key>.json` discovery). */
   displayName?: string;
   /**
@@ -625,8 +638,8 @@ export async function loadLspSettings(cwd: string, serverName: string): Promise<
 /**
  * Check if any root marker exists in a directory.
  */
-export function hasRootMarkers(cwd: string, markers: string[]): boolean {
-  for (const marker of markers) {
+export function hasRootMarkers(cwd: string, markers: RootMarker[]): boolean {
+  for (const marker of markers.flat()) {
     if (marker.includes("*")) {
       // Simple glob: check if any file matches
       try {
@@ -643,22 +656,57 @@ export function hasRootMarkers(cwd: string, markers: string[]): boolean {
 
 /**
  * Find the project root for a file by walking up directories to find root markers.
- * Returns the nearest ancestor directory (starting from the file's directory) that
- * contains any of the given root marker files/dirs, or null if none found.
+ *
+ * `nearest` (the default) returns the closest directory holding any marker. `markers` tries
+ * the server's tiers in order and returns the closest directory inside the first tier that
+ * holds any of its markers, so a project file outranks a nearer, weaker marker: a tree
+ * holding a `package.json` and no `tsconfig.json` would otherwise root tsserver at the
+ * package, which gives it an inferred project and no `paths`. The `markers` walk also stops
+ * at the repository root (or the filesystem root outside a repository), so a project file
+ * above the checkout is not this file's project; `nearest` is unbounded.
  */
-export function findProjectRoot(filePath: string, rootMarkers: string[]): string | null {
-  let dir = path.dirname(path.resolve(filePath));
-  const root = path.parse(dir).root;
+export function findProjectRoot(
+  filePath: string,
+  rootMarkers: RootMarker[],
+  strategy: RootStrategy = "nearest",
+): string | null {
+  const start = path.dirname(path.resolve(filePath));
+  const tiers =
+    strategy === "markers"
+      ? rootMarkers.map((entry) => (Array.isArray(entry) ? entry : [entry]))
+      : [rootMarkers.flat()];
+  const limit = strategy === "markers" ? repositoryRoot(start) : null;
+  for (const tier of tiers) {
+    for (const dir of ancestors(start, limit)) {
+      if (hasRootMarkers(dir, tier)) return dir;
+    }
+  }
+  return null;
+}
 
-  while (dir !== root) {
-    if (hasRootMarkers(dir, rootMarkers)) return dir;
+/** The directories from `start` up to `limit` (or the filesystem root when there is none). */
+function ancestors(start: string, limit: string | null): string[] {
+  const dirs: string[] = [];
+  let dir = start;
+  while (true) {
+    dirs.push(dir);
+    if (dir === limit) break;
     const parent = path.dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
-  // Check the root itself
-  if (hasRootMarkers(dir, rootMarkers)) return dir;
-  return null;
+  return dirs;
+}
+
+/** The nearest ancestor holding `.git`, or null when the file is outside a repository. */
+function repositoryRoot(start: string): string | null {
+  let dir = start;
+  while (true) {
+    if (fs.existsSync(path.join(dir, ".git"))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /**

@@ -23,6 +23,12 @@ describe("KNOWN_SERVERS", () => {
     expect(ts.command).toBe("typescript-language-server");
   });
 
+  test("typescript roots at the project file even past a nearer package.json", () => {
+    const ts = KNOWN_SERVERS["typescript-language-server"];
+    expect(ts.rootStrategy).toBe("markers");
+    expect(ts.rootMarkers).toEqual([["tsconfig.json", "jsconfig.json"], "package.json"]);
+  });
+
   test("has rust-analyzer", () => {
     const rs = KNOWN_SERVERS["rust-analyzer"];
     expect(rs).toBeDefined();

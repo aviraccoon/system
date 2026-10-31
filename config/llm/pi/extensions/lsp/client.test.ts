@@ -2,7 +2,13 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { type Diagnostic, diagnosticsFromPullReport, findProjectRoot } from "./client";
+import { type Diagnostic, diagnosticsFromPullReport, findProjectRoot, type RootMarker } from "./client";
+import { rootForServer } from "./client-mgmt";
+import type { DetectedServer } from "./servers";
+import type { EngineState } from "./state";
+
+/** The typescript server's tiers: a project file first, a package manifest second. */
+const TIERS: RootMarker[] = [["tsconfig.json", "jsconfig.json"], "package.json"];
 
 describe("findProjectRoot", () => {
   test("finds root with Cargo.toml marker", () => {
@@ -61,6 +67,104 @@ describe("findProjectRoot", () => {
     fs.rmSync(tmpRoot, { recursive: true });
   });
 
+  test("the default strategy takes the nearest marker", () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
+    const packageDir = path.join(tmpRoot, "packages", "acme");
+    const srcDir = path.join(packageDir, "src");
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tsconfig.json"), "{}");
+    fs.writeFileSync(path.join(packageDir, "package.json"), "{}");
+    const testFile = path.join(srcDir, "index.ts");
+    fs.writeFileSync(testFile, "");
+
+    expect(findProjectRoot(testFile, TIERS)).toBe(packageDir);
+
+    fs.rmSync(tmpRoot, { recursive: true });
+  });
+
+  test("the markers strategy lets a project file outrank a nearer marker", () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
+    const packageDir = path.join(tmpRoot, "packages", "acme");
+    const srcDir = path.join(packageDir, "src");
+    fs.mkdirSync(srcDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tsconfig.json"), "{}");
+    fs.writeFileSync(path.join(packageDir, "package.json"), "{}");
+    const testFile = path.join(srcDir, "index.ts");
+    fs.writeFileSync(testFile, "");
+
+    expect(findProjectRoot(testFile, TIERS, "markers")).toBe(tmpRoot);
+
+    fs.rmSync(tmpRoot, { recursive: true });
+  });
+
+  test("a tier holds equivalent markers, so a nearer jsconfig beats a farther tsconfig", () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
+    const jsDir = path.join(tmpRoot, "packages", "ui");
+    fs.mkdirSync(path.join(jsDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tsconfig.json"), "{}");
+    fs.writeFileSync(path.join(jsDir, "jsconfig.json"), "{}");
+    const testFile = path.join(jsDir, "src", "app.js");
+    fs.writeFileSync(testFile, "");
+
+    expect(findProjectRoot(testFile, TIERS, "markers")).toBe(jsDir);
+
+    fs.rmSync(tmpRoot, { recursive: true });
+  });
+
+  test("the markers walk stops at the checkout", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
+    const repo = path.join(outside, "acme");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+    fs.writeFileSync(path.join(outside, "tsconfig.json"), "{}");
+    fs.writeFileSync(path.join(repo, "package.json"), "{}");
+    const testFile = path.join(repo, "src", "index.ts");
+    fs.writeFileSync(testFile, "");
+
+    expect(findProjectRoot(testFile, TIERS, "markers")).toBe(repo);
+
+    fs.rmSync(outside, { recursive: true });
+  });
+
+  test("the default strategy walks past the checkout", () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
+    const repo = path.join(outside, "acme");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+    fs.writeFileSync(path.join(outside, "tsconfig.json"), "{}");
+    const testFile = path.join(repo, "src", "index.ts");
+    fs.writeFileSync(testFile, "");
+
+    expect(findProjectRoot(testFile, TIERS)).toBe(outside);
+
+    fs.rmSync(outside, { recursive: true });
+  });
+
+  test("outside a repository the walk still reaches a marker above the file", () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
+    fs.mkdirSync(path.join(tmpRoot, "acme", "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tsconfig.json"), "{}");
+    const testFile = path.join(tmpRoot, "acme", "src", "index.ts");
+    fs.writeFileSync(testFile, "");
+
+    expect(findProjectRoot(testFile, TIERS, "markers")).toBe(tmpRoot);
+
+    fs.rmSync(tmpRoot, { recursive: true });
+  });
+
+  test("falls through to the weaker marker when no project file exists above it", () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
+    const packageDir = path.join(tmpRoot, "packages", "acme");
+    fs.mkdirSync(path.join(packageDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(packageDir, "package.json"), "{}");
+    const testFile = path.join(packageDir, "src", "index.ts");
+    fs.writeFileSync(testFile, "");
+
+    expect(findProjectRoot(testFile, TIERS, "markers")).toBe(packageDir);
+
+    fs.rmSync(tmpRoot, { recursive: true });
+  });
+
   test("handles file at root marker directory itself", () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
     fs.writeFileSync(path.join(tmpRoot, "Cargo.toml"), "");
@@ -70,6 +174,36 @@ describe("findProjectRoot", () => {
 
     const result = findProjectRoot(testFile, ["Cargo.toml"]);
     expect(result).toBe(tmpRoot);
+
+    fs.rmSync(tmpRoot, { recursive: true });
+  });
+});
+
+describe("rootForServer", () => {
+  test("passes the server's strategy through to the walk", () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "lsp-test-"));
+    const packageDir = path.join(tmpRoot, "packages", "acme");
+    fs.mkdirSync(path.join(packageDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpRoot, "tsconfig.json"), "{}");
+    fs.writeFileSync(path.join(packageDir, "package.json"), "{}");
+    const testFile = path.join(packageDir, "src", "index.ts");
+    fs.writeFileSync(testFile, "");
+    const state = { currentCwd: tmpRoot } as unknown as EngineState;
+    const server = {
+      name: "ts",
+      resolvedCommand: "tsc",
+      config: {
+        command: "tsc",
+        fileTypes: [".ts"],
+        rootMarkers: TIERS,
+        rootStrategy: "markers",
+      },
+    } as unknown as DetectedServer;
+
+    expect(rootForServer(state, server, testFile)).toBe(tmpRoot);
+    expect(rootForServer(state, { ...server, config: { ...server.config, rootStrategy: undefined } }, testFile)).toBe(
+      packageDir,
+    );
 
     fs.rmSync(tmpRoot, { recursive: true });
   });

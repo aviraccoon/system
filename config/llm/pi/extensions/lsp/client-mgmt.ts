@@ -69,11 +69,11 @@ export async function getClientForFile(
     if (servers.length === 0) return null;
   }
 
-  // For each candidate server, resolve the root by walking up from the file to
-  // the nearest root marker. Rooting at currentCwd is wrong when the server root
-  // is a subproject inside (or outside) cwd — e.g. a frontend under a repo root
-  // that owns the devcontainer but has no package.json at its own root. The
-  // per-server walk-up handles inside-cwd, outside-cwd, and multi-root uniformly.
+  // For each candidate server, resolve the root from the file's markers
+  // (`rootForServer`). Rooting at currentCwd is wrong when the server root is a
+  // subproject inside (or outside) cwd, e.g. a frontend under a repo root that owns the
+  // devcontainer but has no package.json at its own root. The per-server walk-up
+  // handles inside-cwd, outside-cwd, and multi-root uniformly.
   for (const server of servers) {
     const client = await getClientAt(state, server.name, rootForServer(state, server, abs));
     if (client) return { client, server };
@@ -245,14 +245,12 @@ export async function warmRead(state: EngineState, abs: string): Promise<void> {
 }
 
 /**
- * Resolve the server root for a file: walk up from the file to the nearest
- * ancestor holding one of the server's root markers, falling back to currentCwd.
- * This is what makes a subproject file (e.g. a frontend under a repo root that
- * owns the devcontainer but has no package.json at its own root) root the server
- * at the subproject rather than at currentCwd.
+ * Resolve the server root for a file, applying the server's `rootStrategy` (the rules are in
+ * `findProjectRoot`), falling back to currentCwd. This is what roots a subproject file at the
+ * subproject rather than at cwd.
  */
 export function rootForServer(state: EngineState, server: DetectedServer, absFile: string): string {
-  return findProjectRoot(absFile, server.config.rootMarkers) ?? state.currentCwd;
+  return findProjectRoot(absFile, server.config.rootMarkers, server.config.rootStrategy) ?? state.currentCwd;
 }
 
 /** Check if any active LSP client has this file open (i.e., it's not new to the LSP). */

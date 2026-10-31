@@ -29,7 +29,11 @@ export const KNOWN_SERVERS: Record<string, ServerConfig> = {
     displayName: "ts",
     args: ["--stdio"],
     fileTypes: [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"],
-    rootMarkers: ["package.json", "tsconfig.json", "jsconfig.json"],
+    rootMarkers: [["tsconfig.json", "jsconfig.json"], "package.json"],
+    // tsserver reads `paths` from the tsconfig at its root, so with a tsconfig above it, a
+    // directory holding only a `package.json` gives tsserver an inferred project without
+    // those paths.
+    rootStrategy: "markers",
     initOptions: {
       hostInfo: "pi-lsp-extension",
       maxTsServerMemory: getTsServerMemory(),

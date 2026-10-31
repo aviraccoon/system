@@ -7,7 +7,7 @@ Language Server Protocol integration for pi. Gives the agent IDE-like code intel
 1. **`lsp` tool** — the LLM can call this directly for type-checking and navigation: diagnostics, go-to-definition, hover, find references, symbols, workspace symbol search, rename, code actions, and restart (the tool's action enum has the full set, including `type_definition`, `implementation`, `workspace_symbol`, `restart`, and `status`)
 2. **Auto-diagnostics** — after every edit/write/patch, LSP diagnostics + linter results are appended to the tool result, even when clean, so the model always sees its code's status without asking
 3. **Auto-detection** — discovers available language servers and CLI linters from project markers + PATH
-4. **Multi-root support** — automatically roots LSP servers at the correct project root for files outside the session cwd (e.g., rust-analyzer rooted at the Cargo.toml ancestor, not the session dir). Clients are keyed by `serverName::rootPath` so multiple instances of the same server type can coexist.
+4. **Multi-root support** — roots each file's LSP server at that file's project (e.g., rust-analyzer at the Cargo.toml ancestor, not the session dir), inside and outside the session cwd. Clients are keyed by `serverName::rootPath` so multiple instances of the same server type can coexist.
 5. **Workspace symbol search** — `workspace_symbol` action searches across all active LSP servers by symbol name, returning matches from the entire project (not just one file)
 6. **File watcher** — watches cwd recursively, sends `workspace/didChangeWatchedFiles` to servers when files are created, changed, or deleted (including via bash). Respects `.gitignore` via `git check-ignore`, with hardcoded fallbacks for non-git directories.
 7. **Server request handling** — responds to `client/registerCapability` (stores watcher glob patterns), `client/unregisterCapability`, and `workspace/configuration`
@@ -171,7 +171,7 @@ depends on. The post-edit caller warning uses the same provider internally.
 
 ## Multi-root Support
 
-For files outside the session cwd, `findProjectRoot` walks up to the nearest root marker (Cargo.toml, package.json, go.mod, …) and roots the server there. Clients are keyed `serverName::rootPath`, so multiple instances coexist (e.g. one rust-analyzer per project). `lsp status` shows servers at other roots too.
+Each file's server roots at that file's project, and TypeScript prefers a project file over a nearer package manifest. The walk rules are in `findProjectRoot`'s doc; `rootStrategy` picks a walk per server. Clients are keyed `serverName::rootPath`, so several instances coexist (e.g. one rust-analyzer per project). `lsp status` shows servers at other roots too.
 
 ## Files
 
@@ -264,7 +264,7 @@ Auto-detected when `.devcontainer/` exists and a container with the server binar
 
 TypeScript 7 is the native Go build ("typescript-go") and ships **no `lib/tsserver.js`** — the classic `typescript-language-server` cannot run against it at all (its version resolver fails with `Could not find a valid TypeScript installation`). TS7 ships its own LSP: `tsc --lsp --stdio`.
 
-The extension auto-detects the flavor per server root and picks the right command. Mixed setups work: each file roots at its nearest `package.json`/`tsconfig.json`, so a monorepo with a TS5 package and a TS7 package gets two servers with the right flavor each. Escape hatch: `.lsp/typescript-language-server.json` `_command`/`_args` override the auto-detection.
+The extension auto-detects the flavor per server root and picks the right command. Mixed setups work: when each package owns a tsconfig, a monorepo with a TS5 package and a TS7 package gets two servers with the right flavor each. Escape hatch: `.lsp/typescript-language-server.json` `_command`/`_args` override the auto-detection.
 
 <details>
 <summary>How flavor detection works</summary>
@@ -286,7 +286,8 @@ Add entries to `KNOWN_SERVERS` in `servers.ts`. Required fields:
 - `command`: binary name
 - `args`: CLI args (usually `["--stdio"]` or `[]`)
 - `fileTypes`: file extensions this server handles
-- `rootMarkers`: files that indicate this server is relevant
+- `rootMarkers`: files that indicate this server is relevant; nest names in an array for one tier of equivalent markers.
+- `rootStrategy` (optional): `"nearest"` (default) or `"markers"`; `findProjectRoot`'s doc says what each does to the walk.
 
 The server binary must be on PATH. Install via nix in `modules/home-manager/default.nix`.
 
@@ -348,5 +349,5 @@ The collapsed tool call display shows the action, file, line, symbol, and rename
 - **tsserver in large monorepos**: first access to each TS project reference is slow (5-30s warmup). Cold server gating handles this gracefully.
 - **TanStack Router types**: `createFileRoute`, `useLocation`, `Route` involve expensive type-level route tree inference. Hover on these symbols may always timeout. Partially addressed upstream (TanStack/router#1091, PR #1202) but fundamentally expensive for large route trees.
 - **yamlls on large files**: `symbols` times out on YAML files >400 lines (now surfaces the graceful 'still indexing' message rather than a raw error). Diagnostics and hover work fine. Schema store is disabled to prevent network-blocking timeouts.
-- **Files outside cwd**: the file watcher only covers cwd. Files in other directories get server-side watching via the LSP server's own watchers (registered via `client/registerCapability`), but bash-side file changes (e.g., `rm`, `echo >`) in external projects won't trigger notifications. Cross-file references within external projects work correctly via multi-root support — the server is rooted at the project's Cargo.toml/package.json/go.mod ancestor, not the session cwd.
+- **Files outside cwd**: the file watcher only covers cwd. Files in other directories get server-side watching via the LSP server's own watchers (registered via `client/registerCapability`), but bash-side file changes (e.g., `rm`, `echo >`) in external projects won't trigger notifications. Cross-file references within external projects work correctly via multi-root support: the server is rooted at the project's root-marker ancestor, not the session cwd.
 - **Code actions**: servers that return command-only actions without implementing `workspace/executeCommand` can't be applied here — the client would have to interpret the command itself. The TS7 native server returns nothing for refactor actions at all (typescript-go#4005).
