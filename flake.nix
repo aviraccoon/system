@@ -55,6 +55,19 @@
       darwinFixesOverlay = final: prev: {
         # 2026-04-06: direnv fish tests get Killed (signal 9) on macOS during sandbox build
         direnv = prev.direnv.overrideAttrs { doCheck = false; };
+
+        # 2026-10-31: libslirp accepts connections for a host port forward with
+        # a listen backlog of 1. QEMU's user networking forwards the builder's
+        # ssh port through it, so the simultaneous connections nix opens for
+        # parallel remote builds overflow the queue and the kernel resets the
+        # excess; libssh reports that as `banner exchange: Broken pipe`. 128
+        # matches the macOS somaxconn default. Drop this when libslirp stops
+        # using 1.
+        libslirp = prev.libslirp.overrideAttrs (old: {
+          postPatch = (old.postPatch or "") + ''
+            substituteInPlace src/socket.c --replace-fail "listen(s, 1)" "listen(s, 128)"
+          '';
+        });
       };
 
       # Unstable packages for when stable is too outdated
