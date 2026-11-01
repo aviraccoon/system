@@ -7,7 +7,7 @@
  *
  * Optionally shows an LLM-generated explanation of the tool call:
  * - Short summary shown by default
- * - Ctrl+E toggles full explanation
+ * - The explanation chord toggles the full text (see shortcuts.ts)
  * - Streams in while the user is reading/deciding (zero added latency)
  */
 
@@ -17,6 +17,7 @@ import { Container, Editor, matchesKey, type SelectItem, SelectList, Text, type 
 import { ScrollableText } from "../shared/scrollable-text";
 import { createDialogDeadline, type DeadlineDeps, type DialogDeadline } from "./dialog-timeout";
 import type { ExplanationResult, RiskVerdict } from "./logic";
+import { GATE_SHORTCUTS, shortcutLabel } from "./shortcuts";
 
 export interface ConfirmResult {
   choice: string | null;
@@ -46,7 +47,7 @@ export interface ExplanationProvider {
 export interface ConfirmUIOptions {
   /** Whether auto-classify is currently enabled. Shown in help text. */
   autoClassify?: boolean;
-  /** Whether the explain role is available (controls whether Ctrl+A hint shows). */
+  /** Whether the classifier is available (controls the auto-classify hint and toggle). */
   hasExplainRole?: boolean;
   /** Seconds without a keystroke before the dialog denies the call; 0 waits forever. */
   timeoutSeconds?: number;
@@ -229,7 +230,7 @@ export function createConfirmUI(
     if (explanationState === "expanded") {
       explanationText.setText(`${shortLine}\n${theme.fg("dim", explanationResult.detail)}`);
     } else {
-      const hint = explanationResult.detail ? theme.fg("dim", "  [Ctrl+E]") : "";
+      const hint = explanationResult.detail ? theme.fg("dim", `  [${shortcutLabel(GATE_SHORTCUTS.explanation)}]`) : "";
       explanationText.setText(`${shortLine}${hint}`);
     }
   }
@@ -327,10 +328,18 @@ export function createConfirmUI(
   container.addChild(new DynamicBorder((s: string) => theme.fg("accent", s)));
 
   function updateLabels() {
-    const explainHint = explanationState === "ready" && explanationResult?.detail ? "Ctrl+E detail  |  " : "";
+    // Shown in both states: an expanded explanation still needs a visible way back.
+    const explainHint =
+      explanationResult?.detail && (explanationState === "ready" || explanationState === "expanded")
+        ? `${shortcutLabel(GATE_SHORTCUTS.explanation)} ${explanationState === "expanded" ? "collapse" : "detail"}  |  `
+        : "";
     const currentAuto = (uiOptions?.autoClassify ?? false) !== didToggleAutoClassify;
-    const autoHint = uiOptions?.hasExplainRole ? `Ctrl+A auto:${currentAuto ? "on" : "off"}  |  ` : "";
-    const diffHint = scrollable ? `Ctrl+O ${diffExpanded ? "compact" : "full"} diff  |  ` : "";
+    const autoHint = uiOptions?.hasExplainRole
+      ? `${shortcutLabel(GATE_SHORTCUTS.autoClassify)} auto:${currentAuto ? "on" : "off"}  |  `
+      : "";
+    const diffHint = scrollable
+      ? `${shortcutLabel(GATE_SHORTCUTS.diff)} ${diffExpanded ? "compact" : "full"} diff  |  `
+      : "";
     noteLabel.setText(focus === "note" ? theme.fg("accent", "Note: ") : theme.fg("dim", "Note: "));
     const tabTarget = nextFocus();
     helpText.setText(
@@ -346,8 +355,8 @@ export function createConfirmUI(
       // Any keystroke means someone is at the keyboard: push the deadline out.
       deadline?.touch();
 
-      // Ctrl+O to toggle diff view
-      if (matchesKey(data, "ctrl+o") && scrollable && diffBody) {
+      // Toggle the diff view
+      if (matchesKey(data, GATE_SHORTCUTS.diff) && scrollable && diffBody) {
         diffExpanded = !diffExpanded;
         // Expanding: focus the diff. Collapsing: return to list.
         focus = diffExpanded ? "diff" : "list";
@@ -357,8 +366,11 @@ export function createConfirmUI(
         return;
       }
 
-      // Ctrl+E to toggle detail
-      if (matchesKey(data, "ctrl+e") && (explanationState === "ready" || explanationState === "expanded")) {
+      // Toggle the explanation detail
+      if (
+        matchesKey(data, GATE_SHORTCUTS.explanation) &&
+        (explanationState === "ready" || explanationState === "expanded")
+      ) {
         explanationState = explanationState === "ready" ? "expanded" : "ready";
         updateExplanationDisplay();
         updateLabels();
@@ -366,8 +378,8 @@ export function createConfirmUI(
         return;
       }
 
-      // Ctrl+A to toggle auto-classify
-      if (matchesKey(data, "ctrl+a") && uiOptions?.hasExplainRole) {
+      // Toggle auto-classify: same chord as the global shortcut
+      if (matchesKey(data, GATE_SHORTCUTS.autoClassify) && uiOptions?.hasExplainRole) {
         didToggleAutoClassify = !didToggleAutoClassify;
         updateLabels();
         tui.requestRender();

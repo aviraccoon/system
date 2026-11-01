@@ -25,6 +25,7 @@ import { isShellTool } from "../shared/shell-tools";
 import { computeEditPreview, computeWritePreview } from "./edit-preview";
 import type { ExplanationResult } from "./logic";
 import { resolveResultNote } from "./result-notes";
+import { GATE_SHORTCUTS, shortcutLabel } from "./shortcuts";
 
 /** Preview couldn't be computed (load/computation failure). Distinct from
  *  `undefined` (doomed edit) so the gate fails CLOSED, not silently allows. */
@@ -525,7 +526,7 @@ export default function permissionGate(pi: ExtensionAPI) {
   });
 
   // Toggle auto-classify
-  pi.registerShortcut("ctrl+shift+c", {
+  pi.registerShortcut(GATE_SHORTCUTS.autoClassify, {
     description: "Toggle auto-classify",
     handler: async (ctx) => {
       if (!classifierAvailable) {
@@ -539,7 +540,7 @@ export default function permissionGate(pi: ExtensionAPI) {
   });
 
   // Cycle modes
-  pi.registerShortcut("ctrl+shift+a", {
+  pi.registerShortcut(GATE_SHORTCUTS.cycleMode, {
     description: "Cycle permission mode",
     handler: async (ctx) => {
       const idx = MODE_CYCLE.indexOf(state.mode);
@@ -558,7 +559,7 @@ export default function permissionGate(pi: ExtensionAPI) {
         msg += `${MODE_DESCRIPTIONS[state.mode]}\n\n`;
         msg += `Project root: ${state.gitRoot ?? ctx.cwd}${state.gitRoot ? " (git)" : " (no git repo)"}\n\n`;
 
-        msg += "Modes (Ctrl+Shift+A to cycle):\n";
+        msg += `Modes (${shortcutLabel(GATE_SHORTCUTS.cycleMode)} to cycle):\n`;
         for (const m of MODE_CYCLE) {
           const marker = m === state.mode ? ">" : " ";
           msg += `  ${marker} ${MODE_LABELS[m]}  ${MODE_SHORT[m]}\n`;

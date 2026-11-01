@@ -7,7 +7,7 @@ Pi extension that gates tool calls with user confirmation.
 The permission gate integrates with the model roles system (`shared/model-roles.ts`)
 to provide LLM-generated explanations of tool calls in the confirmation dialog.
 When the "explain" role is configured in `~/.pi/agent/roles.json`, each confirmation
-dialog shows a colored SAFE/RISKY/DANGEROUS verdict with a short tl;dr. Press Ctrl+E
+dialog shows a colored SAFE/RISKY/DANGEROUS verdict with a short tl;dr. Press Ctrl+Shift+E
 for detail.
 
 ### Verdict criteria
@@ -64,7 +64,7 @@ only read. Both scores ride the classification entry. edit-guard still blocks th
 two shapes it can see in the command text (`sed -i`, `perl -i`); the question
 covers what a pattern list cannot. The `explain` role still writes the human
 sentence; both run in parallel, so the dialog shows the sentence and the fired
-factors with their probabilities on one line, and `Ctrl+E` adds the
+factors with their probabilities on one line, and `Ctrl+Shift+E` adds the
 factor list against the thresholds plus the longer explanation.
 
 The state a classifier reads is a header plus an excerpt of what the call writes. The
@@ -136,11 +136,15 @@ delegated agent starts in the saved mode too.
 | Key | Where | Action |
 |-----|-------|--------|
 | `Ctrl+Shift+A` | Global | Cycle permission mode |
-| `Ctrl+Shift+C` | Global | Toggle auto-classify |
-| `Ctrl+E` | Confirm dialog | Toggle explanation detail |
-| `Ctrl+A` | Confirm dialog | Toggle auto-classify |
+| `Ctrl+Shift+C` | Global, confirm dialog | Toggle auto-classify |
+| `Ctrl+Shift+E` | Confirm dialog | Toggle explanation detail |
 | `Ctrl+O` | Confirm dialog | Toggle diff view (compact/full) |
 | `Tab` | Confirm dialog | Cycle focus: list → note → diff (when expanded) |
+
+The dialog chords work from any focus, the note field included, so a note can be written
+and auto-classify changed without tabbing out; `Ctrl+A` and `Ctrl+E` are line-start and
+line-end there. The Shift chords need a terminal that reports modified keys (CSI-u or
+modifyOtherKeys), the same one the global `Ctrl+Shift+C` needs.
 
 ## Confirmation UI
 
