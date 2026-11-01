@@ -114,4 +114,26 @@ describe("a real job", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("the status records the session that started the job", async () => {
+    const dir = tempDir();
+    try {
+      const job = startJob({ id: "j-session-1", command: "true", cwd: dir, dir, session: "sess-42" });
+      expect(await waitForExit(job.child, 10_000)).toBe(true);
+      expect(readJob(dir, "j-session-1")?.status.session).toBe("sess-42");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a job with no session records none, so a bulk action cannot claim it", async () => {
+    const dir = tempDir();
+    try {
+      const job = startJob({ id: "j-session-2", command: "true", cwd: dir, dir });
+      expect(await waitForExit(job.child, 10_000)).toBe(true);
+      expect(readJob(dir, "j-session-2")?.status.session).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import {
   abortOutcome,
+  commandBlock,
   commandLabel,
   completionMessage,
   elapsedSeconds,
+  formatBytes,
   formatElapsed,
   type JobView,
   jobState,
+  logLines,
+  recordCount,
   statusLine,
   tailText,
 } from "./format";
@@ -174,5 +178,62 @@ describe("elapsed and completion message", () => {
     expect(completionMessage(view({ status: { startedAt: 1_000, finishedAt: 1_010, exit: 0 } }), 1_010, "", 0)).toBe(
       "[job j-1 finished: exit 0 after 10s]",
     );
+  });
+});
+
+describe("commandBlock", () => {
+  test("marks the first line with a prompt so it cannot read as output", () => {
+    expect(commandBlock("make build")).toEqual(["$ make build"]);
+  });
+
+  test("keeps a heredoc's body verbatim, indentation included", () => {
+    expect(commandBlock("cat > f <<EOF\n  body\nEOF\n")).toEqual(["$ cat > f <<EOF", "  body", "EOF"]);
+  });
+
+  test("a command with only a trailing newline does not gain an empty last row", () => {
+    expect(commandBlock("sleep 1\n")).toEqual(["$ sleep 1"]);
+  });
+
+  test("an empty command still renders one row", () => {
+    expect(commandBlock("")).toEqual(["$ "]);
+  });
+});
+
+describe("logLines", () => {
+  test("keeps the whole log when it fits", () => {
+    expect(logLines("a\nb\n")).toEqual(["a", "b"]);
+  });
+
+  test("a long log is tailed with a line saying what was cut", () => {
+    const text = Array.from({ length: 10 }, (_, i) => `line ${i}`).join("\n");
+    const lines = logLines(text, 3);
+    expect(lines[0]).toContain("7 lines above");
+    expect(lines.slice(1)).toEqual(["line 7", "line 8", "line 9"]);
+  });
+
+  test("an empty log renders one empty line rather than nothing", () => {
+    expect(logLines("")).toEqual([""]);
+  });
+});
+
+describe("recordCount", () => {
+  test("agrees in number", () => {
+    expect(recordCount(1)).toBe("1 finished record");
+    expect(recordCount(0)).toBe("0 finished records");
+    expect(recordCount(12)).toBe("12 finished records");
+  });
+});
+
+describe("formatBytes", () => {
+  test("reads as a size", () => {
+    expect(formatBytes(0)).toBe("0 B");
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(1024)).toBe("1.0 KB");
+    expect(formatBytes(12_345)).toBe("12 KB");
+    expect(formatBytes(1_234_567)).toBe("1.2 MB");
+  });
+
+  test("a negative count never renders below zero", () => {
+    expect(formatBytes(-5)).toBe("0 B");
   });
 });

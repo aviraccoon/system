@@ -8,7 +8,9 @@
  * - Completion is pushed, never polled. A model given a job id and a wait tool writes its own poll
  *   loop, which burns turns and ends with it abandoning a healthy build; the wake message is the
  *   whole reason this can be better than killing on timeout.
- * - `/jobs` is the human surface: list, tail (live), kill. The footer shows running jobs.
+ * - `/jobs` is the human surface: an overlay of this project's running jobs, with the full command
+ *   and a live, scrollable log. Every view is bounded by `dialogHeight`, because an overlay is
+ *   composited over the frame and rows past the terminal height are cut from the bottom, keys first.
  *
  * `timeout` is the command's total budget, not a wait limit. A budget reached while still in the
  * foreground kills the command; a call promoted before it runs out keeps the remaining budget.
@@ -21,23 +23,54 @@
 import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { matchesKey, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth } from "@earendil-works/pi-tui";
+import { copyText, openFolder } from "../shared/host-actions";
 import { isConfinedBash } from "../shared/sandbox";
+import { ScrollableText } from "../shared/scrollable-text";
+import { shortcutLabel } from "../shared/shortcuts";
 import { createJobBashTool, type JobResultDetails, type KillKind } from "./bash-tool";
-import { commandLabel, completionMessage, formatElapsed, jobState, statusLine, tailText } from "./format";
+import {
+  commandBlock,
+  commandLabel,
+  completionMessage,
+  elapsedSeconds,
+  formatBytes,
+  formatElapsed,
+  type JobView,
+  jobState,
+  logLines,
+  recordCount,
+  statusLine,
+  tailText,
+} from "./format";
+import { dialogHeight, listBodyHeight, splitOutput, windowRows } from "./layout";
 import {
   appendStatus,
   type JobRecord,
   jobPaths,
   jobsDir,
   listJobs,
+  ensureJobsDir,
   needsFinishStamp,
   readJob,
   shouldPrune,
 } from "./paths";
-import { isAlive, killJob, readLog } from "./runner";
+import { isAlive, killJob, LOG_READ_LIMIT, readLog } from "./runner";
+import { cycleScope, hiddenFinished, type JobScope, scopeLabel, startedHere, visibleJobs } from "./scope";
+import { JOB_SHORTCUTS } from "./shortcuts";
 
 const FOOTER_KEY = "jobs";
+
+/** `ctrl+k` reads as `Ctrl+K` in a hint, from the same table the matchers use. */
+const keyOf = (id: keyof typeof JOB_SHORTCUTS): string => shortcutLabel(JOB_SHORTCUTS[id]);
+
+function fileSize(file: string): number | undefined {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return undefined;
+  }
+}
 
 function mtimeSeconds(file: string): number | undefined {
   try {
@@ -65,7 +98,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
 
   const dir = (): string => jobsDir();
 
-  function view(record: JobRecord) {
+  function view(record: JobRecord): JobView {
     return {
       id: record.id,
       command: record.command,
@@ -73,6 +106,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
       alive: isAlive(record.status.pid),
       logBytes: record.logBytes,
       cwd: record.status.cwd,
+      session: record.status.session,
     };
   }
 
@@ -152,6 +186,8 @@ export default function jobsExtension(pi: ExtensionAPI): void {
       const latest = stamped ? (readJob(dir(), job.id) ?? record) : record;
       if (job.promoted && latest) {
         const now = Math.floor(Date.now() / 1000);
+        // The tail, not the log: a wake enters the model's context, so it gets the same 80-line cap a
+        // tool result would.
         const message = completionMessage(view(latest), now, tailText(readLog(latest.paths.log)), latest.status.exit);
         // The extension API types sendMessage as void, so there is no promise to catch; a session
         // that is closing simply drops it, and the status file is the record either way.
@@ -176,6 +212,16 @@ export default function jobsExtension(pi: ExtensionAPI): void {
       }
       refreshFooter();
     }, 50);
+  }
+
+  /**
+   * Say a kill is coming before asking for it. The wrapper cannot report a killed job, and the exit
+   * handler runs before `killJob`'s own status write lands, so an undeclared kill wakes as
+   * `exit unknown` and `/jobs` keeps saying `finished` until the marker catches up.
+   */
+  function declareKill(id: string, kind: KillKind = "killed"): void {
+    const job = tracked.get(id);
+    if (job) job.killKind = kind;
   }
 
   function track(started: { id: string; child: ChildProcess }, command: string): void {
@@ -219,23 +265,37 @@ export default function jobsExtension(pi: ExtensionAPI): void {
     const now = Math.floor(Date.now() / 1000);
     return views.map((v) => {
       const state = jobState(v.status, v.alive);
-      const elapsed = formatElapsed((v.status.finishedAt ?? now) - (v.status.startedAt ?? now));
+      const elapsed = formatElapsed(elapsedSeconds(v, now));
       return `${v.id}  ${state.label.padEnd(9)}  ${elapsed.padStart(6)}  ${commandLabel(v.command, 60)}`;
     });
   }
 
-  async function killAll(target: string, ui: ExtensionContext): Promise<void> {
-    const ids =
-      target === "all"
-        ? listJobs(dir())
-            .filter((j) => jobState(view(j).status, isAlive(j.status.pid)).kind === "running")
-            .map((j) => j.id)
-        : [target];
+  /** An id, or a unique prefix of one: the wake message hands out the full id, so exact is the norm. */
+  function findJob(idOrPrefix: string): JobRecord | undefined {
+    const jobs = listJobs(dir());
+    const exact = jobs.find((job) => job.id === idOrPrefix);
+    if (exact) return exact;
+    const matches = jobs.filter((job) => job.id.startsWith(idOrPrefix));
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+
+  /**
+   * `all` means every running job this session started, not every running job on the machine: two
+   * pi windows in one project are common, and one of them losing a build to the other's cleanup is
+   * a surprise nobody can undo.
+   */
+  async function killAll(ui: ExtensionContext): Promise<void> {
+    const sessionId = ui.sessionManager.getSessionId();
+    const ids = listJobs(dir())
+      .map(view)
+      .filter((v) => startedHere(v, sessionId) && jobState(v.status, v.alive).kind === "running")
+      .map((v) => v.id);
     if (ids.length === 0) {
-      ui.ui.notify("No running jobs to kill", "info");
+      ui.ui.notify("No running jobs from this session to kill", "info");
       return;
     }
     for (const id of ids) {
+      declareKill(id);
       const result = await killJob(id, dir());
       const message = result.killed
         ? `Killed ${id}${result.reason ? ` (${result.reason})` : ""}`
@@ -245,156 +305,547 @@ export default function jobsExtension(pi: ExtensionAPI): void {
     refreshFooter();
   }
 
-  async function showJobs(ui: ExtensionContext): Promise<void> {
+  async function showJobs(ui: ExtensionContext, openId?: string): Promise<void> {
     if (!ui.hasUI) {
+      if (openId) {
+        const record = findJob(openId);
+        if (!record) {
+          pi.sendMessage(
+            { customType: "jobs-list", content: `No job matches ${openId}.`, display: true },
+            { triggerTurn: false },
+          );
+          return;
+        }
+        const state = jobState(record.status, isAlive(record.status.pid));
+        // 120 lines, not the 2000 a viewer shows: this lands in the transcript, and a long log
+        // belongs in the file the last line names.
+        const content = [
+          `${record.id}  ${state.label}  ${record.paths.dir}`,
+          "",
+          ...commandBlock(record.command),
+          "",
+          tailText(readLog(record.paths.log), 120),
+          `[Full log: ${record.paths.log}]`,
+        ].join("\n");
+        pi.sendMessage({ customType: "jobs-list", content, display: true }, { triggerTurn: false });
+        return;
+      }
       pi.sendMessage(
         { customType: "jobs-list", content: summaryLines().join("\n"), display: true },
         { triggerTurn: false },
       );
       return;
     }
+
+    // Resolve the id (or its unique prefix) once: the overlay only knows exact ids, so a prefix would
+    // otherwise read as a job that vanished.
+    const requested = openId === undefined ? undefined : findJob(openId);
+    if (openId !== undefined && !requested) {
+      ui.ui.notify(`No job matches ${openId}.`, "warning");
+      return;
+    }
+
     const theme = ui.ui.theme;
-    await ui.ui.custom<void>((tui, _theme, kb, done) => {
-      let screen: "list" | "output" = "list";
-      let index = 0;
-      let follow = false;
-      let confirmKill = false;
-      let allDirs = false;
-      const now = () => Math.floor(Date.now() / 1000);
+    const sessionId = ui.sessionManager.getSessionId();
+    const now = (): number => Math.floor(Date.now() / 1000);
 
-      const refresh = setInterval(() => {
-        if (screen === "output" && follow) tui.requestRender();
-      }, 500);
-      refresh.unref?.();
+    await ui.ui.custom<void>(
+      (tui, _theme, kb, done) => {
+        let screen: "list" | "output" = requested === undefined ? "list" : "output";
+        let scope: JobScope = "project";
+        let showFinished = false;
+        let index = 0;
+        let selectedId: string | undefined = requested?.id;
+        let confirm: "none" | "kill" | "clear" = "none";
+        let focus: "log" | "command" = "log";
+        let follow = true;
+        /** Size and mtime of the log the panes were built from, so a quiet job costs one stat. */
+        let logSignature = "";
+        /** Which job the panes hold, so `/jobs <id>` and a switch both load the right content. */
+        let paneJobId: string | undefined;
+        /** Row of the pane boundaries in the last render, for wheel routing. */
+        let lastCommandRows = 0;
+        let lastLogRows = 0;
 
-      // Scoped to this session's directory unless `a` asks for the machine's jobs: a job belongs to
-      // the project it was started in.
-      const rows = () =>
-        listJobs(dir())
-          .map(view)
-          .filter((v) => allDirs || v.cwd === ui.cwd);
+        const paneTheme = {
+          scrollHint: (text: string) => theme.fg("dim", text),
+          border: (text: string) => theme.fg("borderMuted", text),
+        };
+        const commandPane = new ScrollableText([], 3, paneTheme);
+        const logPane = new ScrollableText([], 3, paneTheme);
 
-      const renderList = (width: number): string[] => {
-        const all = rows();
-        if (all.length === 0) return [theme.fg("muted", "No jobs."), "", theme.fg("dim", "esc closes")];
-        index = Math.min(index, all.length - 1);
-        const lines = all.map((v, i) => {
-          const state = jobState(v.status, v.alive);
-          const elapsed = formatElapsed((v.status.finishedAt ?? now()) - (v.status.startedAt ?? now()));
-          const where = allDirs && v.cwd !== ui.cwd ? ` @${v.cwd?.split("/").pop() ?? "?"}` : "";
-          const head = `${i === index ? ">" : " "} ${v.id}  ${state.label.padEnd(9)} ${elapsed.padStart(6)}  ${commandLabel(v.command, Math.max(10, width - 40))}${where}`;
-          const color =
-            state.kind === "running"
-              ? "text"
-              : state.kind === "ok"
-                ? "success"
-                : state.kind === "failed"
-                  ? "error"
-                  : "warning";
-          return i === index ? theme.fg("accent", head) : theme.fg(color, head);
-        });
-        const hint = confirmKill
-          ? "k again to kill, any other key cancels"
-          : `↑↓ select · enter output · k kill · a ${allDirs ? "this project" : "all dirs"} · esc close`;
-        return [...lines, "", theme.fg(confirmKill ? "warning" : "dim", hint)];
-      };
+        const height = (): number => dialogHeight(tui.terminal.rows);
+        const views = (): JobView[] => listJobs(dir()).map(view);
+        const rows = (): JobView[] => visibleJobs(views(), { scope, showFinished, cwd: ui.cwd, sessionId });
 
-      const renderOutput = (width: number): string[] => {
-        const all = rows();
-        const v = all[Math.min(index, all.length - 1)];
-        if (!v) return [theme.fg("muted", "Job is gone."), "", theme.fg("dim", "esc back")];
-        const state = jobState(v.status, v.alive);
-        const elapsed = formatElapsed((v.status.finishedAt ?? now()) - (v.status.startedAt ?? now()));
-        const header = `${v.id}  ${state.label}  ${elapsed}  ${commandLabel(v.command, Math.max(10, width - 40))}`;
-        const log = tailText(readLog(jobPaths(dir(), v.id).log), 200, 200 * width);
-        const body = log ? log.split("\n").slice(-24) : [theme.fg("muted", "(no output yet)")];
-        const hint = `${follow ? "following · " : ""}f follow · k kill · esc back`;
-        return [theme.fg("accent", header), "", ...body, "", theme.fg(follow ? "warning" : "dim", hint)];
-      };
+        /** The list is filtered; the output screen is id-driven, so a finished job still opens. */
+        function jobById(id: string | undefined): JobView | undefined {
+          if (id === undefined) return undefined;
+          return views().find((v) => v.id === id);
+        }
 
-      return {
-        render(width: number): string[] {
-          const lines = screen === "list" ? renderList(width) : renderOutput(width);
-          return lines.map((line) => truncateToWidth(line, width));
-        },
-        invalidate() {},
-        handleInput(data: string): void {
+        function resolveSelection(all: JobView[]): JobView | undefined {
+          if (all.length === 0) {
+            selectedId = undefined;
+            index = 0;
+            return undefined;
+          }
+          if (selectedId !== undefined) {
+            const at = all.findIndex((v) => v.id === selectedId);
+            if (at >= 0) {
+              index = at;
+              return all[at];
+            }
+          }
+          index = Math.max(0, Math.min(all.length - 1, index));
+          selectedId = all[index]?.id;
+          return all[index];
+        }
+
+        function move(delta: number): void {
           const all = rows();
-          if (screen === "list") {
-            if (kb.matches(data, "tui.select.up")) {
-              index = index === 0 ? Math.max(0, all.length - 1) : index - 1;
-              confirmKill = false;
-              tui.requestRender();
-              return;
+          if (all.length === 0) return;
+          index = Math.max(0, Math.min(all.length - 1, index + delta));
+          selectedId = all[index]?.id;
+          confirm = "none";
+          tui.requestRender();
+        }
+
+        function openOutput(v: JobView): void {
+          selectedId = v.id;
+          screen = "output";
+          focus = "log";
+          confirm = "none";
+          follow = jobState(v.status, v.alive).kind === "running";
+          paneJobId = v.id;
+          commandPane.setLines(commandBlock(v.command));
+          commandPane.setScrollOffset(0);
+          const paths = jobPaths(dir(), v.id);
+          logSignature = `${v.logBytes}:${mtimeSeconds(paths.log) ?? 0}`;
+          logPane.setLines(logLines(readLog(paths.log)));
+          // Either way the log opens at its end: a failure is read from its last lines, and `home`
+          // reaches the start. Only a running job keeps re-pinning to the tail.
+          logPane.scrollToEnd();
+        }
+
+        /** `/jobs <id>` opens the screen without going through the list, so the panes load on demand. */
+        function ensurePanes(v: JobView): void {
+          if (paneJobId !== v.id) openOutput(v);
+        }
+
+        /** Re-read the log only when it changed; keep the reader's offset unless following. */
+        function syncLog(v: JobView): void {
+          const paths = jobPaths(dir(), v.id);
+          // One guarded stat: another window's clear, or prune, can delete the log between a check and
+          // a read, and a throw here happens inside `render` on a 2 Hz path.
+          const signature = `${fileSize(paths.log) ?? 0}:${mtimeSeconds(paths.log) ?? 0}`;
+          if (signature === logSignature) return;
+          logSignature = signature;
+          logPane.setLines(logLines(readLog(paths.log)), { keepOffset: true });
+          if (follow) logPane.scrollToEnd();
+        }
+
+        function notify(message: string, kind: "info" | "warning" | "error" = "info"): void {
+          ui.ui.notify(message, kind);
+        }
+
+        /** Finished records this session started: the only ones a bulk clear may delete. */
+        function clearTargets(all: JobView[] = views()): JobView[] {
+          return all.filter((v) => startedHere(v, sessionId) && jobState(v.status, v.alive).kind !== "running");
+        }
+
+        function clearRecords(targets: JobView[]): number {
+          let removed = 0;
+          for (const v of targets) {
+            const paths = jobPaths(dir(), v.id);
+            for (const file of [paths.script, paths.cmd, paths.log, paths.status]) {
+              try {
+                fs.rmSync(file, { force: true });
+              } catch {
+                /* best effort, like prune */
+              }
             }
-            if (kb.matches(data, "tui.select.down")) {
-              index = index === all.length - 1 ? 0 : index + 1;
-              confirmKill = false;
-              tui.requestRender();
-              return;
-            }
-            if (kb.matches(data, "tui.select.confirm") && all.length > 0) {
-              screen = "output";
-              confirmKill = false;
-              tui.requestRender();
-              return;
-            }
-            if (data === "a") {
-              allDirs = !allDirs;
-              index = 0;
-              confirmKill = false;
-              tui.requestRender();
-              return;
-            }
-            if (data === "k" && all[index]) {
-              if (!confirmKill) {
-                confirmKill = true;
+            removed++;
+          }
+          return removed;
+        }
+
+        async function copyPane(): Promise<void> {
+          const v = jobById(selectedId);
+          if (!v) {
+            notify("That job is gone", "warning");
+            return;
+          }
+          const record = readJob(dir(), v.id);
+          if (!record) {
+            notify("That job is gone", "warning");
+            return;
+          }
+          const what = focus === "log" ? "output" : "command";
+          const text = focus === "log" ? readLog(record.paths.log) : record.command;
+          if (!text.trim()) {
+            notify(`No ${what} to copy`, "warning");
+            return;
+          }
+          const result = await copyText(text);
+          if (!result.ok) {
+            notify(`Copy failed: ${result.reason}`, "error");
+            return;
+          }
+          const cut = focus === "log" && record.logBytes > LOG_READ_LIMIT ? " (last 1 MB)" : "";
+          notify(`Copied ${what}${cut}, ${formatBytes(Buffer.byteLength(text, "utf8"))}`);
+        }
+
+        async function revealFolder(): Promise<void> {
+          // No selection needed: every job's files are in the one shared directory, and the default filter
+          // leaves the list empty whenever only finished records exist. It only exists once a job has
+          // started, and the platform's opener fails on a missing path, so create it first.
+          try {
+            ensureJobsDir();
+          } catch {
+            /* the open reports the failure */
+          }
+          const result = await openFolder(dir());
+          if (!result.ok) notify(`Could not open the folder: ${result.reason}`, "error");
+        }
+
+        function killSelected(): void {
+          const v = screen === "list" ? resolveSelection(rows()) : jobById(selectedId);
+          if (!v) return;
+          if (confirm !== "kill") {
+            confirm = "kill";
+            tui.requestRender();
+            return;
+          }
+          confirm = "none";
+          declareKill(v.id);
+          void killJob(v.id, dir()).then((result) => {
+            notify(
+              result.killed
+                ? `Killed ${v.id}${result.reason ? ` (${result.reason})` : ""}`
+                : `${v.id}: ${result.reason}`,
+              result.killed ? "info" : "error",
+            );
+            tui.requestRender();
+            refreshFooter();
+          });
+        }
+
+        function clearFinishedRecords(): void {
+          const targets = clearTargets();
+          if (targets.length === 0) {
+            confirm = "none";
+            notify("No finished jobs from this session", "info");
+            tui.requestRender();
+            return;
+          }
+          if (confirm !== "clear") {
+            confirm = "clear";
+            tui.requestRender();
+            return;
+          }
+          confirm = "none";
+          // Clearing while its output is open would leave the screen on a record that was just deleted.
+          const viewing = selectedId;
+          const removed = clearRecords(targets);
+          notify(`Cleared ${recordCount(removed)}`);
+          if (screen === "output" && targets.some((v) => v.id === viewing)) {
+            screen = "list";
+            paneJobId = undefined;
+            follow = false;
+            focus = "log";
+          }
+          selectedId = undefined;
+          index = 0;
+          tui.requestRender();
+          refreshFooter();
+        }
+
+        function listRow(v: JobView, selected: boolean, width: number): string {
+          const state = jobState(v.status, v.alive);
+          const elapsed = formatElapsed(elapsedSeconds(v, now()));
+          const marks: string[] = [];
+          if (scope === "all" && v.cwd !== ui.cwd) marks.push(`@${v.cwd?.split("/").pop() || "?"}`);
+          if (v.session !== undefined && v.session !== sessionId) marks.push("@other");
+          const tail = marks.length > 0 ? `  ${marks.join(" ")}` : "";
+          const room = Math.max(10, width - 40 - tail.length);
+          const head = `${selected ? ">" : " "} ${v.id}  ${state.label.padEnd(9)} ${elapsed.padStart(6)}  ${commandLabel(v.command, room)}${tail}`;
+          if (selected) return theme.fg("accent", head);
+          if (state.kind === "running") return theme.fg("text", head);
+          if (state.kind === "ok") return theme.fg("success", head);
+          if (state.kind === "failed") return theme.fg("error", head);
+          return theme.fg("warning", head);
+        }
+
+        function titleLine(shownRows: number, totalRows: number, hiddenCount: number): string {
+          const parts = [scopeLabel(scope), showFinished ? "running + finished" : "running"];
+          const extra = hiddenCount > 0 ? `  ·  ${hiddenCount} finished hidden` : "";
+          // A windowed list has to say it is one: nothing on screen hints at the rows it skipped.
+          const windowed = totalRows > shownRows ? `  ·  ${shownRows} of ${totalRows}` : "";
+          return `${theme.fg("accent", "jobs")}${theme.fg("dim", `  ·  ${parts.join("  ·  ")}${extra}${windowed}`)}`;
+        }
+
+        function listHints(all: JobView[], clearable: number): string[] {
+          const selected = all[index];
+          const first =
+            confirm === "kill"
+              ? theme.fg("warning", `${keyOf("kill")} again to kill ${selected?.id ?? "this job"}`)
+              : confirm === "clear"
+                ? theme.fg("warning", `${keyOf("clearFinished")} again to clear ${recordCount(clearable)}`)
+                : theme.fg(
+                    "dim",
+                    `↑↓ select · enter open · ${keyOf("kill")} kill · ${keyOf("clearFinished")} clear finished`,
+                  );
+          const second = theme.fg(
+            "dim",
+            `${keyOf("scope")} ${scopeLabel(scope)} · ${keyOf("finished")} ${showFinished ? "hide" : "show"} finished · ${keyOf("copy")} copy · ${keyOf("openFolder")} folder · esc close`,
+          );
+          return [first, second];
+        }
+
+        function renderList(width: number, height: number): string[] {
+          // One disk scan per render: the filter, the hidden count and the clear count all read it.
+          const all = views();
+          const filtered = visibleJobs(all, { scope, showFinished, cwd: ui.cwd, sessionId });
+          resolveSelection(filtered);
+          const window = windowRows(filtered.length, index, listBodyHeight(height));
+          const shown = filtered.slice(window.start, window.end);
+          const lines =
+            filtered.length === 0
+              ? [theme.fg("muted", showFinished ? "No jobs here." : "No running jobs.")]
+              : shown.map((v, offset) => listRow(v, window.start + offset === index, width));
+          const hiddenCount = showFinished ? 0 : hiddenFinished(all, { scope, cwd: ui.cwd, sessionId });
+          return [
+            titleLine(shown.length, filtered.length, hiddenCount),
+            "",
+            ...lines,
+            ...listHints(filtered, clearTargets(all).length),
+          ];
+        }
+
+        function outputHints(): string {
+          // An armed kill or clear has to say so here: this screen has no other place to show state.
+          if (confirm === "kill")
+            return theme.fg("warning", `${keyOf("kill")} again to kill ${selectedId ?? "this job"}`);
+          if (confirm === "clear") {
+            return theme.fg(
+              "warning",
+              `${keyOf("clearFinished")} again to clear ${recordCount(clearTargets().length)}`,
+            );
+          }
+          const what = focus === "log" ? "output" : "command";
+          const parts = [
+            ...(focus === "log" && follow ? ["following"] : ["↑↓ scroll"]),
+            `tab ${focus === "log" ? "command" : "output"}`,
+            `${keyOf("copy")} copy ${what}`,
+            `${keyOf("kill")} kill`,
+            `${keyOf("clearFinished")} clear`,
+            `${keyOf("openFolder")} folder`,
+            "esc back",
+          ];
+          return theme.fg("dim", parts.join(" · "));
+        }
+
+        function renderOutput(width: number, height: number): string[] {
+          const v = jobById(selectedId);
+          if (!v) {
+            lastCommandRows = 0;
+            lastLogRows = 0;
+            return [theme.fg("muted", "That job is gone."), "", theme.fg("dim", "esc back")];
+          }
+          ensurePanes(v);
+          syncLog(v);
+          const split = splitOutput(height, commandBlock(v.command).length);
+          commandPane.setMaxHeight(split.command);
+          logPane.setMaxHeight(split.log);
+          lastCommandRows = split.command;
+          lastLogRows = split.log;
+          const state = jobState(v.status, v.alive);
+          const elapsed = formatElapsed(elapsedSeconds(v, now()));
+          const other = v.session !== undefined && v.session !== sessionId ? "  @other" : "";
+          const header = `${v.id}  ${state.label}  ${elapsed}${other}`;
+          const command = commandPane
+            .render(width)
+            .map((line) => theme.fg(focus === "command" ? "text" : "muted", line));
+          return [theme.fg("accent", header), ...command, "", ...logPane.render(width), outputHints()];
+        }
+
+        const refresh = setInterval(() => {
+          const v = screen === "output" ? jobById(selectedId) : undefined;
+          if (v) syncLog(v);
+          tui.requestRender();
+        }, 500);
+        refresh.unref?.();
+
+        return {
+          render(width: number): string[] {
+            const lines = screen === "list" ? renderList(width, height()) : renderOutput(width, height());
+            return lines.map((line) => truncateToWidth(line, width));
+          },
+          invalidate() {
+            commandPane.invalidate();
+            logPane.invalidate();
+          },
+          handleInput(data: string): void {
+            if (screen === "list") {
+              const all = rows();
+              if (kb.matches(data, "tui.select.up")) {
+                move(-1);
+                return;
+              }
+              if (kb.matches(data, "tui.select.down")) {
+                move(1);
+                return;
+              }
+              if (kb.matches(data, "tui.select.pageUp")) {
+                move(-listBodyHeight(height()));
+                return;
+              }
+              if (kb.matches(data, "tui.select.pageDown")) {
+                move(listBodyHeight(height()));
+                return;
+              }
+              if (kb.matches(data, "tui.select.confirm")) {
+                const v = resolveSelection(all);
+                if (v) openOutput(v);
                 tui.requestRender();
                 return;
               }
-              confirmKill = false;
-              const id = all[index].id;
-              void killJob(id, dir()).then(() => {
+              // Any key other than the chord that armed it cancels a pending kill or clear, which is
+              // what the hint line promises. Placed before the handlers because most of them return.
+              if (!matchesKey(data, JOB_SHORTCUTS.kill) && !matchesKey(data, JOB_SHORTCUTS.clearFinished)) {
+                confirm = "none";
+              }
+              if (matchesKey(data, JOB_SHORTCUTS.kill)) {
+                killSelected();
+                return;
+              }
+              if (matchesKey(data, JOB_SHORTCUTS.clearFinished)) {
+                clearFinishedRecords();
+                return;
+              }
+              if (matchesKey(data, JOB_SHORTCUTS.finished)) {
+                showFinished = !showFinished;
+                confirm = "none";
+                selectedId = undefined;
+                index = 0;
                 tui.requestRender();
-                refreshFooter();
-              });
-              return;
-            }
-            if (kb.matches(data, "tui.select.cancel")) {
-              done();
-              return;
-            }
-            confirmKill = false;
-            tui.requestRender();
-            return;
-          }
-          if (kb.matches(data, "tui.select.cancel")) {
-            screen = "list";
-            follow = false;
-            tui.requestRender();
-            return;
-          }
-          if (data === "f") {
-            follow = !follow;
-            tui.requestRender();
-            return;
-          }
-          if (data === "k" && all[index]) {
-            const id = all[index].id;
-            void killJob(id, dir()).then(() => {
+                return;
+              }
+              if (matchesKey(data, JOB_SHORTCUTS.scope)) {
+                scope = cycleScope(scope);
+                confirm = "none";
+                selectedId = undefined;
+                index = 0;
+                tui.requestRender();
+                return;
+              }
+              if (matchesKey(data, JOB_SHORTCUTS.copy)) {
+                void copyPane();
+                return;
+              }
+              if (matchesKey(data, JOB_SHORTCUTS.openFolder)) {
+                void revealFolder();
+                return;
+              }
+              if (kb.matches(data, "tui.select.cancel")) {
+                done();
+                return;
+              }
+              confirm = "none";
               tui.requestRender();
-              refreshFooter();
-            });
-          }
-        },
-        dispose: () => clearInterval(refresh),
-      };
-    });
+              return;
+            }
+
+            const v = jobById(selectedId);
+            if (kb.matches(data, "tui.select.cancel")) {
+              screen = "list";
+              follow = false;
+              confirm = "none";
+              // The list has no focus, and its copy reports the job's output, so the panes' focus must not
+              // leak back with it.
+              focus = "log";
+              tui.requestRender();
+              return;
+            }
+            // Same rule as the list: anything but the arming chord cancels, Tab and copy included.
+            if (!matchesKey(data, JOB_SHORTCUTS.kill) && !matchesKey(data, JOB_SHORTCUTS.clearFinished)) {
+              confirm = "none";
+            }
+            if (matchesKey(data, "tab")) {
+              focus = focus === "log" ? "command" : "log";
+              tui.requestRender();
+              return;
+            }
+            if (matchesKey(data, JOB_SHORTCUTS.kill)) {
+              killSelected();
+              return;
+            }
+            if (matchesKey(data, JOB_SHORTCUTS.clearFinished)) {
+              clearFinishedRecords();
+              return;
+            }
+            if (matchesKey(data, JOB_SHORTCUTS.copy)) {
+              void copyPane();
+              return;
+            }
+            if (matchesKey(data, JOB_SHORTCUTS.openFolder)) {
+              void revealFolder();
+              return;
+            }
+            if (!v) return;
+            // The follow state is decided by the key, not by whether the pane moved: `end` on a log
+            // already at its bottom moves nothing and still means "follow again".
+            if (focus === "log") {
+              if (matchesKey(data, "end")) follow = true;
+              else if (
+                matchesKey(data, "up") ||
+                matchesKey(data, "pageUp") ||
+                matchesKey(data, "shift+up") ||
+                matchesKey(data, "home")
+              )
+                follow = false;
+            }
+            const pane = focus === "log" ? logPane : commandPane;
+            pane.handleInput(data);
+            tui.requestRender();
+          },
+          handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+            if (screen === "list") {
+              if (event.type !== "wheel" || !event.wheelDelta) return undefined;
+              move(event.wheelDelta < 0 ? -1 : 1);
+              return { handled: true };
+            }
+            if (event.type !== "wheel" || !event.wheelDelta) return undefined;
+            // The panes are drawn by our own layout, so their row origins are known exactly: the
+            // component owns the offset, which is why this wrapper does the routing itself.
+            const commandStart = 1;
+            const logStart = commandStart + lastCommandRows + 1;
+            const local =
+              event.y >= logStart && event.y < logStart + lastLogRows
+                ? { pane: logPane, y: event.y - logStart }
+                : event.y >= commandStart && event.y < commandStart + lastCommandRows
+                  ? { pane: commandPane, y: event.y - commandStart }
+                  : undefined;
+            if (!local) return { handled: true };
+            const forwarded = local.pane.handleMouse({ ...event, y: local.y });
+            // Only a wheel that actually moved the log stops it following; `end` is what re-attaches.
+            if (local.pane === logPane && forwarded?.render === true && event.wheelDelta < 0) follow = false;
+            if (forwarded?.render !== false) tui.requestRender();
+            return forwarded ?? { handled: true };
+          },
+          dispose: () => clearInterval(refresh),
+        };
+      },
+      // Full width: the renderer composites the overlay over the transcript, so a narrower rectangle leaves a
+      // strip of chat text down each side, at the same rows as the list, which reads as if it belonged here.
+      { overlay: true, overlayOptions: () => ({ width: "100%", margin: 0, anchor: "center" }) },
+    );
     refreshFooter();
   }
 
   pi.registerCommand("jobs", {
-    description: "List background jobs; /jobs kill <id|all>",
+    description: "Background jobs: /jobs [id], /jobs kill <id|all>",
     handler: async (args, ui) => {
       ctx = ui;
       const trimmed = args.trim();
@@ -404,10 +855,21 @@ export default function jobsExtension(pi: ExtensionAPI): void {
           ui.ui.notify("Usage: /jobs kill <id|all>", "warning");
           return;
         }
-        await killAll(target, ui);
+        if (target === "all") await killAll(ui);
+        else {
+          declareKill(target);
+          const result = await killJob(target, dir());
+          ui.ui.notify(
+            result.killed
+              ? `Killed ${target}${result.reason ? ` (${result.reason})` : ""}`
+              : `${target}: ${result.reason}`,
+            result.killed ? "info" : "error",
+          );
+          refreshFooter();
+        }
         return;
       }
-      await showJobs(ui);
+      await showJobs(ui, trimmed || undefined);
     },
   });
 

@@ -137,6 +137,9 @@ export function createJobBashTool(options: JobToolOptions) {
         command: params.command,
         cwd: ctx?.cwd ?? process.cwd(),
         dir: options.dir,
+        // Captured here rather than at load: the tool's own context carries the session that made
+        // the call, which is what a bulk action in /jobs must stay inside.
+        session: ctx?.sessionManager?.getSessionId(),
       });
       const budgetSeconds = params.timeout;
       options.hooks.track(job, params.command);

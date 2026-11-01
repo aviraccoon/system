@@ -281,7 +281,8 @@ Status bar shows `+tirith` when active.
 
 - Trust project mode still confirms all bash (scoping commands to dirs is unreliable).
 - Cross-extension imports work via `../shared/` but keep extension-specific logic local.
-- No mouse/scroll wheel support (pi TUI is keyboard-only).
+- No mouse/scroll wheel support: the dialog does not forward `handleMouse`, which is what the diff pane's
+  `ScrollableText` would need.
 
 ## Testing
 

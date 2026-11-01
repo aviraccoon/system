@@ -10,7 +10,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { appendStatus, isSettled, type JobPaths, jobPaths, jobsDir, parseStatus } from "./paths";
+import { appendStatus, ensureJobsDir, isSettled, type JobPaths, jobPaths, jobsDir, parseStatus } from "./paths";
 
 /** How long a call may stay in the foreground before it becomes a job. */
 export function foregroundWaitMs(env: NodeJS.ProcessEnv = process.env): number {
@@ -55,18 +55,22 @@ export interface StartJobOptions {
   cwd: string;
   dir?: string;
   env?: NodeJS.ProcessEnv;
+  /** The pi session starting it, so /jobs can tell its own jobs from another window's. */
+  session?: string;
 }
 
 export function startJob(options: StartJobOptions): StartedJob {
   const dir = options.dir ?? jobsDir();
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensureJobsDir(dir);
   const paths = jobPaths(dir, options.id);
   fs.writeFileSync(paths.script, buildScript(options.command, paths), { mode: 0o700 });
   fs.writeFileSync(paths.cmd, `${options.command}\n`);
   fs.writeFileSync(paths.log, "");
   // `cwd` is what scopes the job to a project: the footer and /jobs read it rather than repeating it
-  // on every line.
-  appendStatus(paths.status, [`started=${Math.floor(Date.now() / 1000)}`, `cwd=${options.cwd}`]);
+  // on every line. `session` is what keeps a bulk kill from reaching another window's build.
+  const initial = [`started=${Math.floor(Date.now() / 1000)}`, `cwd=${options.cwd}`];
+  if (options.session) initial.push(`session=${options.session}`);
+  appendStatus(paths.status, initial);
 
   const child = spawn("/bin/bash", [paths.script], {
     cwd: options.cwd,
@@ -185,8 +189,11 @@ export async function killJob(id: string, dir: string = jobsDir(), options: Kill
   return { killed: true };
 }
 
+/** How much of a log is read. A viewer that says "last 1 MB" has to mean this number. */
+export const LOG_READ_LIMIT = 1_000_000;
+
 /** Read the whole log, capped. A job's own output is the payload, so no streaming is needed here. */
-export function readLog(logPath: string, maxBytes = 1_000_000): string {
+export function readLog(logPath: string, maxBytes = LOG_READ_LIMIT): string {
   try {
     const size = fs.statSync(logPath).size;
     const start = Math.max(0, size - maxBytes);

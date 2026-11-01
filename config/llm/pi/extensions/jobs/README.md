@@ -13,9 +13,34 @@ Ask the agent to run `sleep 120`. The call returns after a minute with a job id,
 `jobs 1 · sleep 120 1m02s`, and the command's output arrives as a message when it finishes.
 
 ```
-/jobs                 this project's jobs
+/jobs                 this project's running jobs
+/jobs <id>            one job's command and output
 /jobs kill <id>|all   kill without opening the picker
 ```
+
+## The /jobs screen
+
+An overlay, so the transcript stays readable behind it. The dialog sizes itself from the terminal height: at most 30
+lines, eight rows short of it, and never within three of the bottom, which is what leaves the footer its rows. The
+list covers this project's running jobs, with settled records hidden until asked for. The dialog shows its own keys
+on its last line or two, and this is the complete list:
+
+| key | action |
+| --- | --- |
+| `up`, `down`, `pgup`, `pgdn` | move the selection |
+| `enter` | open the job's command and output |
+| `Ctrl+K` | kill; press it twice, any other key cancels |
+| `Ctrl+T` | show or hide finished jobs |
+| `Ctrl+A` | cycle the scope: this project, this session, all directories |
+| `Ctrl+Y` | copy: the selected job's output in the list, the focused pane in the output screen |
+| `Ctrl+O` | open the folder holding the job's files |
+| `Ctrl+X` | clear finished records; press it twice |
+| `tab` | switch focus between the command and the output |
+| `esc` | back, then close |
+
+The output screen shows the command in full, a heredoc's newlines included, with the log below it following the
+tail while the job runs. Scrolling up stops the follow and `End` re-attaches it. The mouse wheel scrolls whichever
+pane it is over.
 
 ## Limits and footguns
 
@@ -26,8 +51,13 @@ Ask the agent to run `sleep 120`. The call returns after a minute with a job id,
   `/jobs`.
 - Completion is pushed, so polling is wasted work: `sleep`, `ps`, `pgrep` and log tailing all spend turns
   learning nothing.
-- The footer and `/jobs` cover this directory's jobs. `a` in `/jobs` switches to every directory, and work
-  started elsewhere is counted as `+1 elsewhere` rather than named.
+- The footer and `/jobs` cover this directory's jobs. `Ctrl+A` widens `/jobs` to this session or to every
+  directory, and work started elsewhere is counted as `+1 elsewhere` rather than named.
+- A job records the session that started it, and another session's job is marked `@other`. `/jobs kill all` and
+  `Ctrl+X` only touch this session's jobs, so a second pi window in the same project cannot lose a build to your
+  cleanup.
+- `/jobs` shows the last 2000 lines of a log, with a line saying how many it skipped. `Ctrl+Y` copies up to the
+  last 1 MB and says so when it cut.
 - Commands run without a pty, so there is no pager and no password prompt.
 - Killing a job kills the local process. An `ssh` command takes its remote command with it. A `docker exec`
   does not: the container-side process keeps running after the client it was started from is gone.
@@ -36,8 +66,9 @@ Ask the agent to run `sleep 120`. The call returns after a minute with a job id,
   classified again.
 - If pi exits first the job keeps running: the budget dies with pi, the job records its own exit, and a finished record
   stays readable in a later session.
-- Finished records are pruned after three days. A record whose process is gone and that nothing saw die is pruned an
-  hour after its last output, or an hour after it started if it never wrote any. A running job is never pruned.
+- Finished records are pruned after three days, and `Ctrl+X` deletes them on request. A record whose process is
+  gone and that nothing saw die is pruned an hour after its last output, or an hour after it started if it never
+  wrote any. A running job is never pruned.
 - `PI_JOBS_FOREGROUND_SECONDS` sets the foreground window (default 60). `PI_JOBS_DIR` sets where job files
   live (default `$TMPDIR/pi-jobs`).
 

@@ -13,6 +13,8 @@ export interface JobView {
   logBytes: number;
   /** Where the command ran. A job belongs to the project it was started in. */
   cwd?: string;
+  /** The pi session that started it, for the `@other` marker and for what a bulk action may touch. */
+  session?: string;
 }
 
 export type JobStateKind = "running" | "ok" | "failed" | "killed" | "timedOut" | "finished";
@@ -130,6 +132,43 @@ export function abortOutcome(input: {
   if (!input.aborted || input.exited) return "none";
   if (input.killed) return "killed";
   return input.finished ? "already-finished" : "failed";
+}
+
+/** A count of records with the noun agreeing: `1 finished record`, `3 finished records`. */
+export function recordCount(count: number): string {
+  return `${count} finished record${count === 1 ? "" : "s"}`;
+}
+
+/** A byte count as a person reads it: `512 B`, `12.3 KB`, `1.2 MB`. */
+export function formatBytes(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = Math.max(0, bytes);
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  const shown = unit === 0 ? Math.round(value) : value < 10 ? value.toFixed(1) : Math.round(value);
+  return `${shown} ${units[unit]}`;
+}
+
+/**
+ * The command as it reads above its own output. The first line gets a prompt so a heredoc's first
+ * line is not mistaken for output; continuation lines keep their own indentation.
+ */
+export function commandBlock(command: string): string[] {
+  const lines = command.replace(/\n+$/, "").split("\n");
+  return lines.map((line, index) => (index === 0 ? `$ ${line}` : line));
+}
+
+/**
+ * A log's lines for the viewer, tail-capped with a line that says what was cut. Wrapping a
+ * megabyte of output on every refresh is the thing to avoid, not keeping the old bytes.
+ */
+export function logLines(text: string, maxLines = 2000): string[] {
+  const lines = text.replace(/\n$/, "").split("\n");
+  if (lines.length <= maxLines) return lines;
+  return [`… ${lines.length - maxLines} lines above, full log on disk`, ...lines.slice(-maxLines)];
 }
 
 /** First line, argument-free: `docker compose up` reads better than a truncated absolute path. */

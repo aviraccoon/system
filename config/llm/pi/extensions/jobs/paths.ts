@@ -20,6 +20,8 @@ export interface JobStatus {
   timedOut?: boolean;
   /** The directory the command ran in; what scopes a job to a project in the footer and /jobs. */
   cwd?: string;
+  /** The pi session that started it. Lets /jobs say `@other` and keeps bulk actions local. */
+  session?: string;
 }
 
 export interface JobPaths {
@@ -41,6 +43,14 @@ export interface JobRecord {
 
 export function jobsDir(env: NodeJS.ProcessEnv = process.env): string {
   return env.PI_JOBS_DIR ?? path.join(env.TMPDIR || os.tmpdir(), "pi-jobs");
+}
+
+/**
+ * Create the jobs directory. Every writer and every opener goes through here, so its mode has one
+ * home: private to the user, because a job's log is the command's raw output.
+ */
+export function ensureJobsDir(dir: string = jobsDir()): void {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
 
 /** `j-<start time>-<4 hex>`, sortable by time and unique enough within one machine. */
@@ -76,6 +86,10 @@ export function parseStatus(text: string): JobStatus {
     const value = line.slice(eq + 1).trim();
     if (key === "cwd") {
       if (value) status.cwd = value;
+      continue;
+    }
+    if (key === "session") {
+      if (value) status.session = value;
       continue;
     }
     if (key === "killed" || key === "timed_out") {

@@ -135,6 +135,7 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 - `Container` — vertical layout container. `addChild()`, `removeChild()`, `clear()`.
 - `Spacer` — vertical spacer. Constructor: `(lines?)`.
 - `DynamicBorder` — from `@earendil-works/pi-coding-agent` (not pi-tui). Horizontal border that adjusts to viewport width.
+- `ScrollableText` (from `./shared/scrollable-text`, not pi-tui): pre-styled lines with a bounded height, arrows, page keys, home/end and the wheel (`handleMouse`, which returns a result the host must forward with its own row offset), `setLines(lines, { keepOffset })`, `scrollToEnd()`, and a `[N above, M below]` last row while it overflows, so a hint the host must keep visible belongs outside it.
 
 ### Keyboard handling
 
@@ -142,6 +143,7 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 - `matchesKey(data, keyId)` — check if raw input matches a key. Use with `Key.*` helpers.
 - `getKeybindings()` — returns `KeybindingsManager`. Use `kb.matches(data, "tui.select.up")` for navigation keys — this respects user keybinding overrides. Available binding names: `tui.select.up/down/pageUp/pageDown/confirm/cancel`, `tui.editor.*`.
 - `fuzzyFilter(items, query, getText)` — fuzzy-match and sort items by relevance. Much better than `SelectList.setFilter` or custom `includes`/`startsWith` matching.
+- **Action shortcuts are ctrl chords, never bare letters.** A bare letter is invisible in the UI and collides with whatever already binds it (a list's `j`/`k` scrolling, a host's own keys). Navigation stays on pi's bindings (arrows, enter, esc, tab, page keys). Declare the chords once in a per-extension table that both the matchers and every hint read (`shared/shortcuts` has the label formatter), and check a new chord against `TUI_KEYBINDINGS` first: plain ctrl is free in a dialog with no text field, because pi's `app.*` chords are registered on the default editor, but a dialog that hosts an `Editor` must use ctrl+shift.
 
 ### Patterns to follow
 

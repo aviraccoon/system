@@ -40,6 +40,17 @@ describe("parseStatus", () => {
   test("unknown keys and junk lines are ignored", () => {
     expect(parseStatus("future=7\nnonsense\nstarted=abc\nstarted=9")).toEqual({ startedAt: 9 });
   });
+
+  test("cwd and session are strings, not numbers", () => {
+    expect(parseStatus("cwd=/work/acme\nsession=abc-123")).toEqual({
+      cwd: "/work/acme",
+      session: "abc-123",
+    });
+  });
+
+  test("an empty session value is dropped rather than stored as empty", () => {
+    expect(parseStatus("session=")).toEqual({});
+  });
 });
 
 describe("needsFinishStamp", () => {
