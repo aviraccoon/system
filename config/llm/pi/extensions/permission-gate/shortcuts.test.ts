@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { TUI_KEYBINDINGS } from "@earendil-works/pi-tui";
-import { GATE_SHORTCUTS, shortcutLabel } from "./shortcuts";
+import { GATE_SHORTCUTS } from "./shortcuts";
 
 /** Every key pi-tui binds inside a focused text field: the set the gate's toggles must avoid. */
 function editorKeys(): Set<string> {
@@ -14,21 +14,7 @@ function editorKeys(): Set<string> {
   return bound;
 }
 
-describe("shortcutLabel", () => {
-  it("capitalizes every part of a chord", () => {
-    expect(shortcutLabel(GATE_SHORTCUTS.autoClassify)).toBe("Ctrl+Shift+C");
-  });
-
-  it("handles a chord with no Shift", () => {
-    expect(shortcutLabel(GATE_SHORTCUTS.diff)).toBe("Ctrl+O");
-  });
-});
-
 describe("GATE_SHORTCUTS", () => {
-  it("keeps the global cycle chord", () => {
-    expect(shortcutLabel(GATE_SHORTCUTS.cycleMode)).toBe("Ctrl+Shift+A");
-  });
-
   it("takes no key the note editor binds", () => {
     // The rule the table exists for: a chord the focused component owns belongs to it,
     // which is why the note editor keeps Ctrl+A and Ctrl+E.

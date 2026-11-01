@@ -19,11 +19,3 @@ export const GATE_SHORTCUTS = {
   explanation: "ctrl+shift+e",
   diff: "ctrl+o",
 } as const satisfies Record<string, KeyId>;
-
-/** How a chord reads in the UI: `ctrl+shift+c` becomes `Ctrl+Shift+C`. */
-export function shortcutLabel(id: KeyId): string {
-  return id
-    .split("+")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join("+");
-}

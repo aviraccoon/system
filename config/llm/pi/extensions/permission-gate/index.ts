@@ -22,10 +22,11 @@ import { extractText, getSidecarStats, hasRole, resolveProviderAuth, sidecarComp
 import { decisionFromAnswers, RISK_FACTORS, SEVERITY_QUESTION } from "../shared/risk-factors";
 import { isConfinedBash } from "../shared/sandbox";
 import { isShellTool } from "../shared/shell-tools";
+import { shortcutLabel } from "../shared/shortcuts";
 import { computeEditPreview, computeWritePreview } from "./edit-preview";
 import type { ExplanationResult } from "./logic";
 import { resolveResultNote } from "./result-notes";
-import { GATE_SHORTCUTS, shortcutLabel } from "./shortcuts";
+import { GATE_SHORTCUTS } from "./shortcuts";
 
 /** Preview couldn't be computed (load/computation failure). Distinct from
  *  `undefined` (doomed edit) so the gate fails CLOSED, not silently allows. */

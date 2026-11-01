@@ -15,9 +15,10 @@ import { DynamicBorder, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, KeybindingsManager } from "@earendil-works/pi-tui";
 import { Container, Editor, matchesKey, type SelectItem, SelectList, Text, type TUI } from "@earendil-works/pi-tui";
 import { ScrollableText } from "../shared/scrollable-text";
+import { shortcutLabel } from "../shared/shortcuts";
 import { createDialogDeadline, type DeadlineDeps, type DialogDeadline } from "./dialog-timeout";
 import type { ExplanationResult, RiskVerdict } from "./logic";
-import { GATE_SHORTCUTS, shortcutLabel } from "./shortcuts";
+import { GATE_SHORTCUTS } from "./shortcuts";
 
 export interface ConfirmResult {
   choice: string | null;
