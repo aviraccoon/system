@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createJobBashTool, type JobResultDetails } from "./bash-tool";
-import { readJob } from "./paths";
+import { listJobs, readJob } from "./paths";
 import { isAlive, killJob } from "./runner";
 
 function tempDir(): string {
@@ -12,16 +12,16 @@ function tempDir(): string {
 
 async function waitForStatusFile(dir: string): Promise<void> {
   for (let i = 0; i < 50; i++) {
-    if (fs.readdirSync(dir).some((name) => name.endsWith(".status"))) return;
+    if (listJobs(dir).length > 0) return;
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   throw new Error("no status file appeared");
 }
 
 function statusPath(dir: string): string {
-  const name = fs.readdirSync(dir).find((entry) => entry.endsWith(".status"));
-  if (name === undefined) throw new Error("no status file");
-  return path.join(dir, name);
+  const record = listJobs(dir)[0];
+  if (record === undefined) throw new Error("no status file");
+  return record.paths.status;
 }
 
 function killGroup(pid: number | undefined): void {
@@ -272,6 +272,9 @@ describe("the bash tool", () => {
       expect(text).toContain(`backgrounded as job ${promoted[1]}`);
       expect(text).toContain("killed when its 30s budget runs out");
       expect(text).toContain("Do NOT poll");
+      // The log's path, because a model that wants the line above the tail has to be able to open it.
+      expect(text).toContain(readJob(dir, promoted[1])?.paths.log ?? "(no record)");
+      expect(readJob(dir, promoted[1])?.status.budgetSeconds).toBe(30);
       expect(result.isError).toBeFalsy();
       expect(detailsOf(result)).toMatchObject({ jobId: promoted[1], promoted: true, budgetSeconds: 30 });
       expect(detailsOf(result).exitCode).toBeUndefined();
@@ -306,11 +309,27 @@ describe("the bash tool", () => {
         cwd: dir,
       } as never);
       expect(outputOf(result)).toContain("Command timed out after its 1s budget");
+      // No pipe and an empty log for a different reason: saying "the pipe" here would be a guess.
+      expect(outputOf(result)).not.toContain("No output was captured");
       expect(detailsOf(result)).toMatchObject({ timedOut: true });
       expect(result.isError).toBe(true);
       expect(promoted).toHaveLength(0);
       expect(kinds).toEqual(["timedOut"]);
       expect(snapshots[0]).not.toContain("timed_out=1");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+
+  test("a timeout that captured nothing from a piped command says why", async () => {
+    const dir = tempDir();
+    try {
+      const { run } = tool(dir, 10_000);
+      // The shape that lost the debugger run five minutes of work: the pipe only writes at EOF.
+      const result = await run({ command: "sleep 30 | cat", timeout: 1 });
+      const text = outputOf(result);
+      expect(text).toContain("Command timed out after its 1s budget");
+      expect(text).toContain("No output was captured");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -352,12 +371,7 @@ describe("the bash tool", () => {
       let pid: number | undefined;
       for (let i = 0; i < 50 && pid === undefined; i++) {
         await new Promise((resolve) => setTimeout(resolve, 20));
-        const status = fs
-          .readdirSync(dir)
-          .filter((name) => name.endsWith(".status"))
-          .map((name) => fs.readFileSync(path.join(dir, name), "utf8"))
-          .join("");
-        pid = Number(/^pid=(\d+)$/m.exec(status)?.[1] ?? Number.NaN) || undefined;
+        pid = listJobs(dir)[0]?.status.pid;
       }
       expect(pid).toBeDefined();
       process.kill(-(pid as number), "SIGKILL");

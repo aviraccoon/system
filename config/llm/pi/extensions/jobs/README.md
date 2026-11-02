@@ -42,15 +42,24 @@ The output screen shows the command in full, a heredoc's newlines included, with
 tail while the job runs. Scrolling up stops the follow and `End` re-attaches it. The mouse wheel scrolls whichever
 pane it is over.
 
+A job whose caller set a `timeout` shows `elapsed/budget` instead of the plain clock, in the warning color from
+three quarters spent and the error color from nine tenths.
+
+`Ctrl+O` opens the selected job's own directory, which holds its status, command, output and generated script; with
+nothing selected it opens the directory holding all of them.
+
 ## Limits and footguns
 
 - `timeout` is the command's total time budget, not a wait limit: a budget that expires inside the foreground window
-  kills the command, and only a call that outlives the window becomes a job.
+  kills the command, and only a call that outlives the window becomes a job. The largest budget a caller can ask for
+  is an hour.
 - Pressing escape kills the command, as the built-in tool does. If the process cannot be signalled, the call says so
   and the job keeps running. Escape only reaches a call that is still in flight; a promoted job is killed from
   `/jobs`.
 - Completion is pushed, so polling is wasted work: `sleep`, `ps`, `pgrep` and log tailing all spend turns
-  learning nothing.
+  learning nothing. A completion carries the log's tail and names the log's path whenever lines were left out or the
+  job failed. A failed log that was read whole also brings its start, when the tail leaves lines before it, and a
+  single line over 400 characters is shortened in place, keeping its start.
 - The footer and `/jobs` cover this directory's jobs. `Ctrl+A` widens `/jobs` to this session or to every
   directory, and work started elsewhere is counted as `+1 elsewhere` rather than named.
 - A job records the session that started it, and another session's job is marked `@other`. `/jobs kill all` and
@@ -65,7 +74,7 @@ pane it is over.
 - The permission gate approves a command once, when it starts. A promoted job's later effects are not
   classified again.
 - If pi exits first the job keeps running: the budget dies with pi, the job records its own exit, and a finished record
-  stays readable in a later session.
+  stays readable in a later session. Not across a reboot: the job files live under `$TMPDIR`, which the OS clears.
 - Finished records are pruned after three days, and `Ctrl+X` deletes them on request. A record whose process is
   gone and that nothing saw die is pruned an hour after its last output, or an hour after it started if it never
   wrote any. A running job is never pruned.

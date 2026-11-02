@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   abortOutcome,
+  budgetView,
   commandBlock,
   commandLabel,
   completionMessage,
@@ -8,11 +9,14 @@ import {
   formatBytes,
   formatElapsed,
   type JobView,
+  jobFailed,
   jobState,
   logLines,
   recordCount,
   statusLine,
   tailText,
+  timeoutNotice,
+  wakeSlices,
 } from "./format";
 
 function view(overrides: Partial<JobView> = {}): JobView {
@@ -154,30 +158,299 @@ describe("commandLabel", () => {
   });
 });
 
-describe("elapsed and completion message", () => {
+describe("elapsed and the completion message", () => {
   test("a finished job measures from start to finish", () => {
     expect(elapsedSeconds(view({ status: { startedAt: 1_000, finishedAt: 1_192 } }), 9_999)).toBe(192);
   });
 
-  test("the wake message names the exit code, the time and the tail", () => {
+  test("the wake names the exit code, the time and the tail", () => {
+    const message = completionMessage(
+      view({ status: { startedAt: 1_000, finishedAt: 1_192, exit: 0 } }),
+      1_200,
+      { tail: "built ok", omitted: 0 },
+      0,
+      "/tmp/pi-jobs/j-1.log",
+    );
+    expect(message).toBe("[job j-1 finished: exit 0 after 3m12s]\n\nbuilt ok");
+  });
+
+  test("a failure names the log even when nothing was cut, so the rest is reachable", () => {
     const message = completionMessage(
       view({ status: { startedAt: 1_000, finishedAt: 1_192, exit: 1 } }),
       1_200,
-      "boom\n",
+      { tail: "boom", omitted: 0 },
       1,
+      "/tmp/pi-jobs/j-1.log",
     );
-    expect(message).toBe("[job j-1 finished: exit 1 after 3m12s]\n\nboom");
+    expect(message).toBe("[job j-1 finished: exit 1 after 3m12s]\n\nboom\n\nFull log: /tmp/pi-jobs/j-1.log");
+  });
+
+  test("a capped read names the log without claiming a line count", () => {
+    const message = completionMessage(
+      view({ status: { startedAt: 1_000, finishedAt: 1_192, exit: 0 } }),
+      1_200,
+      { tail: "cut", omitted: 0, capped: true },
+      0,
+      "/tmp/pi-jobs/j-1.log",
+    );
+    expect(message).toContain("… further output omitted");
+    expect(message).not.toContain("lines omitted");
+    expect(message).toContain("Full log: /tmp/pi-jobs/j-1.log");
+  });
+
+  test("a cut body says how much is missing and where the rest is", () => {
+    const message = completionMessage(
+      view({ status: { startedAt: 1_000, finishedAt: 1_192, exit: 0 } }),
+      1_200,
+      { head: "first", tail: "last", omitted: 40 },
+      0,
+      "/tmp/pi-jobs/j-1.log",
+    );
+    expect(message).toContain("first\n\n… 40 lines omitted\n\nlast");
+    expect(message).toContain("Full log: /tmp/pi-jobs/j-1.log");
   });
 
   test("a stamped record with no exit says the exit is unknown, not that it is lost", () => {
-    const message = completionMessage(view({ status: { startedAt: 1_000, finishedAt: 1_192 } }), 1_200, "", undefined);
+    const message = completionMessage(
+      view({ status: { startedAt: 1_000, finishedAt: 1_192 } }),
+      1_200,
+      { tail: "", omitted: 0 },
+      undefined,
+      "/tmp/pi-jobs/j-1.log",
+    );
     expect(message).toBe("[job j-1 finished: exit unknown after 3m12s]");
   });
 
   test("a job with no output carries only the header", () => {
-    expect(completionMessage(view({ status: { startedAt: 1_000, finishedAt: 1_010, exit: 0 } }), 1_010, "", 0)).toBe(
-      "[job j-1 finished: exit 0 after 10s]",
+    const message = completionMessage(
+      view({ status: { startedAt: 1_000, finishedAt: 1_010, exit: 0 } }),
+      1_010,
+      { tail: "", omitted: 0 },
+      0,
+      "/tmp/pi-jobs/j-1.log",
     );
+    expect(message).toBe("[job j-1 finished: exit 0 after 10s]");
+  });
+});
+
+describe("wakeSlices", () => {
+  const log = (lines: number): string => Array.from({ length: lines }, (_, i) => `line ${i + 1}`).join("\n");
+
+  test("a short log arrives whole", () => {
+    expect(wakeSlices("a\nb\n", true)).toEqual({ tail: "a\nb", omitted: 0 });
+  });
+
+  test("a passing job gets the tail only", () => {
+    const slices = wakeSlices(log(100), false);
+    expect(slices.head).toBeUndefined();
+    expect(slices.tail.split("\n")).toHaveLength(80);
+    expect(slices.tail.endsWith("line 100")).toBe(true);
+    expect(slices.omitted).toBe(20);
+  });
+
+  test("a failure gets the head too, because the error sits above the tail", () => {
+    const slices = wakeSlices(log(300), true);
+    expect(slices.head?.split("\n")[0]).toBe("line 1");
+    expect(slices.head?.split("\n")).toHaveLength(20);
+    expect(slices.tail.endsWith("line 300")).toBe(true);
+    expect(slices.omitted).toBe(200);
+  });
+
+  test("a failure short enough for a head and a tail to cover goes whole", () => {
+    // 90 lines is past the tail alone, so cutting the first ten would hide the error for no gain.
+    const slices = wakeSlices(log(90), true);
+    expect(slices.head).toBeUndefined();
+    expect(slices.tail.startsWith("line 1\n")).toBe(true);
+    expect(slices.tail.endsWith("line 90")).toBe(true);
+    expect(slices.omitted).toBe(0);
+  });
+
+  test("one line past that boundary takes the head again", () => {
+    const slices = wakeSlices(log(101), true);
+    expect(slices.head?.split("\n")[0]).toBe("line 1");
+    expect(slices.omitted).toBe(1);
+  });
+
+  test("no output is no blocks", () => {
+    expect(wakeSlices("", true)).toEqual({ tail: "", omitted: 0 });
+    expect(wakeSlices("\n\n", false)).toEqual({ tail: "", omitted: 0 });
+  });
+
+  test("one huge line keeps its start instead of filling the block", () => {
+    const slices = wakeSlices("x".repeat(20_000), false);
+    expect(slices.tail).toBe(`${"x".repeat(399)}…`);
+    expect(slices.omitted).toBe(0);
+  });
+
+  test("a huge line in the head is shortened the same way", () => {
+    const long = "y".repeat(20_000);
+    const slices = wakeSlices(`${long}\n${log(200)}`, true);
+    expect(slices.head?.split("\n")[0]).toBe(`${"y".repeat(399)}…`);
+    expect(slices.head?.split("\n")).toHaveLength(20);
+    expect(Buffer.byteLength(slices.head ?? "")).toBeLessThanOrEqual(8_000);
+  });
+
+  test("a dense failing log is partitioned: nothing twice, nothing dropped", () => {
+    // 20 long lines put the body past the byte budget while the tail of 70 short ones stays under it.
+    const lines = [
+      ...Array.from({ length: 20 }, (_, i) => `${i + 1}`.padEnd(500, "x")),
+      ...Array.from({ length: 70 }, (_, i) => `short ${i + 21}`),
+    ];
+    const slices = wakeSlices(lines.join("\n"), true);
+    const head = slices.head?.split("\n") ?? [];
+    const tail = slices.tail.split("\n");
+    // The tail takes its 80 lines first, so the head is the ten before them and the two blocks cover
+    // the log exactly once.
+    expect(head).toHaveLength(10);
+    expect(head[0]?.startsWith("1")).toBe(true);
+    expect(tail).toHaveLength(80);
+    expect(tail[0]?.startsWith("11")).toBe(true);
+    expect(slices.omitted).toBe(0);
+    expect(slices.capped).toBeUndefined();
+    // The long lines are shortened to their first 399 characters; everything else arrives verbatim.
+    expect(head[0]).toBe(`${(lines[0] as string).slice(0, 399)}…`);
+    expect(tail.slice(10)).toEqual(lines.slice(20));
+  });
+
+  test("a dense failing log shows the tail alone when the tail covers it", () => {
+    // Ten very long lines, shortened in place, so the tail holds the whole log and the head has no
+    // line range of its own to take.
+    const lines = Array.from({ length: 10 }, (_, i) => `${i + 1}`.padEnd(1208, "x"));
+    const slices = wakeSlices(lines.join("\n"), true);
+    expect(slices.head).toBeUndefined();
+    expect(slices.tail.split("\n")).toHaveLength(10);
+    expect(slices.tail.split("\n")[9]?.endsWith("…")).toBe(true);
+    expect(slices.tail.split("\n")[9]?.startsWith("10")).toBe(true);
+    expect(slices.omitted).toBe(0);
+  });
+
+  test("a tail of long lines stops at the byte budget, and the count includes what it dropped", () => {
+    // 300 lines of 400 characters: the 80-line tail alone would be 32 KB, four times the budget.
+    const lines = Array.from({ length: 300 }, (_, i) => `${i + 1}`.padEnd(400, "x"));
+    const slices = wakeSlices(lines.join("\n"), true);
+    const head = slices.head?.split("\n") ?? [];
+    const tail = slices.tail.split("\n");
+    expect(head.length).toBeGreaterThan(0);
+    expect(head.length).toBeLessThanOrEqual(20);
+    expect(tail.length).toBeGreaterThan(0);
+    expect(tail.length).toBeLessThan(80);
+    expect(Buffer.byteLength(slices.head ?? "")).toBeLessThanOrEqual(8_000);
+    expect(Buffer.byteLength(slices.tail)).toBeLessThanOrEqual(8_000);
+    // The end of the log survives, and every line kept out of either block is counted as omitted.
+    expect(tail[tail.length - 1]).toBe(lines[299]);
+    expect(slices.omitted).toBe(300 - head.length - tail.length);
+  });
+
+  test("a line over the cap is never split mid-character", () => {
+    // The 400th character of this line is half of an emoji; the cut must not leave a lone surrogate.
+    const slices = wakeSlices(`${"a".repeat(398)}😀rest of the line`, false);
+    expect(slices.tail).toBe(`${"a".repeat(398)}…`);
+  });
+
+  test("a short dense failure gives its first line to the head", () => {
+    // 20 lines at the character cap are past the byte budget, so the tail drops its first line. That
+    // line is where the error is, and the head exists to take it back.
+    const lines = Array.from({ length: 20 }, (_, i) => `${i + 1}`.padEnd(400, "x"));
+    const slices = wakeSlices(lines.join("\n"), true);
+    expect(slices.head).toBe(lines[0]);
+    expect(slices.tail.split("\n")).toHaveLength(19);
+    expect(slices.tail.split("\n")[0]).toBe(lines[1]);
+    expect(slices.omitted).toBe(0);
+  });
+
+  test("a capped read has no head to offer, and says it cannot count", () => {
+    // The text is the tail of a bigger file: its first line is not the log's first line.
+    const slices = wakeSlices(log(300), true, false);
+    expect(slices.head).toBeUndefined();
+    expect(slices.omitted).toBe(0);
+    expect(slices.capped).toBe(true);
+  });
+});
+
+describe("budgetView", () => {
+  const spentOf = (spent: number, budget = 100) =>
+    budgetView({ startedAt: 1_000, budgetSeconds: budget }, 1_000 + spent);
+
+  test("says nothing when the caller declared no budget", () => {
+    expect(budgetView({ startedAt: 1_000 }, 1_100)).toBeUndefined();
+    expect(budgetView({ startedAt: 1_000, budgetSeconds: 0 }, 1_100)).toBeUndefined();
+  });
+
+  test("shows what is spent of it", () => {
+    expect(spentOf(12)?.text).toBe("12s/1m40s");
+  });
+
+  test("warns at three quarters and turns red at nine tenths", () => {
+    expect(spentOf(74)?.level).toBe("ok");
+    expect(spentOf(75)?.level).toBe("warning");
+    expect(spentOf(89)?.level).toBe("warning");
+    expect(spentOf(90)?.level).toBe("error");
+  });
+
+  test("a settled job keeps its ratio but never reads as late", () => {
+    const settled = budgetView({ startedAt: 1_000, finishedAt: 1_100, budgetSeconds: 100, exit: 0 }, 9_999);
+    expect(settled).toEqual({ text: "1m40s/1m40s", level: "ok" });
+  });
+});
+
+describe("jobFailed", () => {
+  test("a non-zero exit, a kill and a timeout all count", () => {
+    expect(jobFailed({ exit: 1 })).toBe(true);
+    expect(jobFailed({ killed: true })).toBe(true);
+    expect(jobFailed({ timedOut: true })).toBe(true);
+  });
+
+  test("success, a running job and an unknown fate do not", () => {
+    expect(jobFailed({ exit: 0 })).toBe(false);
+    expect(jobFailed({ startedAt: 1 })).toBe(false);
+    expect(jobFailed({ startedAt: 1, finishedAt: 2 })).toBe(false);
+  });
+});
+
+describe("timeoutNotice", () => {
+  test("names the budget", () => {
+    expect(timeoutNotice(300, 400, "make build")).toBe("Command timed out after its 5m budget");
+  });
+
+  test("explains an empty log when the command piped its output", () => {
+    expect(timeoutNotice(300, 0, "make build | tail -30")).toContain("No output was captured");
+  });
+
+  test("does not guess a cause when nothing was piped", () => {
+    expect(timeoutNotice(300, 0, "make build")).toBe("Command timed out after its 5m budget");
+  });
+
+  test("stays quiet when output was captured", () => {
+    expect(timeoutNotice(300, 10, "make build | tail -30")).toBe("Command timed out after its 5m budget");
+  });
+});
+
+describe("a wake whose tail fits keeps its count", () => {
+  test("a log past the byte cap still counts the lines when its own tail was not cut", () => {
+    // 3000 short lines are far past 8 KB in total, while the 80-line tail is a few hundred bytes.
+    const lines = Array.from({ length: 3000 }, (_, i) => `line ${i + 1}`).join("\n");
+    const slices = wakeSlices(lines, false);
+    expect(slices.capped).toBeUndefined();
+    expect(slices.omitted).toBe(2920);
+    const message = completionMessage(
+      view({ status: { startedAt: 1_000, finishedAt: 1_192, exit: 0 } }),
+      1_200,
+      slices,
+      0,
+      "/tmp/pi-jobs/j-1.log",
+    );
+    expect(message).toContain("… 2920 lines omitted");
+  });
+
+  test("the omitted count agrees in number", () => {
+    const message = completionMessage(
+      view({ status: { startedAt: 1_000, finishedAt: 1_192, exit: 1 } }),
+      1_200,
+      { tail: "t", omitted: 1 },
+      1,
+      "/tmp/pi-jobs/j-1.log",
+    );
+    expect(message).toContain("… 1 line omitted");
   });
 });
 

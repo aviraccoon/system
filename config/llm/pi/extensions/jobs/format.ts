@@ -3,7 +3,7 @@
  * log. Pure functions, so the CLI text and the overlay agree and both are testable without pi.
  */
 
-import type { JobStatus } from "./paths";
+import { isSettled, type JobStatus } from "./paths";
 
 export interface JobView {
   id: string;
@@ -64,6 +64,38 @@ export function elapsedSeconds(view: JobView, nowSeconds: number): number {
   const start = view.status.startedAt ?? nowSeconds;
   const end = view.status.finishedAt ?? nowSeconds;
   return end - start;
+}
+
+/** How much of a declared budget is spent, named for the colour a reader sees. */
+export type BudgetLevel = "ok" | "warning" | "error";
+
+export interface BudgetView {
+  text: string;
+  level: BudgetLevel;
+}
+
+/** The share of the budget at which a reader should start noticing, then expecting the kill. */
+const BUDGET_SOON = 0.75;
+const BUDGET_LATE = 0.9;
+
+/**
+ * `3m12s/5m` for a job whose caller declared a budget, with the pressure it represents. A settled job
+ * keeps its ratio but never reads as late: there is nothing left for the budget to run out of.
+ */
+export function budgetView(status: JobStatus, nowSeconds: number): BudgetView | undefined {
+  const budget = status.budgetSeconds;
+  if (budget === undefined || budget <= 0) return undefined;
+  const elapsed = Math.max(0, (status.finishedAt ?? nowSeconds) - (status.startedAt ?? nowSeconds));
+  const spent = elapsed / budget;
+  const level: BudgetLevel =
+    isSettled(status) || spent < BUDGET_SOON ? "ok" : spent < BUDGET_LATE ? "warning" : "error";
+  return { text: `${formatElapsed(elapsed)}/${formatElapsed(budget)}`, level };
+}
+
+/** A job that did not succeed: a non-zero exit, a kill, a timeout. */
+export function jobFailed(status: JobStatus): boolean {
+  if (status.killed === true || status.timedOut === true) return true;
+  return status.exit !== undefined && status.exit !== 0;
 }
 
 /** pi's own limits, so an override does not quietly return less output than the tool it replaced. */
@@ -178,18 +210,134 @@ export function commandLabel(command: string, width = 60): string {
   return `${line.slice(0, width - 1)}…`;
 }
 
-/** The message the agent receives when a promoted job finishes. */
+/**
+ * What a wake carries of a log: the tail always, plus the head when the job failed and the log was read
+ * whole. The head gives way so the tail is never empty.
+ */
+export interface WakeSlices {
+  head?: string;
+  tail: string;
+  /** Lines neither block shows. */
+  omitted: number;
+  /** The text is the end of a capped read, so `omitted` cannot count what came before it. */
+  capped?: boolean;
+}
+
+const WAKE_HEAD_LINES = 20;
+const WAKE_TAIL_LINES = 80;
+/** A block is bounded twice: by lines, and by bytes so a log of long lines cannot fill it. */
+const WAKE_SLICE_BYTES = 8_000;
+/** One line may not use a whole block. A minified blob or a one-line stack would otherwise own it. */
+const WAKE_LINE_CHARS = 400;
+
+/** A line over the per-line cap keeps its start, which is where a blob's keys or an error's text are. */
+function clampLine(line: string): string {
+  if (line.length <= WAKE_LINE_CHARS) return line;
+  let cut = line.slice(0, WAKE_LINE_CHARS - 1);
+  const last = cut.charCodeAt(cut.length - 1);
+  // Never split a surrogate pair: the fragment would not encode.
+  if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  return `${cut}…`;
+}
+
+interface Block {
+  text: string;
+  /** Lines the byte budget kept out of the block. */
+  dropped: number;
+  /** At least one line was shortened. */
+  shortened: boolean;
+}
+
+/** Whole lines from one end, each line capped, until the line or byte budget runs out. */
+function clampBlock(lines: string[], fromEnd: boolean, maxLines: number, maxBytes: number): Block {
+  const ordered = fromEnd ? [...lines].reverse() : lines;
+  const picked: string[] = [];
+  let bytes = 0;
+  let shortened = false;
+  for (const line of ordered) {
+    if (picked.length >= maxLines) break;
+    const clamped = clampLine(line);
+    if (clamped !== line) shortened = true;
+    const size = Buffer.byteLength(clamped) + 1;
+    if (bytes + size > maxBytes) break;
+    picked.push(clamped);
+    bytes += size;
+  }
+  return { text: (fromEnd ? picked.reverse() : picked).join("\n"), dropped: lines.length - picked.length, shortened };
+}
+
+/**
+ * A wake is unasked-for context, so it carries a reading of the log rather than the file. A failing
+ * build puts its error above the tail, which is the part a wake would otherwise carry alone.
+ * `wholeLog` false says `text` is the tail of a capped read, where a head cannot be known.
+ */
+export function wakeSlices(text: string, failed: boolean, wholeLog = true): WakeSlices {
+  const body = text.replace(/\n+$/, "");
+  if (!body.trim()) return { tail: "", omitted: 0 };
+  const lines = body.split("\n");
+
+  // A failing log that fits both budgets, line by line, is sent in full: a line count is not worth
+  // hiding the lines the error is on.
+  if (failed && wholeLog) {
+    const whole = clampBlock(lines, false, WAKE_HEAD_LINES + WAKE_TAIL_LINES, WAKE_SLICE_BYTES);
+    if (whole.dropped === 0 && !whole.shortened) return { tail: whole.text, omitted: 0 };
+  }
+
+  // The tail is the log's end, which a wake can never do without. The head is the first lines, taken
+  // from what the tail is not showing: its own byte budget can drop lines from the tail's start, and
+  // those are exactly the lines the head exists for, so it takes them back.
+  const tailStart = Math.max(0, lines.length - WAKE_TAIL_LINES);
+  const tail = clampBlock(lines.slice(tailStart), true, WAKE_TAIL_LINES, WAKE_SLICE_BYTES);
+  const headEnd = failed && wholeLog ? Math.min(WAKE_HEAD_LINES, tailStart + tail.dropped) : 0;
+  const head = headEnd > 0 ? clampBlock(lines.slice(0, headEnd), false, WAKE_HEAD_LINES, WAKE_SLICE_BYTES) : undefined;
+  return {
+    ...(head === undefined ? {} : { head: head.text }),
+    tail: tail.text,
+    // Every line kept out of either block is counted, so the notice never understates what is missing.
+    omitted: wholeLog ? tailStart - headEnd + tail.dropped + (head?.dropped ?? 0) : 0,
+    ...(wholeLog ? {} : { capped: true }),
+  };
+}
+
+/**
+ * The message the agent receives when a promoted job finishes. The log's path rides along whenever
+ * the body was cut or the job failed: a reader that cannot find the line it needs has to be told
+ * where the rest is, and a wake is the one message nobody asked for.
+ */
 export function completionMessage(
   view: JobView,
   nowSeconds: number,
-  tail: string,
+  slices: WakeSlices,
   exitCode: number | undefined,
+  logPath: string,
 ): string {
   const state = jobState(view.status, false);
   const elapsed = formatElapsed(elapsedSeconds(view, nowSeconds));
   const code = exitCode ?? view.status.exit;
   const detail = code !== undefined ? `exit ${code}` : state.kind === "finished" ? "exit unknown" : state.label;
-  const header = `[job ${view.id} finished: ${detail} after ${elapsed}]`;
-  const body = tail.trim() ? `\n\n${tail.trimEnd()}` : "";
-  return `${header}${body}`;
+  const cut = slices.omitted > 0 || slices.capped === true;
+  const blocks = [`[job ${view.id} finished: ${detail} after ${elapsed}]`];
+  if (slices.head) blocks.push(slices.head);
+  if (cut) {
+    blocks.push(
+      slices.capped === true
+        ? "… further output omitted"
+        : `… ${slices.omitted} line${slices.omitted === 1 ? "" : "s"} omitted`,
+    );
+  }
+  if (slices.tail) blocks.push(slices.tail);
+  if (cut || jobFailed(view.status)) blocks.push(`Full log: ${logPath}`);
+  return blocks.join("\n\n");
+}
+
+/**
+ * A timed-out job's sentence, plus the case where the log is empty although the command produced
+ * output: a pipe only survives the kill if it flushed first. Which pipe it was does not matter, so
+ * the wording does not guess.
+ */
+export function timeoutNotice(budgetSeconds: number | undefined, logBytes: number, command: string): string {
+  const budget = budgetSeconds === undefined ? "its budget" : `its ${formatElapsed(budgetSeconds)} budget`;
+  const base = `Command timed out after ${budget}`;
+  if (logBytes > 0 || !command.includes("|")) return base;
+  return `${base}. No output was captured: the command pipes its output, and the pipe may have been killed before it flushed`;
 }

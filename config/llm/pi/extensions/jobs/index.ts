@@ -30,6 +30,8 @@ import { ScrollableText } from "../shared/scrollable-text";
 import { shortcutLabel } from "../shared/shortcuts";
 import { createJobBashTool, type JobResultDetails, type KillKind } from "./bash-tool";
 import {
+  type BudgetLevel,
+  budgetView,
   commandBlock,
   commandLabel,
   completionMessage,
@@ -37,27 +39,32 @@ import {
   formatBytes,
   formatElapsed,
   type JobView,
+  jobFailed,
   jobState,
   logLines,
   recordCount,
   statusLine,
   tailText,
+  wakeSlices,
 } from "./format";
 import { dialogHeight, listBodyHeight, splitOutput, windowRows } from "./layout";
 import {
   appendStatus,
+  ensureJobsDir,
   type JobRecord,
   jobPaths,
   jobsDir,
   listJobs,
-  ensureJobsDir,
   needsFinishStamp,
   readJob,
+  removeJob,
   shouldPrune,
+  stampMarker,
 } from "./paths";
 import { isAlive, killJob, LOG_READ_LIMIT, readLog } from "./runner";
 import { cycleScope, hiddenFinished, type JobScope, scopeLabel, startedHere, visibleJobs } from "./scope";
 import { JOB_SHORTCUTS } from "./shortcuts";
+import { WakeLedger } from "./wakes";
 
 const FOOTER_KEY = "jobs";
 
@@ -88,6 +95,15 @@ interface Tracked {
   dir: string;
   /** Set when this process killed the job, so the wake is labelled from that, not from a racing file. */
   killKind?: KillKind;
+}
+
+/** A completion message, kept until the session shows it. */
+interface Wake {
+  jobId: string;
+  message: string;
+  exitCode?: number;
+  timedOut?: boolean;
+  killed?: boolean;
 }
 
 export default function jobsExtension(pi: ExtensionAPI): void {
@@ -138,13 +154,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
     for (const job of listJobs(dir())) {
       const logMtime = mtimeSeconds(job.paths.log);
       if (!shouldPrune(job.status, isAlive(job.status.pid), now, logMtime)) continue;
-      for (const file of [job.paths.script, job.paths.cmd, job.paths.log, job.paths.status]) {
-        try {
-          fs.rmSync(file, { force: true });
-        } catch {
-          /* best effort */
-        }
-      }
+      removeJob(dir(), job.id);
     }
   }
 
@@ -153,66 +163,88 @@ export default function jobsExtension(pi: ExtensionAPI): void {
     // visible, then decide whether the model is owed a wake.
     setTimeout(() => {
       tracked.delete(job.id);
-      const record = readJob(dir(), job.id);
-      // A child killed from outside exits without its wrapper writing a tail. This process saw the
-      // exit, so it can date it: the record then ages like a finished one instead of on a guess.
-      let stamped = false;
+      let record = readJob(dir(), job.id);
       // A kill this process asked for is known here even when the killer's own status write is still
-      // in flight, which is how a budget timeout used to wake as `exit unknown`.
-      // Only when the wrapper left no exit: an exit code means it reached its own tail, so a kill that
-      // was refused did not stop it and the record is the truth.
+      // in flight, which is how a budget timeout used to wake as `exit unknown`. Only when the wrapper
+      // left no exit: an exit code means it reached its own tail, so a kill that was refused did not
+      // stop it and the record is the truth.
       if (record && job.killKind && record.status.exit === undefined) {
         const marker = job.killKind === "timedOut" ? "timed_out=1" : "killed=1";
-        const already = job.killKind === "timedOut" ? record.status.timedOut === true : record.status.killed === true;
-        if (!already) {
-          try {
-            appendStatus(record.paths.status, [marker, `finished=${Math.floor(Date.now() / 1000)}`]);
-            stamped = true;
-          } catch {
-            /* the record is already gone */
-          }
-        }
+        stampMarker(record.paths.status, marker);
+        record = readJob(dir(), job.id) ?? record;
       }
-      if (!stamped && record && needsFinishStamp(record.status)) {
+      // A child killed from outside exits without its wrapper writing a tail. This process saw the
+      // exit, so it can date it: the record then ages like a finished one instead of on a guess.
+      if (record && needsFinishStamp(record.status)) {
         try {
           appendStatus(record.paths.status, [`finished=${Math.floor(Date.now() / 1000)}`]);
-          stamped = true;
+          record = readJob(dir(), job.id) ?? record;
         } catch {
           /* the record is already gone */
         }
       }
-      // The wake is built from the record as it now stands; the pre-stamp snapshot would tell the
-      // model the fate is unknown right after this process recorded its finish time.
-      const latest = stamped ? (readJob(dir(), job.id) ?? record) : record;
-      if (job.promoted && latest) {
+      if (job.promoted && record) {
         const now = Math.floor(Date.now() / 1000);
-        // The tail, not the log: a wake enters the model's context, so it gets the same 80-line cap a
-        // tool result would.
-        const message = completionMessage(view(latest), now, tailText(readLog(latest.paths.log)), latest.status.exit);
-        // The extension API types sendMessage as void, so there is no promise to catch; a session
-        // that is closing simply drops it, and the status file is the record either way.
-        try {
-          pi.sendMessage(
-            {
-              customType: "job-completion",
-              content: message,
-              display: true,
-              details: {
-                jobId: job.id,
-                exitCode: latest.status.exit,
-                ...(latest.status.timedOut ? { timedOut: true } : {}),
-                ...(latest.status.killed ? { killed: true } : {}),
-              } satisfies Partial<JobResultDetails>,
-            },
-            { triggerTurn: true, deliverAs: "followUp" },
-          );
-        } catch {
-          /* the session is closing */
-        }
+        // A wake is unasked-for context: it carries the tail, plus the head of a failed job because
+        // that is where the error sits, plus the log's path whenever anything was cut or the job
+        // failed. A log past the read cap has no head to offer: its first line is the middle of the file.
+        const wholeLog = record.logBytes <= LOG_READ_LIMIT;
+        const slices = wakeSlices(readLog(record.paths.log), jobFailed(record.status), wholeLog);
+        sendWake({
+          jobId: job.id,
+          message: completionMessage(view(record), now, slices, record.status.exit, record.paths.log),
+          exitCode: record.status.exit,
+          timedOut: record.status.timedOut,
+          killed: record.status.killed,
+        });
       }
       refreshFooter();
     }, 50);
   }
+
+  const owed = new WakeLedger<Wake>((value) => value.jobId);
+
+  /**
+   * Send a completion and remember it. `sendMessage` has no receipt, so delivery is only known when
+   * the session shows the message; the loss that matters is an abort clearing the queue it waits in.
+   */
+  function sendWake(wake: Wake): void {
+    owed.owe(wake);
+    try {
+      pi.sendMessage(
+        {
+          customType: "job-completion",
+          content: wake.message,
+          display: true,
+          details: {
+            jobId: wake.jobId,
+            exitCode: wake.exitCode,
+            ...(wake.timedOut ? { timedOut: true } : {}),
+            ...(wake.killed ? { killed: true } : {}),
+          } satisfies Partial<JobResultDetails>,
+        },
+        { triggerTurn: true, deliverAs: "followUp" },
+      );
+    } catch {
+      /* the session is closing; the status file is the record either way */
+    }
+  }
+
+  // A queued message is shown as it starts, which is the only delivery receipt a custom message has.
+  pi.on("message_start", (event) => {
+    const message = event.message;
+    if (message.role !== "custom" || message.customType !== "job-completion") return;
+    const jobId = (message.details as { jobId?: string } | undefined)?.jobId;
+    if (jobId !== undefined) owed.delivered(jobId);
+  });
+
+  // Escape aborts the run and clears the queue the wake is waiting in, without showing it anywhere.
+  // Re-send once at the first settle after an abort, which is also the moment that queue was emptied;
+  // a normal settle never needs it, because the loop only ends after it has drained its follow-ups.
+  pi.on("agent_settled", (event) => {
+    if (!event.aborted) return;
+    for (const wake of owed.takeForRetry()) sendWake(wake);
+  });
 
   /**
    * Say a kill is coming before asking for it. The wrapper cannot report a killed job, and the exit
@@ -457,14 +489,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
         function clearRecords(targets: JobView[]): number {
           let removed = 0;
           for (const v of targets) {
-            const paths = jobPaths(dir(), v.id);
-            for (const file of [paths.script, paths.cmd, paths.log, paths.status]) {
-              try {
-                fs.rmSync(file, { force: true });
-              } catch {
-                /* best effort, like prune */
-              }
-            }
+            removeJob(dir(), v.id);
             removed++;
           }
           return removed;
@@ -497,15 +522,18 @@ export default function jobsExtension(pi: ExtensionAPI): void {
         }
 
         async function revealFolder(): Promise<void> {
-          // No selection needed: every job's files are in the one shared directory, and the default filter
-          // leaves the list empty whenever only finished records exist. It only exists once a job has
-          // started, and the platform's opener fails on a missing path, so create it first.
+          // A job's files are its own directory, so the chord follows the selection. With nothing to
+          // open (an empty list is the default view's common state) the directory holding every job is
+          // still worth opening, and the platform's opener fails on a path that does not exist yet.
+          const v = screen === "list" ? resolveSelection(rows()) : jobById(selectedId);
+          const own = v === undefined ? undefined : jobPaths(dir(), v.id).dir;
+          const target = own !== undefined && fs.existsSync(own) ? own : dir();
           try {
             ensureJobsDir();
           } catch {
             /* the open reports the failure */
           }
-          const result = await openFolder(dir());
+          const result = await openFolder(target);
           if (!result.ok) notify(`Could not open the folder: ${result.reason}`, "error");
         }
 
@@ -561,20 +589,42 @@ export default function jobsExtension(pi: ExtensionAPI): void {
           refreshFooter();
         }
 
-        function listRow(v: JobView, selected: boolean, width: number): string {
+        /** The clock column is as wide as the widest `elapsed/budget` on screen, so rows line up. */
+        function clockWidth(all: JobView[]): number {
+          const nowSeconds = now();
+          return Math.max(6, ...all.map((v) => budgetView(v.status, nowSeconds)?.text.length ?? 0));
+        }
+
+        /** A budget's level is a theme colour already; `ok` means paint it like the plain clock. */
+        function pressureColor(level: BudgetLevel | undefined): "warning" | "error" | undefined {
+          return level === "ok" ? undefined : level;
+        }
+
+        function listRow(v: JobView, selected: boolean, width: number, clock: number): string {
           const state = jobState(v.status, v.alive);
-          const elapsed = formatElapsed(elapsedSeconds(v, now()));
+          const budget = budgetView(v.status, now());
+          const elapsed = (budget?.text ?? formatElapsed(elapsedSeconds(v, now()))).padStart(clock);
           const marks: string[] = [];
           if (scope === "all" && v.cwd !== ui.cwd) marks.push(`@${v.cwd?.split("/").pop() || "?"}`);
           if (v.session !== undefined && v.session !== sessionId) marks.push("@other");
           const tail = marks.length > 0 ? `  ${marks.join(" ")}` : "";
-          const room = Math.max(10, width - 40 - tail.length);
-          const head = `${selected ? ">" : " "} ${v.id}  ${state.label.padEnd(9)} ${elapsed.padStart(6)}  ${commandLabel(v.command, room)}${tail}`;
-          if (selected) return theme.fg("accent", head);
-          if (state.kind === "running") return theme.fg("text", head);
-          if (state.kind === "ok") return theme.fg("success", head);
-          if (state.kind === "failed") return theme.fg("error", head);
-          return theme.fg("warning", head);
+          const room = Math.max(10, width - 34 - clock - tail.length);
+          const paint = (text: string): string =>
+            selected
+              ? theme.fg("accent", text)
+              : state.kind === "running"
+                ? theme.fg("text", text)
+                : state.kind === "ok"
+                  ? theme.fg("success", text)
+                  : state.kind === "failed"
+                    ? theme.fg("error", text)
+                    : theme.fg("warning", text);
+          // The budget keeps its own colour even on the selected row: it is the one number that has to
+          // be noticeable at a glance, and `3m50s/4m` inside an accent row says nothing.
+          const pressure = pressureColor(budget?.level);
+          const clockText = pressure === undefined ? paint(elapsed) : theme.fg(pressure, elapsed);
+          const head = `${paint(`${selected ? ">" : " "} ${v.id}  ${state.label.padEnd(9)}`)} ${clockText}  ${paint(commandLabel(v.command, room))}`;
+          return `${head}${tail ? paint(tail) : ""}`;
         }
 
         function titleLine(shownRows: number, totalRows: number, hiddenCount: number): string {
@@ -610,10 +660,11 @@ export default function jobsExtension(pi: ExtensionAPI): void {
           resolveSelection(filtered);
           const window = windowRows(filtered.length, index, listBodyHeight(height));
           const shown = filtered.slice(window.start, window.end);
+          const clock = clockWidth(shown);
           const lines =
             filtered.length === 0
               ? [theme.fg("muted", showFinished ? "No jobs here." : "No running jobs.")]
-              : shown.map((v, offset) => listRow(v, window.start + offset === index, width));
+              : shown.map((v, offset) => listRow(v, window.start + offset === index, width, clock));
           const hiddenCount = showFinished ? 0 : hiddenFinished(all, { scope, cwd: ui.cwd, sessionId });
           return [
             titleLine(shown.length, filtered.length, hiddenCount),
@@ -661,13 +712,15 @@ export default function jobsExtension(pi: ExtensionAPI): void {
           lastCommandRows = split.command;
           lastLogRows = split.log;
           const state = jobState(v.status, v.alive);
-          const elapsed = formatElapsed(elapsedSeconds(v, now()));
+          const budget = budgetView(v.status, now());
+          const elapsed = budget?.text ?? formatElapsed(elapsedSeconds(v, now()));
+          const pressure = pressureColor(budget?.level);
           const other = v.session !== undefined && v.session !== sessionId ? "  @other" : "";
-          const header = `${v.id}  ${state.label}  ${elapsed}${other}`;
+          const header = `${theme.fg("accent", `${v.id}  ${state.label}  `)}${pressure === undefined ? theme.fg("accent", elapsed) : theme.fg(pressure, elapsed)}${theme.fg("accent", other)}`;
           const command = commandPane
             .render(width)
             .map((line) => theme.fg(focus === "command" ? "text" : "muted", line));
-          return [theme.fg("accent", header), ...command, "", ...logPane.render(width), outputHints()];
+          return [header, ...command, "", ...logPane.render(width), outputHints()];
         }
 
         const refresh = setInterval(() => {

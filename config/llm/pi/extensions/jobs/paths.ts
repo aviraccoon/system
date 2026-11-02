@@ -1,10 +1,12 @@
 /**
  * Where a job's files live, and how its status is read back.
  *
- * A job is three files under one directory: the script that runs it, its log, and its status.
- * The status file is the durable record: the job's own wrapper appends the exit code and finish
- * time, so a later pi session can report a job that finished while nothing was watching. All
- * timestamps are whole seconds, because the wrapper has no portable sub-second clock.
+ * A job is one directory under the jobs directory, holding its generated script, the command as the
+ * caller wrote it, its log, and its status. The status file is the record: the job's own wrapper
+ * appends the exit code and finish time, so a later pi session can report a job that finished while
+ * nothing was watching. It outlives pi and the session, not the machine: the jobs directory lives
+ * under `$TMPDIR`, which the OS clears. All timestamps are whole seconds, because the wrapper has no
+ * portable sub-second clock.
  */
 
 import * as fs from "node:fs";
@@ -22,9 +24,12 @@ export interface JobStatus {
   cwd?: string;
   /** The pi session that started it. Lets /jobs say `@other` and keeps bulk actions local. */
   session?: string;
+  /** The budget the caller declared, in seconds. /jobs shows how much of it is spent. */
+  budgetSeconds?: number;
 }
 
 export interface JobPaths {
+  /** The job's own directory, which is one level below the jobs directory. */
   dir: string;
   script: string;
   cmd: string;
@@ -62,13 +67,28 @@ export function newJobId(now: number = Date.now(), random: () => number = Math.r
 }
 
 export function jobPaths(dir: string, id: string): JobPaths {
+  const own = path.join(dir, id);
   return {
-    dir,
-    script: path.join(dir, `${id}.sh`),
-    cmd: path.join(dir, `${id}.cmd`),
-    log: path.join(dir, `${id}.log`),
-    status: path.join(dir, `${id}.status`),
+    dir: own,
+    script: path.join(own, "script.sh"),
+    cmd: path.join(own, "command.txt"),
+    log: path.join(own, "output.txt"),
+    status: path.join(own, "status.txt"),
   };
+}
+
+/** One job's directory, with the mode the jobs directory has and for the same reason. */
+export function ensureJobDir(jobDir: string): void {
+  fs.mkdirSync(jobDir, { recursive: true, mode: 0o700 });
+}
+
+/** Delete a job's whole directory. Best effort, like every other deletion of a temporary record. */
+export function removeJob(dir: string, id: string): void {
+  try {
+    fs.rmSync(jobPaths(dir, id).dir, { recursive: true, force: true });
+  } catch {
+    /* a record another process is reading stays until it is not */
+  }
 }
 
 /**
@@ -105,6 +125,7 @@ export function parseStatus(text: string): JobStatus {
     else if (key === "pid") status.pid = n;
     else if (key === "exit") status.exit = n;
     else if (key === "finished") status.finishedAt = n;
+    else if (key === "budget") status.budgetSeconds = n;
   }
   return status;
 }
@@ -129,7 +150,7 @@ export function readJob(dir: string, id: string): JobRecord | undefined {
   try {
     command = fs.readFileSync(paths.cmd, "utf8").trimEnd() || "(empty)";
   } catch {
-    /* older record */
+    /* the record survives a command file that does not */
   }
   return { id, paths, status: parseStatus(text), logBytes: sizeOf(paths.log), command };
 }
@@ -140,13 +161,14 @@ const PRUNE_AFTER_SECONDS = 3 * 24 * 3600;
 const LOST_GRACE_SECONDS = 3600;
 
 /**
- * Whether a record may be deleted. A record with no finish time and no live process died outside
- * `killJob` (OOM, `kill -9`), so there is no death time to age on: use the later of its start and
- * its log's mtime, or a long job that was still writing would be pruned at the next session start
- * before anyone read it.
+ * Whether a record may be deleted. Liveness only speaks for a record that says nothing about its own
+ * end: the OS recycles pids, so a finished record's pid can belong to something else entirely. A
+ * record with no finish time and no live process died outside `killJob` (OOM, `kill -9`), so there is
+ * no death time to age on: use the later of its start and its log's mtime, or a long job that was
+ * still writing would be pruned at the next session start before anyone read it.
  */
 export function shouldPrune(status: JobStatus, alive: boolean, now: number, logMtime?: number): boolean {
-  if (alive) return false;
+  if (!isSettled(status) && alive) return false;
   if (status.finishedAt !== undefined) return now - status.finishedAt >= PRUNE_AFTER_SECONDS;
   const lastSeen = Math.max(status.startedAt ?? now, logMtime ?? 0);
   return now - lastSeen >= LOST_GRACE_SECONDS;
@@ -173,16 +195,16 @@ export function needsFinishStamp(status: JobStatus): boolean {
 
 /** Every job this machine knows about, newest first. Unreadable entries are skipped, not fatal. */
 export function listJobs(dir: string): JobRecord[] {
-  let names: string[];
+  let entries: fs.Dirent[];
   try {
-    names = fs.readdirSync(dir);
+    entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
     return [];
   }
   const jobs: JobRecord[] = [];
-  for (const name of names) {
-    if (!name.endsWith(".status")) continue;
-    const job = readJob(dir, name.slice(0, -".status".length));
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const job = readJob(dir, entry.name);
     if (job) jobs.push(job);
   }
   return jobs.sort((a, b) => (b.status.startedAt ?? 0) - (a.status.startedAt ?? 0));
@@ -190,4 +212,21 @@ export function listJobs(dir: string): JobRecord[] {
 
 export function appendStatus(statusPath: string, lines: string[]): void {
   fs.appendFileSync(statusPath, `${lines.join("\n")}\n`);
+}
+
+/**
+ * Add a settled marker and its finish time, once. Two writers reach for the same marker: `killJob`
+ * after it signals, and the exit handler that saw the death. Without the read, a timed-out record
+ * carries the pair twice, with two finish times that need not agree.
+ */
+export function stampMarker(statusPath: string, marker: string, now = Math.floor(Date.now() / 1000)): boolean {
+  let text: string;
+  try {
+    text = fs.readFileSync(statusPath, "utf8");
+  } catch {
+    return false;
+  }
+  if (text.split("\n").some((line) => line.trim() === marker)) return false;
+  appendStatus(statusPath, [marker, `finished=${now}`]);
+  return true;
 }

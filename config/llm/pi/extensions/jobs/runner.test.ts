@@ -126,6 +126,20 @@ describe("a real job", () => {
     }
   });
 
+  test("records the caller's budget, so /jobs can show how much of it is spent", async () => {
+    const dir = tempDir();
+    try {
+      const budgeted = startJob({ id: "j-budget-1", command: "true", cwd: dir, dir, budgetSeconds: 300 });
+      expect(await waitForExit(budgeted.child, 10_000)).toBe(true);
+      expect(readJob(dir, "j-budget-1")?.status.budgetSeconds).toBe(300);
+      const unbudgeted = startJob({ id: "j-budget-2", command: "true", cwd: dir, dir });
+      expect(await waitForExit(unbudgeted.child, 10_000)).toBe(true);
+      expect(readJob(dir, "j-budget-2")?.status.budgetSeconds).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a job with no session records none, so a bulk action cannot claim it", async () => {
     const dir = tempDir();
     try {

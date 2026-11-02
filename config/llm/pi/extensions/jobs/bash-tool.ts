@@ -12,11 +12,10 @@
  * the command once at start.
  */
 
-import * as fs from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { abortOutcome, commandLabel, formatElapsed, tailWithNotice } from "./format";
-import { isSettled, newJobId, readJob } from "./paths";
+import { abortOutcome, commandLabel, formatElapsed, tailWithNotice, timeoutNotice } from "./format";
+import { isSettled, newJobId, readJob, removeJob } from "./paths";
 import { foregroundWaitMs, killJob, readLog, type StartedJob, startJob, waitForExit } from "./runner";
 
 export const MAX_TIMEOUT_SECONDS = 3600;
@@ -93,13 +92,19 @@ function text(value: string, details: JobResultDetails, isError = false) {
 }
 
 /** The result the model sees when its call did not finish in the foreground window. */
-export function promotionText(id: string, command: string, elapsed: number, budgetSeconds?: number): string {
+export function promotionText(
+  id: string,
+  command: string,
+  elapsed: number,
+  logPath: string,
+  budgetSeconds?: number,
+): string {
   const budget =
     budgetSeconds === undefined ? "no deadline" : `killed when its ${formatElapsed(budgetSeconds)} budget runs out`;
   return [
     `Still running after ${formatElapsed(elapsed)}: backgrounded as job ${id} (${budget}).`,
     "",
-    `Output so far is in the job log and /jobs shows it. Its completion will arrive as a message. Do NOT poll for it: no sleep, ps, pgrep, tail or repeated calls. Do other work, or end your reply and wait to be woken.`,
+    `Output so far is in ${logPath}, and /jobs shows it live. Its completion will arrive as a message. Do NOT poll for it: no sleep, ps, pgrep, tail or repeated calls. Do other work, or end your reply and wait to be woken.`,
     "",
     `Command: ${commandLabel(command, 100)}`,
   ].join("\n");
@@ -132,16 +137,17 @@ export function createJobBashTool(options: JobToolOptions) {
         throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_SECONDS} seconds`);
       }
       const startedAt = Math.floor(Date.now() / 1000);
+      const budgetSeconds = params.timeout;
       const job = startJob({
         id: newJobId(),
         command: params.command,
         cwd: ctx?.cwd ?? process.cwd(),
         dir: options.dir,
+        budgetSeconds,
         // Captured here rather than at load: the tool's own context carries the session that made
         // the call, which is what a bulk action in /jobs must stay inside.
         session: ctx?.sessionManager?.getSessionId(),
       });
-      const budgetSeconds = params.timeout;
       options.hooks.track(job, params.command);
       // The budget belongs to the tool, not to the extension's hook: a call must behave the same way
       // whoever is watching it.
@@ -197,13 +203,7 @@ export function createJobBashTool(options: JobToolOptions) {
       if (spawnFailure) {
         if (budgetTimer) clearTimeout(budgetTimer);
         // Nothing ran, so leave no record behind rather than a status that reads as a lost job.
-        for (const file of [job.paths.script, job.paths.cmd, job.paths.log, job.paths.status]) {
-          try {
-            fs.rmSync(file, { force: true });
-          } catch {
-            /* best effort, like prune */
-          }
-        }
+        removeJob(options.dir, job.id);
         return text(
           `Command could not start: ${spawnFailure.message}`,
           { jobId: job.id, spawnFailed: spawnFailure.message },
@@ -221,8 +221,9 @@ export function createJobBashTool(options: JobToolOptions) {
         const output = tailWithNotice(readLog(job.paths.log), job.paths.log);
         const exitCode = record?.status.exit ?? job.child.exitCode;
         if (timedOut) {
+          const notice = timeoutNotice(budgetSeconds, record?.logBytes ?? 0, params.command);
           return text(
-            `${output}\n\nCommand timed out after its ${budgetSeconds}s budget`,
+            `${output}\n\n${notice}`,
             { jobId: job.id, timedOut: true, exitCode: exitCode ?? undefined },
             true,
           );
@@ -248,7 +249,7 @@ export function createJobBashTool(options: JobToolOptions) {
 
       options.hooks.promoted(job.id);
       const elapsed = Math.floor(Date.now() / 1000) - startedAt;
-      return text(promotionText(job.id, params.command, Math.max(elapsed, 1), budgetSeconds), {
+      return text(promotionText(job.id, params.command, Math.max(elapsed, 1), job.paths.log, budgetSeconds), {
         jobId: job.id,
         promoted: true,
         budgetSeconds,
