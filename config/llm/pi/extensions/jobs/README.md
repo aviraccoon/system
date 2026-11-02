@@ -20,10 +20,10 @@ Ask the agent to run `sleep 120`. The call returns after a minute with a job id,
 
 ## The /jobs screen
 
-An overlay, so the transcript stays readable behind it. The dialog sizes itself from the terminal height: at most 30
-lines, eight rows short of it, and never within three of the bottom, which is what leaves the footer its rows. The
-list covers this project's running jobs, with settled records hidden until asked for. The dialog shows its own keys
-on its last line or two, and this is the complete list:
+A panel flush with the bottom edge, with a rule as its top edge, so the transcript stays readable above it. It sizes
+itself from the terminal height: at most 30 lines, and never within three rows of the top. The footer is covered
+while it is open. The list covers this project's running jobs, with settled records hidden until asked for. The
+panel shows its own keys on its last line or two, and this is the complete list:
 
 | key | action |
 | --- | --- |
@@ -39,8 +39,8 @@ on its last line or two, and this is the complete list:
 | `esc` | back, then close |
 
 The output screen shows the command in full, a heredoc's newlines included, with the log below it following the
-tail while the job runs. Scrolling up stops the follow and `End` re-attaches it. The mouse wheel scrolls whichever
-pane it is over.
+tail while the job runs. Scrolling up stops the follow and `End` re-attaches it. The mouse wheel scrolls the focused
+pane, and `tab` is what moves the focus.
 
 A job whose caller set a `timeout` shows `elapsed/budget` instead of the plain clock, in the warning color from
 three quarters spent and the error color from nine tenths.

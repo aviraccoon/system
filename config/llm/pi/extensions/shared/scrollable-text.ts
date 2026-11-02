@@ -11,7 +11,7 @@
  * Usage:
  *   const scroll = new ScrollableText(styledLines, maxHeight, theme);
  *   // In handleInput: if (scroll.handleInput(data)) { tui.requestRender(); }
- *   // In handleMouse: forward the wheel, with the event's y offset past your own chrome.
+ *   // In handleMouse: forward the wheel. Only `wheelDelta` is read, so the row is not.
  *   // In render: scroll.render(width) returns string[]
  */
 

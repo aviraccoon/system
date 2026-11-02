@@ -8,9 +8,9 @@
  * - Completion is pushed, never polled. A model given a job id and a wait tool writes its own poll
  *   loop, which burns turns and ends with it abandoning a healthy build; the wake message is the
  *   whole reason this can be better than killing on timeout.
- * - `/jobs` is the human surface: an overlay of this project's running jobs, with the full command
- *   and a live, scrollable log. Every view is bounded by `dialogHeight`, because an overlay is
- *   composited over the frame and rows past the terminal height are cut from the bottom, keys first.
+ * - `/jobs` is the human surface: a bottom panel of this project's running jobs, with the full command
+ *   and a live, scrollable log. Both views are laid out from `panelHeight` and the frame that carries
+ *   them from `dialogHeight`; a render past the screen loses its bottom, the hint line first.
  *
  * `timeout` is the command's total budget, not a wait limit. A budget reached while still in the
  * foreground kills the command; a call promoted before it runs out keeps the remaining budget.
@@ -47,7 +47,7 @@ import {
   tailText,
   wakeSlices,
 } from "./format";
-import { dialogHeight, listBodyHeight, splitOutput, windowRows } from "./layout";
+import { DIALOG_RULE_ROWS, listBodyHeight, panelHeight, splitOutput, windowRows } from "./layout";
 import {
   appendStatus,
   ensureJobsDir,
@@ -395,9 +395,6 @@ export default function jobsExtension(pi: ExtensionAPI): void {
         let logSignature = "";
         /** Which job the panes hold, so `/jobs <id>` and a switch both load the right content. */
         let paneJobId: string | undefined;
-        /** Row of the pane boundaries in the last render, for wheel routing. */
-        let lastCommandRows = 0;
-        let lastLogRows = 0;
 
         const paneTheme = {
           scrollHint: (text: string) => theme.fg("dim", text),
@@ -406,7 +403,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
         const commandPane = new ScrollableText([], 3, paneTheme);
         const logPane = new ScrollableText([], 3, paneTheme);
 
-        const height = (): number => dialogHeight(tui.terminal.rows);
+        const height = (): number => panelHeight(tui.terminal.rows);
         const views = (): JobView[] => listJobs(dir()).map(view);
         const rows = (): JobView[] => visibleJobs(views(), { scope, showFinished, cwd: ui.cwd, sessionId });
 
@@ -699,18 +696,12 @@ export default function jobsExtension(pi: ExtensionAPI): void {
 
         function renderOutput(width: number, height: number): string[] {
           const v = jobById(selectedId);
-          if (!v) {
-            lastCommandRows = 0;
-            lastLogRows = 0;
-            return [theme.fg("muted", "That job is gone."), "", theme.fg("dim", "esc back")];
-          }
+          if (!v) return [theme.fg("muted", "That job is gone."), "", theme.fg("dim", "esc back")];
           ensurePanes(v);
           syncLog(v);
           const split = splitOutput(height, commandBlock(v.command).length);
           commandPane.setMaxHeight(split.command);
           logPane.setMaxHeight(split.log);
-          lastCommandRows = split.command;
-          lastLogRows = split.log;
           const state = jobState(v.status, v.alive);
           const budget = budgetView(v.status, now());
           const elapsed = budget?.text ?? formatElapsed(elapsedSeconds(v, now()));
@@ -733,7 +724,10 @@ export default function jobsExtension(pi: ExtensionAPI): void {
         return {
           render(width: number): string[] {
             const lines = screen === "list" ? renderList(width, height()) : renderOutput(width, height());
-            return lines.map((line) => truncateToWidth(line, width));
+            // The frame comes out of `DIALOG_RULE_ROWS` here, so the constant and the render cannot drift.
+            const rule = theme.fg("borderMuted", "─".repeat(width));
+            const framed = [...Array.from({ length: DIALOG_RULE_ROWS }, () => rule), ...lines];
+            return framed.map((line) => truncateToWidth(line, width));
           },
           invalidate() {
             commandPane.invalidate();
@@ -870,20 +864,14 @@ export default function jobsExtension(pi: ExtensionAPI): void {
               return { handled: true };
             }
             if (event.type !== "wheel" || !event.wheelDelta) return undefined;
-            // The panes are drawn by our own layout, so their row origins are known exactly: the
-            // component owns the offset, which is why this wrapper does the routing itself.
-            const commandStart = 1;
-            const logStart = commandStart + lastCommandRows + 1;
-            const local =
-              event.y >= logStart && event.y < logStart + lastLogRows
-                ? { pane: logPane, y: event.y - logStart }
-                : event.y >= commandStart && event.y < commandStart + lastCommandRows
-                  ? { pane: commandPane, y: event.y - commandStart }
-                  : undefined;
-            if (!local) return { handled: true };
-            const forwarded = local.pane.handleMouse({ ...event, y: local.y });
+            // The wheel scrolls the focused pane, not the pane under the cursor. Routing by row would mean a
+            // boundary derived from the render (rule, header, then the split) that no test in this tree can
+            // pin, and `ScrollableText` ignores `y` anyway: the routing would only choose a pane, which `tab`
+            // already does.
+            const pane = focus === "log" ? logPane : commandPane;
+            const forwarded = pane.handleMouse(event);
             // Only a wheel that actually moved the log stops it following; `end` is what re-attaches.
-            if (local.pane === logPane && forwarded?.render === true && event.wheelDelta < 0) follow = false;
+            if (pane === logPane && forwarded?.render === true && event.wheelDelta < 0) follow = false;
             if (forwarded?.render !== false) tui.requestRender();
             return forwarded ?? { handled: true };
           },
@@ -892,7 +880,11 @@ export default function jobsExtension(pi: ExtensionAPI): void {
       },
       // Full width: the renderer composites the overlay over the transcript, so a narrower rectangle leaves a
       // strip of chat text down each side, at the same rows as the list, which reads as if it belonged here.
-      { overlay: true, overlayOptions: () => ({ width: "100%", margin: 0, anchor: "center" }) },
+      // Flush to the bottom edge: an overlay is placed by its anchor, and the center anchor left this one
+      // floating mid-transcript with dead rows under it. The dock's height is not readable from an extension,
+      // so any placement that keeps the footer visible would be a guess; the panel takes the bottom instead,
+      // and the rule at the top of the render is what gives it an edge.
+      { overlay: true, overlayOptions: () => ({ width: "100%", margin: 0, anchor: "bottom-center" }) },
     );
     refreshFooter();
   }

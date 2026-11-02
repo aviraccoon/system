@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dialogHeight, listBodyHeight, splitOutput, windowRows } from "./layout";
+import { DIALOG_RULE_ROWS, dialogHeight, listBodyHeight, panelHeight, splitOutput, windowRows } from "./layout";
 
 describe("dialogHeight", () => {
   test("takes about two thirds of a normal screen", () => {
@@ -7,8 +7,7 @@ describe("dialogHeight", () => {
     expect(dialogHeight(40)).toBe(30);
   });
 
-  test("never leaves less than three rows below it, whatever the terminal", () => {
-    // The dock holds the footer, so a dialog that fills the screen hides it.
+  test("caps the height at three rows short of the screen", () => {
     for (const rows of [0, 1, 4, 6, 8, 10, 24, 40, 200]) {
       expect(dialogHeight(rows)).toBeLessThanOrEqual(Math.max(1, rows - 3));
     }
@@ -21,6 +20,14 @@ describe("dialogHeight", () => {
 
   test("is capped, so a tall terminal does not produce a 60-row list", () => {
     expect(dialogHeight(200)).toBe(30);
+  });
+});
+
+describe("panelHeight", () => {
+  test("fits the rule and the content inside the dialog's own cap", () => {
+    for (const rows of [6, 8, 12, 14, 24, 40, 200]) {
+      expect(panelHeight(rows) + DIALOG_RULE_ROWS).toBeLessThanOrEqual(dialogHeight(rows));
+    }
   });
 });
 

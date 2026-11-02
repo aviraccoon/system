@@ -135,7 +135,7 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 - `Container` — vertical layout container. `addChild()`, `removeChild()`, `clear()`.
 - `Spacer` — vertical spacer. Constructor: `(lines?)`.
 - `DynamicBorder` — from `@earendil-works/pi-coding-agent` (not pi-tui). Horizontal border that adjusts to viewport width.
-- `ScrollableText` (from `./shared/scrollable-text`, not pi-tui): pre-styled lines with a bounded height, arrows, page keys, home/end and the wheel (`handleMouse`, which returns a result the host must forward with its own row offset), `setLines(lines, { keepOffset })`, `scrollToEnd()`, and a `[N above, M below]` last row while it overflows, so a hint the host must keep visible belongs outside it.
+- `ScrollableText` (from `./shared/scrollable-text`, not pi-tui): pre-styled lines with a bounded height, arrows, page keys, home/end and the wheel (`handleMouse`, which returns a result the host forwards; only `wheelDelta` is read, so the event's row is not), `setLines(lines, { keepOffset })`, `scrollToEnd()`, and a `[N above, M below]` last row while it overflows, so a hint the host must keep visible belongs outside it.
 
 ### Keyboard handling
 
@@ -148,7 +148,7 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 ### Patterns to follow
 
 - **Look at existing extensions** before building new UIs. `sidecar/` has a two-screen custom UI with search and toggle (similar to `/scoped-models`). `permission-gate/` has a confirm dialog with diff preview. `web-search/` has tool registration and status. `draft-suggestion/` has widgets and footer status.
-- **A custom component that renders but ignores keys is invisible to `tsc` and to this tree's tests** — `handleInput` is optional on `Component`, and no test drives a TUI. Any `ctx.ui.custom` change therefore needs a reviewer and a live try (`/reload`, then the keys) before it counts as done; `index.ts` wiring has no harness anywhere in this tree. The same holds for mouse: a wrapper that forwards `handleInput` but not `handleMouse` leaves clicks and wheel dead, and offsetting the list inside a bordered container is the caller's job.
+- **A custom component that renders but ignores keys is invisible to `tsc` and to this tree's tests** — `handleInput` is optional on `Component`, and no test drives a TUI. Any `ctx.ui.custom` change therefore needs a reviewer and a live try (`/reload`, then the keys) before it counts as done; `index.ts` wiring has no harness anywhere in this tree. The same holds for mouse: a wrapper that forwards `handleInput` but not `handleMouse` leaves clicks and wheel dead.
 - **Use `ctx.ui.custom()` for complex UIs**, `ctx.ui.select/confirm/input` for simple ones. Don't build a custom component for a single yes/no question.
 - **Prefer `Input` + `fuzzyFilter` over `SelectList`** for searchable model/option lists. `SelectList.setFilter` is too limited for human-friendly search.
 - **Use `ExtensionContext` as the type for `ctx`** in helper functions, not ad-hoc inline types. Import from `@earendil-works/pi-coding-agent`. `ExtensionContext` has `signal: AbortSignal | undefined` for cancelling async work in event handlers.
