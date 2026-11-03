@@ -48,12 +48,12 @@ in
         # OpenRouter with ZDR (Zero Data Retention) enforced in OpenRouter settings
         openrouter = {
           type = "api_key";
-          key = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-main'";
+          key = "!llm-key openrouter-main";
         };
         # Z.ai Coding Plan
         zai = {
           type = "api_key";
-          key = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/zai'";
+          key = "!llm-key zai";
         };
       };
 
@@ -234,7 +234,7 @@ in
             ];
             baseUrl = "https://openrouter.ai/api/v1";
             api = "openai-completions";
-            apiKey = "!op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-sidecar'";
+            apiKey = "!llm-key openrouter-sidecar";
             compat = {
               openRouterRouting = {
                 zdr = true;

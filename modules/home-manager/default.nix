@@ -95,6 +95,7 @@ in
     ./git.nix
     ./iterm2.nix
     ./lazygit.nix
+    ./llm-keys.nix
     ./llm.nix
     ./pi.nix
     ./shell.nix

@@ -26,7 +26,7 @@
  *   silently wrong).
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -211,31 +211,23 @@ const modeQuant = typeof values.quant === "string" ? values.quant : "";
 
 // ── Key resolution ──
 
-function getOpenRouterKey(): string {
+function secret(name: string): string {
   try {
-    return execSync(
-      "op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/pi/openrouter-main'",
-      { encoding: "utf-8" },
-    ).trim();
-  } catch {
-    console.error(`${RED}OpenRouter key not found in 1Password (pi/openrouter-main)${RESET}`);
+    return execFileSync("llm-key", [name], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch (error) {
+    const stderr = (error as { stderr?: unknown }).stderr;
+    const detail = typeof stderr === "string" ? stderr.trim() : "";
+    console.error(`${RED}${name} unavailable: ${detail || String(error)}${RESET}`);
     process.exit(1);
   }
 }
 
+function getOpenRouterKey(): string {
+  return secret("openrouter-main");
+}
+
 function getAAKey(): string {
-  try {
-    const key = execSync(
-      "op --account GZ5VHFHUKJGHPMLTD2PZ2MUUPI read 'op://oqpoo4svevbobqjgyniixhmqca/llm-api-keys/generic/artificialanalysis'",
-      {
-        encoding: "utf-8",
-      },
-    ).trim();
-    return key;
-  } catch {
-    console.error(`${RED}Artificial Analysis key not found in 1Password${RESET}`);
-    process.exit(1);
-  }
+  return secret("artificialanalysis");
 }
 
 // ── Data fetching (with file cache) ──
