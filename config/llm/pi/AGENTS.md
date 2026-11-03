@@ -86,6 +86,7 @@ The benchmark's `shared.ts` replicates this merge logic (reads models.json + pi-
 
 - Multi-file extensions go in a subdirectory with `index.ts` as entry point and a README. Add a row to the extension table in `config/llm/pi/README.md`. See `ls config/llm/pi/extensions/` for current extensions.
 - Extract testable logic into a pure module (no pi imports). Test with bun.
+- For `index.ts` wiring, load the extension into a real session with `extensions/shared/testing/session-harness.ts`: temp agent dir, cwd and credential store, a scripted model, and a recorded `ctx.ui`. The extension gets a real `ExtensionAPI`, event order and tool execution.
 - All extensions are symlinked live to `~/.pi/agent/extensions/` — edit + `/reload` works without nix-switch.
 - Runtime config (journal constants, model roles) is read from `~/.config/llm/journal.json` and `~/.pi/agent/roles.json` respectively.
 - Auto-discovery: any directory under `config/llm/pi/extensions/` with an `index.ts` is symlinked automatically by `pi.nix` (the `allExtDirs` let binding reads the directory at eval time and generates symlink commands). Adding a new extension directory only requires `mise nix-switch` — no manual Nix edits. Directories without `index.ts` (like `shared/`) are also symlinked but pi only loads them as extensions if they have `index.ts`.
@@ -148,7 +149,7 @@ Read the `.d.ts` files for actual APIs — don't guess method names. Use LSP (go
 ### Patterns to follow
 
 - **Look at existing extensions** before building new UIs. `sidecar/` has a two-screen custom UI with search and toggle (similar to `/scoped-models`). `permission-gate/` has a confirm dialog with diff preview. `web-search/` has tool registration and status. `draft-suggestion/` has widgets and footer status.
-- **A custom component that renders but ignores keys is invisible to `tsc` and to this tree's tests** — `handleInput` is optional on `Component`, and no test drives a TUI. Any `ctx.ui.custom` change therefore needs a reviewer and a live try (`/reload`, then the keys) before it counts as done; `index.ts` wiring has no harness anywhere in this tree. The same holds for mouse: a wrapper that forwards `handleInput` but not `handleMouse` leaves clicks and wheel dead.
+- **A custom component that renders but ignores keys is invisible to `tsc` and to this tree's tests** — `handleInput` is optional on `Component`, and no test drives a TUI. Any `ctx.ui.custom` change therefore needs a reviewer and a live try (`/reload`, then the keys) before it counts as done; the session harness can only answer a `custom` call from a scripted result, not render it. The same holds for mouse: a wrapper that forwards `handleInput` but not `handleMouse` leaves clicks and wheel dead.
 - **Use `ctx.ui.custom()` for complex UIs**, `ctx.ui.select/confirm/input` for simple ones. Don't build a custom component for a single yes/no question.
 - **Prefer `Input` + `fuzzyFilter` over `SelectList`** for searchable model/option lists. `SelectList.setFilter` is too limited for human-friendly search.
 - **Use `ExtensionContext` as the type for `ctx`** in helper functions, not ad-hoc inline types. Import from `@earendil-works/pi-coding-agent`. `ExtensionContext` has `signal: AbortSignal | undefined` for cancelling async work in event handlers.
