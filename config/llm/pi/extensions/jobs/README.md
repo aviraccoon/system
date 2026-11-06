@@ -50,6 +50,8 @@ nothing selected it opens the directory holding all of them.
 
 ## Limits and footguns
 
+- A job carries whichever of pi's five session variables the session has (`PI_SESSION_ID`, `PI_SESSION_FILE`,
+  `PI_PROVIDER`, `PI_MODEL`, `PI_REASONING_LEVEL`); `SESSION_ENV_VARS` in `bash-tool.ts` mirrors pi's list.
 - `timeout` is the command's total time budget, not a wait limit: a budget that expires inside the foreground window
   kills the command, and only a call that outlives the window becomes a job. The largest budget a caller can ask for
   is an hour.

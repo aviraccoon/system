@@ -1,12 +1,12 @@
 # Shared by the review-gate git hooks. POSIX sh; the Nix wrapper supplies a
 # pinned PATH, so nothing here needs an absolute program path.
 #
-# The gate applies only to agent runs: pi's bash tool sets PI_SESSION_ID on
-# every call and deletes it from the inherited shell environment otherwise, so
-# a commit typed in a terminal is not gated. Skipping the gate by unsetting the
-# variable is outside the threat model; this is a compliance gate, not a
-# sandbox. The state directory is always derived from $HOME for the same
-# reason: an environment override would be a one-line bypass.
+# The gate applies only to agent runs: the shell pi spawns for the agent carries
+# PI_SESSION_ID, and a commit typed in a terminal has no such marker, so it is
+# not gated. Skipping the gate by unsetting the variable is outside the threat
+# model; this is a compliance gate, not a sandbox. The state directory is always
+# derived from $HOME for the same reason: an environment override would be a
+# one-line bypass.
 #
 # Running a repository's own hook is a separate decision from the gate, and
 # applies to every commit: see commit_hook.

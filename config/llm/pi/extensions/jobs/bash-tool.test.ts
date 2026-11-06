@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createJobBashTool, type JobResultDetails } from "./bash-tool";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createJobBashTool, type JobResultDetails, type SessionContext, sessionEnv } from "./bash-tool";
 import { listJobs, readJob } from "./paths";
 import { isAlive, killJob } from "./runner";
 
@@ -33,7 +34,24 @@ function killGroup(pid: number | undefined): void {
   }
 }
 
-function tool(dir: string, foregroundMs: number) {
+/** The parts of `ctx` this tool reads; the property names are checked, the members a fake needs only. */
+type TestContext = SessionContext & { cwd: string };
+
+function sessionCtx(cwd: string, sessionId = "sess-test"): ExtensionContext {
+  // Built as the narrow shape so its property names are checked, then widened for `execute`.
+  const ctx: TestContext = {
+    cwd,
+    model: { provider: "openrouter", id: "vendor/model" } as SessionContext["model"],
+    thinkingLevel: "high",
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getSessionFile: () => "/sessions/s.jsonl",
+    } as SessionContext["sessionManager"],
+  };
+  return ctx as unknown as ExtensionContext;
+}
+
+function tool(dir: string, foregroundMs: number, ctx: ExtensionContext = sessionCtx(dir)) {
   const promoted: string[] = [];
   const instance = createJobBashTool({
     dir,
@@ -41,7 +59,7 @@ function tool(dir: string, foregroundMs: number) {
     hooks: { track: () => {}, promoted: (id) => promoted.push(id) },
   });
   const run = (params: { command: string; timeout?: number }) =>
-    instance.execute("call", params, undefined, undefined, { cwd: dir } as never);
+    instance.execute("call", params, undefined, undefined, ctx);
   return { run, promoted };
 }
 
@@ -113,9 +131,13 @@ describe("the bash tool", () => {
       const controller = new AbortController();
       setTimeout(() => controller.abort(), 150);
       const began = Date.now();
-      const result = await instance.execute("call", { command: "sleep 30" }, controller.signal, undefined, {
-        cwd: dir,
-      } as never);
+      const result = await instance.execute(
+        "call",
+        { command: "sleep 30" },
+        controller.signal,
+        undefined,
+        sessionCtx(dir),
+      );
       expect(Date.now() - began).toBeLessThan(5_000);
       expect(promoted).toHaveLength(0);
       expect(outputOf(result)).toContain("Command killed");
@@ -145,9 +167,7 @@ describe("the bash tool", () => {
         },
       });
       const controller = new AbortController();
-      const pending = instance.execute("call", { command: "sleep 30" }, controller.signal, undefined, {
-        cwd: dir,
-      } as never);
+      const pending = instance.execute("call", { command: "sleep 30" }, controller.signal, undefined, sessionCtx(dir));
       // Remove the record so the kill has nothing to read: the refusal path, not a finished job.
       await waitForStatusFile(dir);
       fs.rmSync(statusPath(dir));
@@ -183,9 +203,13 @@ describe("the bash tool", () => {
         },
       });
       const controller = new AbortController();
-      const pending = instance.execute("call", { command: "sleep 30", timeout: 30 }, controller.signal, undefined, {
-        cwd: dir,
-      } as never);
+      const pending = instance.execute(
+        "call",
+        { command: "sleep 30", timeout: 30 },
+        controller.signal,
+        undefined,
+        sessionCtx(dir),
+      );
       await waitForStatusFile(dir);
       // The shape `onExit` writes when a wrapper was killed from outside: a finish time and nothing
       // else. This is the record the narrower guard used to promote.
@@ -217,9 +241,13 @@ describe("the bash tool", () => {
         },
       });
       const controller = new AbortController();
-      const pending = instance.execute("call", { command: "sleep 30", timeout: 30 }, controller.signal, undefined, {
-        cwd: dir,
-      } as never);
+      const pending = instance.execute(
+        "call",
+        { command: "sleep 30", timeout: 30 },
+        controller.signal,
+        undefined,
+        sessionCtx(dir),
+      );
       await waitForStatusFile(dir);
       fs.appendFileSync(statusPath(dir), `timed_out=1\nfinished=${Math.floor(Date.now() / 1000)}\n`);
       controller.abort();
@@ -246,7 +274,7 @@ describe("the bash tool", () => {
       });
       const controller = new AbortController();
       const calls = ["sleep 30", "sleep 31"].map((command) =>
-        instance.execute("call", { command }, controller.signal, undefined, { cwd: dir } as never),
+        instance.execute("call", { command }, controller.signal, undefined, sessionCtx(dir)),
       );
       setTimeout(() => controller.abort(), 200);
       const results = await Promise.all(calls);
@@ -305,9 +333,13 @@ describe("the bash tool", () => {
           },
         },
       });
-      const result = await instance.execute("call", { command: "sleep 30", timeout: 1 }, undefined, undefined, {
-        cwd: dir,
-      } as never);
+      const result = await instance.execute(
+        "call",
+        { command: "sleep 30", timeout: 1 },
+        undefined,
+        undefined,
+        sessionCtx(dir),
+      );
       expect(outputOf(result)).toContain("Command timed out after its 1s budget");
       // No pipe and an empty log for a different reason: saying "the pipe" here would be a guess.
       expect(outputOf(result)).not.toContain("No output was captured");
@@ -345,9 +377,13 @@ describe("the bash tool", () => {
         hooks: { track: () => {}, promoted: (id) => promoted.push(id) },
       });
       const started = Date.now();
-      const failed = await broken.execute("call", { command: "true" }, undefined, undefined, {
-        cwd: path.join(dir, "missing"),
-      } as never);
+      const failed = await broken.execute(
+        "call",
+        { command: "true" },
+        undefined,
+        undefined,
+        sessionCtx(path.join(dir, "missing")),
+      );
       // The pin that matters: a spawn failure ends the wait instead of sitting out the window.
       expect(Date.now() - started).toBeLessThan(1_000);
       expect(outputOf(failed)).toContain("Command could not start:");
@@ -404,4 +440,59 @@ describe("the bash tool", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+describe("the session environment", () => {
+  test("mirrors pi's shell-tool injection, replacing any inherited values", () => {
+    const env = sessionEnv(sessionCtx("/work", "sess-7"), { PI_SESSION_ID: "stale", PATH: "/bin" });
+    expect(env.PI_SESSION_ID).toBe("sess-7");
+    expect(env.PI_SESSION_FILE).toBe("/sessions/s.jsonl");
+    expect(env.PI_PROVIDER).toBe("openrouter");
+    expect(env.PI_MODEL).toBe("vendor/model");
+    expect(env.PI_REASONING_LEVEL).toBe("high");
+    expect(env.PATH).toBe("/bin");
+  });
+
+  test("an optional part of the context missing leaves no stale value behind", () => {
+    const ctx: SessionContext = {
+      model: undefined,
+      thinkingLevel: undefined,
+      sessionManager: {
+        getSessionId: () => "sess-8",
+        getSessionFile: () => undefined,
+      } as SessionContext["sessionManager"],
+    };
+    const env = sessionEnv(ctx, {
+      PI_SESSION_ID: "stale",
+      PI_SESSION_FILE: "stale",
+      PI_PROVIDER: "stale",
+      PI_MODEL: "stale",
+      PI_REASONING_LEVEL: "stale",
+      PATH: "/bin",
+    });
+    expect(env.PI_SESSION_ID).toBe("sess-8");
+    expect(env.PI_SESSION_FILE).toBeUndefined();
+    expect(env.PI_PROVIDER).toBeUndefined();
+    expect(env.PI_MODEL).toBeUndefined();
+    expect(env.PI_REASONING_LEVEL).toBeUndefined();
+    expect(env.PATH).toBe("/bin");
+  });
+
+  test("without a context, inherited values are dropped rather than naming another session", () => {
+    const env = sessionEnv(undefined, { PI_SESSION_ID: "stale", PATH: "/bin" });
+    expect(env.PI_SESSION_ID).toBeUndefined();
+    expect(env.PI_SESSION_FILE).toBeUndefined();
+    expect(env.PATH).toBe("/bin");
+  });
+
+  test("the command sees the session, which is the review gate's marker", async () => {
+    const dir = tempDir();
+    try {
+      const { run } = tool(dir, 10_000, sessionCtx(dir, "sess-e2e"));
+      const result = await run({ command: `printf '%s\\n' "$PI_SESSION_ID" "$PI_PROVIDER" "$PI_MODEL"` });
+      expect(outputOf(result).trim().split("\n")).toEqual(["sess-e2e", "openrouter", "vendor/model"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
 });

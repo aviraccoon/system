@@ -20,6 +20,28 @@ import { foregroundWaitMs, killJob, readLog, type StartedJob, startJob, waitForE
 
 export const MAX_TIMEOUT_SECONDS = 3600;
 
+/** pi's shell-tool injection (`resolveSpawnContext` in `dist/core/tools/bash.js`). */
+const SESSION_ENV_VARS = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI_MODEL", "PI_REASONING_LEVEL"] as const;
+
+/** The only parts of the context the injection reads; renaming one in pi fails here. */
+export type SessionContext = Pick<ExtensionContext, "sessionManager" | "model" | "thinkingLevel">;
+
+/** The review-gate git hooks key off `PI_SESSION_ID`. */
+export function sessionEnv(ctx: SessionContext | undefined, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base };
+  for (const key of SESSION_ENV_VARS) delete env[key];
+  if (ctx === undefined) return env;
+  env.PI_SESSION_ID = ctx.sessionManager.getSessionId();
+  const sessionFile = ctx.sessionManager.getSessionFile();
+  if (sessionFile) env.PI_SESSION_FILE = sessionFile;
+  if (ctx.model) {
+    env.PI_PROVIDER = ctx.model.provider;
+    env.PI_MODEL = ctx.model.id;
+  }
+  if (ctx.thinkingLevel) env.PI_REASONING_LEVEL = ctx.thinkingLevel;
+  return env;
+}
+
 export const bashJobParameters = Type.Object({
   command: Type.String({ description: "Shell command to run." }),
   timeout: Type.Optional(
@@ -144,9 +166,10 @@ export function createJobBashTool(options: JobToolOptions) {
         cwd: ctx?.cwd ?? process.cwd(),
         dir: options.dir,
         budgetSeconds,
+        env: sessionEnv(ctx),
         // Captured here rather than at load: the tool's own context carries the session that made
         // the call, which is what a bulk action in /jobs must stay inside.
-        session: ctx?.sessionManager?.getSessionId(),
+        session: ctx?.sessionManager.getSessionId(),
       });
       options.hooks.track(job, params.command);
       // The budget belongs to the tool, not to the extension's hook: a call must behave the same way

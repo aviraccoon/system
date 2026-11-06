@@ -33,9 +33,10 @@ another way is not caught.
 
 ## Hooks and state
 
-The gate applies to agent sessions only: pi's bash tool sets `PI_SESSION_ID`, and a commit without it
-is not gated. The hooks read these files, written only by the extension (`/review-gate` or the
-`review` tool), never by another tool call:
+The gate applies to agent sessions only: the shell pi runs for the agent carries `PI_SESSION_ID`, and a
+commit without it is not gated. A tool that replaces `bash` has to inject it too (as `/jobs` does); a
+missing marker leaves the gate silent, not complaining. The hooks read these files, written only by the
+extension (`/review-gate` or the `review` tool), never by another tool call:
 
 | File | Written by | Effect |
 |------|-----------|--------|
