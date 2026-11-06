@@ -11,7 +11,7 @@ Distinguishes between patterns that are always problematic vs. context-dependent
 
 ## Bundled references
 
-This file holds the rules that apply to any prose. The two references hold the shape of a repo's documentation; read the one the task needs.
+This file holds the rules that apply to any prose. The two references hold the shape of a repo's documentation. Required: when a reference's trigger applies, read it before writing or reviewing.
 
 - `references/writing-a-readme.md`: writing, restructuring, or reviewing a README. Purpose, order, lead, examples, no inventories, design decisions, length, what never belongs, before shipping.
 - `references/docs.md`: writing, restructuring, or reviewing any other repo doc, or deciding which file a piece of content belongs in. Doc kinds, file roles, splitting, layout, openings, titles, one fact one home, diagrams, before shipping.
