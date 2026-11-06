@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -48,23 +48,106 @@ function writeLedger(
   writeFileSync(path, `${JSON.stringify({ version: 1, entries: map }, null, 2)}\n`);
 }
 
-/** Only the registration surface the tool_call handler needs. */
-function fakePlugin(): (event: unknown) => Promise<unknown> {
+/** Only the registration surface these tests need: the tool_call handler and the command. */
+function fakePlugin(options: { decisionLogPath?: string } = {}): {
+  toolCall: (event: unknown) => Promise<unknown>;
+  command: { handler: (args: string, ctx: ExtensionContext) => Promise<void> };
+} {
   const handlers = new Map<string, (event: unknown) => Promise<unknown>>();
+  const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
   const api = {
     registerTool: () => {},
-    registerCommand: () => {},
     on: (name: string, handler: (event: unknown) => Promise<unknown>) => handlers.set(name, handler),
+    registerCommand: (name: string, value: unknown) => commands.set(name, value as never),
   } as unknown as ExtensionAPI;
-  reviewGateExtension(api);
+  reviewGateExtension(api, options);
   const toolCall = handlers.get("tool_call");
   if (!toolCall) throw new Error("review-gate registered no tool_call handler");
-  return toolCall;
+  const command = commands.get("review-gate");
+  if (!command) throw new Error("review-gate registered no command");
+  return { toolCall, command };
 }
+
+describe("/review-gate log", () => {
+  test("shows the last decisions from the log it reads", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "review-gate-log-"));
+    dirs.push(dir);
+    const logPath = join(dir, "review-gate.log");
+    writeFileSync(
+      logPath,
+      [
+        "2026-01-01T00:00:00Z\tpassed\t/acme/repo\t1111111111\treviewed",
+        "2026-01-01T00:00:01Z\trefused\t/acme/repo\t2222222222\tno-review",
+      ].join("\n"),
+    );
+    const { command } = fakePlugin({ decisionLogPath: logPath });
+    const shown: string[] = [];
+    const ctx = {
+      hasUI: true,
+      cwd: dir,
+      ui: {
+        select: async (text: string) => {
+          shown.push(text);
+        },
+        notify: () => {},
+      },
+    } as unknown as ExtensionContext;
+
+    await command.handler("log 1", ctx);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]).toContain("refused");
+    expect(shown[0]).not.toContain("passed");
+  });
+
+  test("a log that does not exist yet is empty, not an error", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "review-gate-log-"));
+    dirs.push(dir);
+    const { command } = fakePlugin({ decisionLogPath: join(dir, "review-gate.log") });
+    const shown: string[] = [];
+    const ctx = {
+      hasUI: true,
+      cwd: dir,
+      ui: {
+        select: async (text: string) => {
+          shown.push(text);
+        },
+        notify: () => {},
+      },
+    } as unknown as ExtensionContext;
+
+    await command.handler("log", ctx);
+    expect(shown[0]).toContain("No commit decisions recorded");
+    expect(shown[0]).not.toContain("Cannot read");
+  });
+
+  test("a log that cannot be read is an error, not an empty log", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "review-gate-log-"));
+    dirs.push(dir);
+    // A directory where the log should be: readable path, unreadable file.
+    const logPath = join(dir, "review-gate.log");
+    mkdirSync(logPath);
+    const { command } = fakePlugin({ decisionLogPath: logPath });
+    const shown: string[] = [];
+    const ctx = {
+      hasUI: true,
+      cwd: dir,
+      ui: {
+        select: async (text: string) => {
+          shown.push(text);
+        },
+        notify: () => {},
+      },
+    } as unknown as ExtensionContext;
+
+    await command.handler("log", ctx);
+    expect(shown[0]).toContain("Cannot read");
+    expect(shown[0]).not.toContain("No commit decisions recorded");
+  });
+});
 
 describe("review-gate shell denials in the tool_call handler", () => {
   test("a shell command naming core.hooksPath is blocked, case-insensitively", async () => {
-    const toolCall = fakePlugin();
+    const { toolCall } = fakePlugin();
     const denied = await toolCall({ toolName: "bash", input: { command: "git -c core.hookspath=/tmp/x commit" } });
     expect(denied).toMatchObject({ block: true });
     const allowed = await toolCall({ toolName: "bash", input: { command: "git status --short" } });

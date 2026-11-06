@@ -10,10 +10,11 @@ refs=$(cat)
 run_repo_hook_with_input reference-transaction "$refs" "$state"
 
 test "$state" = preparing || exit 0
-gate_active || exit 0
+records_new_commit "$refs" || exit 0
 repo=$(repo_root) || exit 0
-if repo_exempt "$repo"; then exit 0; fi
-if history_in_progress; then exit 0; fi
+gate_active || { record_decision skipped "$(gate_skip_reason)"; exit 0; }
+if repo_exempt "$repo"; then record_decision skipped exempt; exit 0; fi
+if history_in_progress; then record_decision skipped history; exit 0; fi
 
 # The loop must run in this shell: `require_review` exits the hook on a refusal,
 # and a pipeline would only exit its subshell. The temp file also keeps a ref
@@ -24,12 +25,11 @@ printf '%s\n' "$refs" >"$tmp"
 
 while read -r old new ref; do
   if [ -z "${ref:-}" ]; then continue; fi
-  case $ref in
-    HEAD | refs/heads/*) ;;
-    *) continue ;;
-  esac
-  if ! ref_records_new_commit "$new"; then continue; fi
+  if ! ref_records_new_commit "$ref" "$new"; then continue; fi
   tree=$(git rev-parse "$new^{tree}")
   message=$(git log -1 --format=%B "$new" | git stripspace)
   require_review "$repo" "$tree" "$message"
+  # The one pass line per commit: this hook sees every commit, --no-verify
+  # included, and the two before it are skipped there.
+  record_decision passed "${REVIEW_REASON:-reviewed}" "$tree"
 done <"$tmp"

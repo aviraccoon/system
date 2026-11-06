@@ -45,6 +45,9 @@ extension (`/review-gate` or the `review` tool), never by another tool call:
 | `review-gate-exempt.json` | `exempt` / `unexempt` | repositories that skip the gate |
 | `review-hooks-trust.json` | `trust-hooks` | repository hooks trusted at one content hash |
 
+`review-gate.log` runs the other way: the hooks append a decision line (time, decision, repo, tree,
+reason) for each review decision the hooks make, and `/review-gate log` reads it back.
+
 `pre-commit` and `commit-msg` check the staged tree. `reference-transaction` repeats that check and
 compares the message on every commit, because `--no-verify` skips the other two and only it reads the
 commit object, after git has cleaned the message.
@@ -60,6 +63,7 @@ hook's hash.
 | Action | Effect |
 |--------|--------|
 | `status` | Hooks state for the repository, the staged tree, the last recorded review |
+| `log [n]` | The last review decisions (default 20), refusals and skips included |
 | `override` | Let the staged tree commit despite a blocking review; asks for a reason |
 | `exempt` / `unexempt` | Skip or resume the gate for the repository |
 | `trust-hooks` | Trust a repository hook at its current content |

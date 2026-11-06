@@ -9,7 +9,7 @@
  * message changed before committing, invalidates it.
  */
 
-import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve as resolvePath, sep } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionUIContext } from "@earendil-works/pi-coding-agent";
@@ -20,6 +20,7 @@ import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { resolveProviderAuth } from "../shared/model-roles";
 import { loadLedger, type ReviewLedgerEntry, recordReview, setOverride } from "../shared/review-ledger";
 import { isShellTool } from "../shared/shell-tools";
+import { formatDecisions, parseDecisions } from "./decisions";
 import { shellDenialReason } from "./denials";
 import { isExempt, loadExemptions, removeExemption, setExemption } from "./exempt";
 import { GATE_QUESTIONS, type GateOutcome, gateFromAnswers } from "./gate";
@@ -33,6 +34,7 @@ const LEDGER_PATH = join(STATE_DIR, "review-ledger.json");
 const OFF_PATH = join(STATE_DIR, "review-gate-off");
 const EXEMPT_PATH = join(STATE_DIR, "review-gate-exempt.json");
 const TRUST_PATH = join(STATE_DIR, "review-hooks-trust.json");
+const DECISION_LOG_PATH = join(STATE_DIR, "review-gate.log");
 
 const CLASSIFIER_PROVIDER = process.env.PI_REVIEW_PROVIDER ?? "openrouter";
 const CLASSIFIER_MODEL = process.env.PI_REVIEW_CLASSIFIER ?? DEFAULT_DECISIONS_MODEL;
@@ -141,6 +143,25 @@ function showStatus(ctx: ExtensionContext): void {
   else process.stderr.write(`${text}\n`);
 }
 
+/**
+ * Reads the hooks' decision log, so a skipped gate is visible here instead of
+ * only in the absence of a refusal.
+ */
+function showDecisions(ctx: ExtensionContext, raw?: string, logPath: string = DECISION_LOG_PATH): void {
+  const asked = Number(raw);
+  const limit = Number.isFinite(asked) && asked > 0 ? Math.min(Math.floor(asked), 200) : 20;
+  let text: string;
+  try {
+    text = formatDecisions(parseDecisions(readFileSync(logPath, "utf-8"), limit));
+  } catch (err) {
+    // "Nothing was recorded" and "the log could not be read" must not look alike.
+    const missing = (err as NodeJS.ErrnoException).code === "ENOENT";
+    text = missing ? formatDecisions([]) : `Cannot read ${logPath}: ${String(err)}`;
+  }
+  if (ctx.hasUI) void ctx.ui.select(text, ["Done"]);
+  else process.stderr.write(`${text}\n`);
+}
+
 // ── Command ──
 
 interface GateAction {
@@ -151,6 +172,7 @@ interface GateAction {
 
 const ACTIONS: GateAction[] = [
   { value: "status", label: "Status", detail: "hooks, the staged tree, and the last recorded review" },
+  { value: "log", label: "Recent commit decisions", detail: "the last commit decisions, refusals and skips included" },
   { value: "override", label: "Override this tree", detail: "let the staged tree commit despite a blocking review" },
   { value: "exempt", label: "Exempt this repository", detail: "commits here no longer need a recorded review" },
   { value: "unexempt", label: "Remove the exemption", detail: "commits here need a recorded review again" },
@@ -323,9 +345,19 @@ async function pickAction(ctx: ExtensionContext): Promise<string | undefined> {
   });
 }
 
-async function runAction(value: string, ctx: ExtensionContext, ui: ExtensionUIContext): Promise<void> {
+async function runAction(
+  value: string,
+  ctx: ExtensionContext,
+  ui: ExtensionUIContext,
+  rest: string[] = [],
+  decisionLogPath: string = DECISION_LOG_PATH,
+): Promise<void> {
   if (value === "status") {
     showStatus(ctx);
+    return;
+  }
+  if (value === "log") {
+    showDecisions(ctx, rest[0], decisionLogPath);
     return;
   }
   if (value === "override") {
@@ -384,7 +416,8 @@ function gateStatePath(path: string): boolean {
   return path.startsWith(`${STATE_DIR}${sep}`) && path.slice(STATE_DIR.length + 1).startsWith("review-");
 }
 
-export default function reviewGateExtension(pi: ExtensionAPI) {
+export default function reviewGateExtension(pi: ExtensionAPI, options: { decisionLogPath?: string } = {}) {
+  const decisionLogPath = options.decisionLogPath ?? DECISION_LOG_PATH;
   pi.registerTool({
     name: "review",
     label: "Review",
@@ -455,15 +488,15 @@ export default function reviewGateExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("review-gate", {
-    description: "Review gate: status, override, exempt, trust-hooks, off/on",
+    description: "Review gate: status, log, override, exempt, trust-hooks, off/on",
     getArgumentCompletions: (prefix) =>
       ACTIONS.map((action) => action.value)
         .filter((name) => name.startsWith(prefix))
         .map((name) => ({ value: `${name} `, label: name })),
     handler: async (args, ctx) => {
-      const value = args.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+      const [value = "", ...rest] = args.trim().split(/\s+/);
       if (value) {
-        await runAction(value, ctx, ctx.ui);
+        await runAction(value.toLowerCase(), ctx, ctx.ui, rest, decisionLogPath);
         return;
       }
       if (!ctx.hasUI) {
@@ -472,7 +505,7 @@ export default function reviewGateExtension(pi: ExtensionAPI) {
       }
       const chosen = await pickAction(ctx);
       if (chosen === undefined) return;
-      await runAction(chosen, ctx, ctx.ui);
+      await runAction(chosen, ctx, ctx.ui, [], decisionLogPath);
     },
   });
 }

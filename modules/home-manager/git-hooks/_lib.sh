@@ -16,6 +16,11 @@ ledger_file() { printf '%s\n' "$(state_dir)/review-ledger.json"; }
 off_file() { printf '%s\n' "$(state_dir)/review-gate-off"; }
 exempt_file() { printf '%s\n' "$(state_dir)/review-gate-exempt.json"; }
 trust_file() { printf '%s\n' "$(state_dir)/review-hooks-trust.json"; }
+decision_log() { printf '%s\n' "$(state_dir)/review-gate.log"; }
+
+# The log holds one line per gate decision, so a gate that stood down is
+# visible afterwards. Rotated once, like the llm-key attempt log.
+DECISION_LOG_CAP=262144
 
 short() { printf '%s\n' "$1" | cut -c1-8; }
 
@@ -29,11 +34,28 @@ refuse() {
 
 agent_run() { test -n "${PI_SESSION_ID:-}"; }
 
+# Why `gate_active` said no, so a skipped commit still carries a reason.
+gate_skip_reason() {
+  if ! agent_run; then printf 'no-marker'; else printf 'off'; fi
+}
+
 # Off switch and exemption are user decisions; either one ends the gate.
 gate_active() {
   agent_run || return 1
   test ! -e "$(off_file)" || return 1
   return 0
+}
+
+# One tab-separated line per gate decision: time, decision, repo, tree, reason.
+# A commit's outcome never depends on the log, so every failure here is ignored.
+record_decision() { # decision reason [tree]
+  log=$(decision_log)
+  mkdir -p "$(state_dir)" 2>/dev/null || return 0
+  size=0
+  if [ -f "$log" ]; then size=$(wc -c <"$log") || size=0; fi
+  if [ "${size:-0}" -ge "$DECISION_LOG_CAP" ]; then mv -f "$log" "$log.1" 2>/dev/null || true; fi
+  printf '%s\t%s\t%s\t%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" "${repo:--}" "${3:--}" "$2" \
+    >>"$log" 2>/dev/null || true
 }
 
 repo_root() {
@@ -65,11 +87,14 @@ last_reviewed_tree() {
     "$(ledger_file)" 2>/dev/null
 }
 
+# No decision line: git refuses an unmerged commit before any hook runs, so this
+# refusal is unreachable in practice and a token for it would be unpinnable.
 refuse_unreadable_index() {
   refuse "review gate: cannot read the staged index (unresolved conflicts?); resolve them and re-stage."
 }
 
 refuse_message() { # repo tree reviewed-message committed-message
+  record_decision refused message-mismatch "$2"
   printf '%s\n' "review gate: the message being committed does not match the reviewed message." >&2
   printf '%s\n' "  repo: $1" "  tree: $(short "$2")" >&2
   if [ -z "$3" ]; then
@@ -83,6 +108,7 @@ refuse_message() { # repo tree reviewed-message committed-message
 }
 
 refuse_tree() { # repo tree entry
+  if [ -n "$3" ]; then record_decision refused blocking-review "$2"; else record_decision refused no-review "$2"; fi
   printf '%s\n' "review gate: this commit's tree has no clean review." >&2
   printf '%s\n' "  repo: $1" "  staged tree: $(short "$2")" >&2
   if [ -n "$3" ]; then
@@ -121,6 +147,13 @@ require_review() { # repo tree [message]
   tree=$2
   entry=$(ledger_entry "$repo" "$tree") || entry=""
   if [ -n "$entry" ] && entry_accepts "$entry"; then
+    # A user override accepts a blocking round; the log has to say which one it was.
+    # shellcheck disable=SC2034  # read by the hook that calls this
+    if [ "$(printf '%s' "$entry" | jq -r '.override != null')" = "true" ]; then
+      REVIEW_REASON=overridden
+    else
+      REVIEW_REASON=reviewed
+    fi
     if [ $# -ge 3 ]; then
       stored=$(printf '%s' "$entry" | jq -r '.message // ""')
       # An override recorded before any review has no message to compare; the
@@ -253,13 +286,29 @@ commit_is_known() { # oid
   return 1
 }
 
+# True when the payload creates a commit the gate must decide about. The hook's
+# loop and this prefilter share one predicate so they cannot disagree about what
+# a commit is.
+records_new_commit() { # refs
+  while read -r _old new ref; do
+    ref_records_new_commit "$ref" "$new" && return 0
+  done <<EOF
+$1
+EOF
+  return 1
+}
+
 # True when this ref update records a tree the gate has not seen: a new commit
 # on HEAD or a branch. Everything else (rewind, branch creation, fetch,
-# fast-forward, tags, stash, ORIG_HEAD/AUTO_MERGE bookkeeping) is not a commit
-# being made now. Ref name and OID shape are the first filters because git
-# signals those other writes through the same hook.
-ref_records_new_commit() { # new
-  new=$1
+# fast-forward, tags, stash, notes, ORIG_HEAD/AUTO_MERGE bookkeeping) is not a
+# commit being made now. Ref name and OID shape are the first filters because
+# git signals those other writes through the same hook.
+ref_records_new_commit() { # ref new
+  case ${1:-} in
+    HEAD | refs/heads/*) ;;
+    *) return 1 ;;
+  esac
+  new=$2
   case $new in
     *[!0-9a-f]*) return 1 ;;
   esac

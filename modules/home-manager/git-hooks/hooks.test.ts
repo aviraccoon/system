@@ -202,7 +202,7 @@ function installRepoHook(fx: Fixture, name: string, body: string): string {
 const PACKAGE_BINARIES: Record<string, string[]> = {
   git: ["git"],
   jq: ["jq"],
-  coreutils: ["basename", "cat", "cut", "dirname", "mktemp", "rm", "sha256sum"],
+  coreutils: ["basename", "cat", "cut", "date", "dirname", "mkdir", "mktemp", "mv", "rm", "sha256sum", "wc"],
   gnugrep: ["grep"],
   gnused: ["sed"],
 };
@@ -621,6 +621,11 @@ describe("review gate hooks", () => {
     expect(git(fx, ["commit", "-m", "feat: main"]).status).toBe(0);
 
     expect(git(fx, ["merge", "--no-ff", "-m", "merge topic", "topic"]).status).toBe(0);
+
+    // Three commits, then the merge: a merge in progress is logged as history, not as a pass.
+    const lines = decisionLines(fx);
+    expect(lines).toHaveLength(4);
+    expect(lines.at(-1)).toContain("\thistory");
   });
 
   test("a repository reference-transaction hook receives git's ref lines", () => {
@@ -674,6 +679,8 @@ describe("review gate hooks", () => {
     const commit = git(fx, ["commit", "-m", "feat: add a"], { ...fx.env, PATH: deployedPath(fx.root) });
     expect(commit.out).not.toContain("not found");
     expect(commit.status).toBe(0);
+    // The decision line is written too, so `date` and `wc` have to be in that PATH.
+    expect(decisionLines(fx)[0]).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\t/);
 
     // A refusal prints the delta through the same tools.
     const other = setup();
@@ -684,5 +691,139 @@ describe("review gate hooks", () => {
     expect(blocked.out).not.toContain("not found");
     expect(blocked.status).not.toBe(0);
     expect(blocked.out).toContain("unreviewed delta");
+  });
+});
+
+function decisionLines(fx: Fixture): string[] {
+  const path = join(fx.state, "review-gate.log");
+  if (!existsSync(path)) return [];
+  return readFileSync(path, "utf-8")
+    .split("\n")
+    .filter((line) => line !== "");
+}
+
+/** The one line a commit should leave: time, decision, repo, tree, reason. */
+function onlyDecision(fx: Fixture): [string, string, string, string, string] {
+  const lines = decisionLines(fx);
+  expect(lines).toHaveLength(1);
+  const [at, decision, repo, loggedTree, reason] = lines[0].split("\t");
+  expect(at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+  return [at, decision, repo, loggedTree, reason];
+}
+
+describe("decision log", () => {
+  test("a clean commit leaves one passed line naming the repo and tree", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "a\n");
+    const staged = tree(fx);
+    record(fx, staged, "feat: add a");
+    expect(git(fx, ["commit", "-m", "feat: add a"]).status).toBe(0);
+
+    const [, decision, repo, loggedTree, reason] = onlyDecision(fx);
+    expect(decision).toBe("passed");
+    expect(repo).toBe(repoOf(fx));
+    expect(loggedTree).toBe(staged);
+    expect(reason).toBe("reviewed");
+  });
+
+  test("a refusal names the tree and whether it was unreviewed or blocking", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "a\n");
+    const staged = tree(fx);
+    expect(git(fx, ["commit", "-m", "feat: add a"]).status).not.toBe(0);
+    expect(onlyDecision(fx).slice(1, 3)).toEqual(["refused", repoOf(fx)]);
+    expect(decisionLines(fx)[0]).toContain(`\t${staged}\tno-review`);
+
+    const blocking = setup();
+    stage(blocking, "a.txt", "a\n");
+    record(blocking, tree(blocking), "feat: add a", { blocking: true, reasons: ["severity"] });
+    expect(git(blocking, ["commit", "-m", "feat: add a"]).status).not.toBe(0);
+    expect(decisionLines(blocking)[0]).toContain("\tblocking-review");
+  });
+
+  test("a message changed after the round is recorded as a message mismatch", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "a\n");
+    record(fx, tree(fx), "feat: reviewed message");
+    expect(git(fx, ["commit", "-m", "feat: another message"]).status).not.toBe(0);
+    expect(onlyDecision(fx)[4]).toBe("message-mismatch");
+  });
+
+  test("a branch or a tag is not a commit and leaves no line", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "a\n");
+    record(fx, tree(fx), "feat: add a");
+    expect(git(fx, ["commit", "-m", "feat: add a"]).status).toBe(0);
+    // The skip path is the one that must not fire; an agent ref update would take the reviewed path.
+    const human = { ...fx.env };
+    delete human.PI_SESSION_ID;
+    delete human.PI_CODING_AGENT;
+    expect(git(fx, ["checkout", "-b", "feature"], human).status).toBe(0);
+    expect(git(fx, ["tag", "v1"], human).status).toBe(0);
+    // A stash and a note are new commits on refs that are not history being made now.
+    writeFileSync(join(fx.repo, "a.txt"), "stashed\n");
+    expect(git(fx, ["stash", "push", "-q", "-m", "wip"], human).status).toBe(0);
+    expect(git(fx, ["notes", "add", "-m", "note", "HEAD"], human).status).toBe(0);
+    expect(onlyDecision(fx)[1]).toBe("passed");
+  });
+
+  test("a user override is logged as overridden, not as a reviewed round", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "a\n");
+    record(fx, tree(fx), "feat: add a", {
+      blocking: true,
+      reasons: ["severity"],
+      override: { reason: "by hand", at: new Date().toISOString() },
+    });
+    expect(git(fx, ["commit", "-m", "feat: add a"]).status).toBe(0);
+    expect(onlyDecision(fx)[4]).toBe("overridden");
+  });
+
+  test("--no-verify still leaves the pass line, because the backstop is what writes it", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "a\n");
+    const staged = tree(fx);
+    record(fx, staged, "feat: add a");
+    expect(git(fx, ["commit", "--no-verify", "-m", "feat: add a"]).status).toBe(0);
+    expect(onlyDecision(fx)[1]).toBe("passed");
+  });
+
+  test("a commit outside the gate records why the gate stood down", () => {
+    const terminal = setup();
+    stage(terminal, "a.txt", "a\n");
+    const human = { ...terminal.env };
+    delete human.PI_SESSION_ID;
+    delete human.PI_CODING_AGENT;
+    expect(git(terminal, ["commit", "-m", "feat: human"], human).status).toBe(0);
+    const [, decision, , loggedTree, reason] = onlyDecision(terminal);
+    expect([decision, loggedTree, reason]).toEqual(["skipped", "-", "no-marker"]);
+
+    const off = setup();
+    stage(off, "a.txt", "a\n");
+    writeFileSync(join(off.state, "review-gate-off"), "{}\n");
+    expect(git(off, ["commit", "-m", "feat: add a"]).status).toBe(0);
+    expect(onlyDecision(off)[4]).toBe("off");
+
+    const exempt = setup();
+    stage(exempt, "a.txt", "a\n");
+    writeFileSync(
+      join(exempt.state, "review-gate-exempt.json"),
+      JSON.stringify({ version: 1, repos: [{ repo: repoOf(exempt), at: new Date().toISOString() }] }),
+    );
+    expect(git(exempt, ["commit", "-m", "feat: add a"]).status).toBe(0);
+    expect(onlyDecision(exempt)[4]).toBe("exempt");
+  });
+
+  test("the log rotates once instead of growing without a bound", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "a\n");
+    record(fx, tree(fx), "feat: add a");
+    const path = join(fx.state, "review-gate.log");
+    writeFileSync(path, `${"x".repeat(300_000)}\n`);
+    expect(git(fx, ["commit", "-m", "feat: add a"]).status).toBe(0);
+
+    expect(existsSync(`${path}.1`)).toBe(true);
+    expect(readFileSync(`${path}.1`, "utf-8")).toHaveLength(300_001);
+    expect(onlyDecision(fx)[1]).toBe("passed");
   });
 });

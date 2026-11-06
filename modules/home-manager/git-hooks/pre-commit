@@ -7,6 +7,7 @@ set -eu
 
 run_repo_hook pre-commit
 
+# reference-transaction records the pass or skip, once per commit.
 gate_active || exit 0
 repo=$(repo_root) || exit 0
 if repo_exempt "$repo"; then exit 0; fi
