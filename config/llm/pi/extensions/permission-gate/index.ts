@@ -74,10 +74,12 @@ import {
   findGitRoot,
   type GateState,
   hasShellEscalation,
+  isClassifierFloor,
   MODE_CYCLE,
   MODE_DESCRIPTIONS,
   MODE_LABELS,
   MODE_SHORT,
+  nonInteractiveResolution,
   sensitiveReadDecision,
   statusText,
   stripShellPreamble,
@@ -104,7 +106,8 @@ import { checkCommand, detectTirith, formatFindingSummary, type TirithReport, ti
  */
 const DECISIONS_PROVIDER = process.env.PI_JEV_PROVIDER ?? "openrouter";
 const DECISIONS_MODEL = process.env.PI_JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
-const decisionsEnabled = process.env.PI_JEV !== "off";
+/** Read at call time, so a write during the process (a test) takes effect. */
+const decisionsEnabled = () => process.env.PI_JEV !== "off";
 
 /** Mode and auto-classify live here between runs; everything else stays in memory. */
 const SETTINGS_PATH = settingsPath(homedir());
@@ -113,12 +116,24 @@ const SETTINGS_PATH = settingsPath(homedir());
  *  which of the two ended it. */
 const RPC_TIMEOUT_MARGIN_MS = 250;
 
-export default function permissionGate(pi: ExtensionAPI) {
+/** What a test may replace: where the preference lives, and the classifier itself. */
+export interface PermissionGateOptions {
+  settingsPath?: string;
+  classifyCall?: (
+    ctx: ExtensionContext,
+    toolName: string,
+    description: string,
+    containerFacts: boolean,
+  ) => Promise<ExplanationResult | null>;
+}
+
+export default function permissionGate(pi: ExtensionAPI, options: PermissionGateOptions = {}) {
+  const settingsFile = options.settingsPath ?? SETTINGS_PATH;
   const state: GateState = createInitialState();
   // A missing, unreadable or malformed file leaves the fresh defaults. The read
   // happens once per process; session_start keeps the pair on purpose, since it is
   // a preference rather than a session rule.
-  applySettings(state, loadSettings(SETTINGS_PATH));
+  applySettings(state, loadSettings(settingsFile));
 
   /**
    * Change a preference and record it. The write lives here rather than at each call
@@ -127,7 +142,7 @@ export default function permissionGate(pi: ExtensionAPI) {
    */
   function setPreferences(ctx: ExtensionContext, patch: PersistedSettings) {
     applySettings(state, patch);
-    if (!saveSettings(SETTINGS_PATH, currentSettings(state))) {
+    if (!saveSettings(settingsFile, currentSettings(state))) {
       ctx.ui.notify("Permission settings were not saved; this session keeps them", "warning");
     }
   }
@@ -225,6 +240,33 @@ export default function permissionGate(pi: ExtensionAPI) {
     return prose ? applyEditFloor(prose, EDIT_LIKE_TOOLS.includes(toolName)) : null;
   }
 
+  /** The classifier both paths call; a test supplies one instead of a model. */
+  const classifyCall = options.classifyCall ?? classify;
+  /**
+   * A classifier exists if pi found a backend or a test supplied one. Read at
+   * call time: pi sets the backend during session_start, after this factory runs.
+   */
+  const classifierConfigured = () => classifierAvailable || options.classifyCall !== undefined;
+
+  /**
+   * One verdict per cache key: a cached one costs nothing, and a fresh one is
+   * stored. Both the dialog and the no-dialog path go through this, so their
+   * cache behaviour cannot drift apart.
+   */
+  async function classifyOnce(
+    ctx: ExtensionContext,
+    toolName: string,
+    description: string,
+    key: string,
+    containerFacts: boolean,
+  ): Promise<ExplanationResult | null> {
+    const cached = state.classifyCache.get(key);
+    if (cached) return cached;
+    const result = await classifyCall(ctx, toolName, description, containerFacts);
+    if (result) state.classifyCache.set(key, { ...result });
+    return result;
+  }
+
   /** Stage a note for a call's result: tirith's fact on an allowed call, or an advice note. */
   function addResultNote(toolCallId: string, note: string): void {
     const existing = pendingResultNotes.get(toolCallId);
@@ -280,7 +322,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     signal?: AbortSignal,
     containerFacts = false,
   ): Promise<ExplanationResult | null> {
-    if (!decisionsEnabled) return null;
+    if (!decisionsEnabled()) return null;
     try {
       const auth = await resolveProviderAuth(DECISIONS_PROVIDER, ctx.modelRegistry);
       if (!auth?.apiKey) return null;
@@ -507,7 +549,7 @@ export default function permissionGate(pi: ExtensionAPI) {
     state.toolOverrides = {};
     state.classifyCache.clear();
     state.autoAllowLog = [];
-    classifierAvailable = decisionsEnabled || hasRole("explain");
+    classifierAvailable = decisionsEnabled() || hasRole("explain");
     explainEnabled = classifierAvailable;
     tirithAvailable = await detectTirith();
     tirithCache.clear();
@@ -1033,9 +1075,49 @@ export default function permissionGate(pi: ExtensionAPI) {
     }
 
     if (!ctx.hasUI) {
-      const reason = nonInteractiveBlockReason(event.toolName);
+      const blockReason = nonInteractiveBlockReason(event.toolName);
       // A floor still owes the model the reason it was stopped.
-      return { block: true, reason: tirithFacts ? `${reason}\n${tirithFacts}` : reason };
+      const withTirithFacts = (reason: string) => (tirithFacts ? `${reason}\n${tirithFacts}` : reason);
+      const policy = {
+        classifier: state.autoClassify === "on" && classifierConfigured(),
+        floor: tirithHoldsDecision,
+        blockReason,
+      };
+      // A floor already decided the call — tirith's, or a credential path — so
+      // classifying it would spend a collect and two provider calls on a refusal
+      // already made.
+      const decides = policy.classifier && !policy.floor && !isClassifierFloor(decision);
+      let classified: ExplanationResult | null = null;
+      if (decides) {
+        // Facts about the world the call reaches, appended to the classifier's
+        // state. Gathered only when a verdict is actually wanted.
+        const worldFacts = await collectFacts({ toolName: event.toolName, input });
+        const containerFacts = hasContainerFacts(worldFacts);
+        const classifierFacts = [worldFacts, tirithFacts].filter(Boolean).join("\n\n") || undefined;
+        const { description, key } = classifierInput(
+          event.toolName,
+          input,
+          { rawDiff: diffBody?.rawDiff, summary: diffBody?.summary },
+          classifierFacts,
+        );
+        classified = await classifyOnce(ctx, event.toolName, description, key, containerFacts);
+      }
+      const resolution = nonInteractiveResolution(decision, classified, state.mode, policy);
+      if (classified) {
+        const advised = adviceInterception(classified.advices, resolution.action);
+        if (advised) {
+          recordClassification(event.toolName, event.toolCallId, classified);
+          return { block: true, reason: withTirithFacts(advised.reason) };
+        }
+      }
+
+      if (resolution.action === "allow") {
+        recordClassification(event.toolName, event.toolCallId, classified);
+        if (tirithFacts) addResultNote(event.toolCallId, tirithFacts);
+        return undefined;
+      }
+      if (classified) recordClassification(event.toolName, event.toolCallId, classified);
+      return { block: true, reason: withTirithFacts(resolution.reason) };
     }
 
     // Facts about the world the call reaches, appended to the classifier's state.
@@ -1047,9 +1129,9 @@ export default function permissionGate(pi: ExtensionAPI) {
 
     // Auto-classify: call sidecar before showing dialog. Resolution composes the
     // deterministic decision with the verdict (autoResolve), so a floor the gate
-    // set is not the classifier's to resolve. Runs supervised only — the /auto
-    // trigger that selects the unattended bands is not wired yet.
-    if (state.autoClassify === "on" && classifierAvailable && !tirithHoldsDecision) {
+    // set is not the classifier's to resolve. The no-dialog path above uses the
+    // same classifier with the unattended bands.
+    if (state.autoClassify === "on" && classifierConfigured() && !tirithHoldsDecision) {
       const { description, key } = classifierInput(
         event.toolName,
         input,
@@ -1101,11 +1183,10 @@ export default function permissionGate(pi: ExtensionAPI) {
       }
 
       ctx.ui.setWorkingMessage("Classifying...");
-      const explResult = await classify(ctx, event.toolName, description, containerFacts);
+      const explResult = await classifyOnce(ctx, event.toolName, description, key, containerFacts);
       ctx.ui.setWorkingMessage();
 
       if (explResult) {
-        state.classifyCache.set(key, { ...explResult });
         const resolution = resolve(explResult);
         const advised = adviceInterception(explResult.advices, resolution.action);
         if (advised) {

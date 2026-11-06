@@ -587,6 +587,9 @@ export function isClassifierFloor(decision: GateDecision): boolean {
   return decision.confirmType === "sensitive";
 }
 
+const ALLOW_REASON = "allowed by mode or session rule";
+const BLOCK_REASON = "blocked by the permission gate";
+
 const UNATTENDED_STOP =
   "Do not retry this call or work around it. Continue with a materially safer approach, or stop and report what is blocked.";
 
@@ -612,9 +615,9 @@ export function autoResolve(
   mode: Mode,
   runMode: RunMode,
 ): AutoResolution {
-  if (decision.action === "allow") return { action: "allow", reason: "allowed by mode or session rule" };
+  if (decision.action === "allow") return { action: "allow", reason: ALLOW_REASON };
   if (decision.action === "block") {
-    return { action: "block", reason: decision.reason ?? "blocked by the permission gate" };
+    return { action: "block", reason: decision.reason ?? BLOCK_REASON };
   }
 
   if (isClassifierFloor(decision)) {
@@ -651,6 +654,43 @@ export function autoResolve(
   return shouldAutoAllow(classified.verdict, mode)
     ? { action: "allow", reason: classified.verdict }
     : { action: "confirm", reason: classified.verdict };
+}
+
+export interface NonInteractivePolicy {
+  /** Auto-classify is on and a classifier backend exists. */
+  classifier: boolean;
+  /** A tirith finding that forces a dialog, which has nobody to answer it here. */
+  floor: boolean;
+  /** What the blanket block says when the classifier is not the decider. */
+  blockReason: string;
+}
+
+/**
+ * A call with no dialog to answer: the classifier decides under the unattended
+ * bands, and the blanket block stands whenever it cannot (turned off, no
+ * backend, or a tirith floor that needs a human). A credential floor keeps the
+ * reason `autoResolve` gives it. `autoResolve` owns the bands; this owns when
+ * there is a verdict to apply at all.
+ */
+export function nonInteractiveResolution(
+  decision: GateDecision,
+  classified: ClassifiedCall | null,
+  mode: Mode,
+  policy: NonInteractivePolicy,
+): AutoResolution {
+  // Anything already decided keeps the shared resolver's wording.
+  if (decision.action !== "confirm") return autoResolve(decision, classified, mode, "unattended");
+  if (policy.floor || !policy.classifier) return { action: "block", reason: policy.blockReason };
+  // A credential or secret path is refused whatever the verdict says, so the
+  // reason must be the floor's, not "no verdict".
+  if (isClassifierFloor(decision)) return autoResolve(decision, null, mode, "unattended");
+  if (classified === null) {
+    // The shared unattended denial already says why and what not to do; name the
+    // headless path in front of it so the model knows a dialog was never an option.
+    const denied = autoResolve(decision, null, mode, "unattended");
+    return { action: "block", reason: `${policy.blockReason} ${denied.reason}` };
+  }
+  return autoResolve(decision, classified, mode, "unattended");
 }
 
 // ── Denial circuit breaker ──

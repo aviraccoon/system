@@ -22,6 +22,7 @@ import {
   isSensitivePath,
   MODE_LABELS,
   matchGlob,
+  nonInteractiveResolution,
   recordAllow,
   recordDenial,
   resolveFilePath,
@@ -1137,6 +1138,56 @@ describe("autoResolve", () => {
       "supervised",
     );
     expect(r.action).toBe("allow");
+  });
+});
+
+describe("nonInteractiveResolution", () => {
+  const policy = { classifier: true, floor: false, blockReason: "blocked in non-interactive mode" };
+  const safe = { verdict: "safe" as const, short: "nothing fired" };
+  const dangerous = { verdict: "dangerous" as const, short: "history_rewrite 0.9" };
+
+  test("a safe verdict runs the call", () => {
+    expect(nonInteractiveResolution(confirm("bash"), safe, "careful", policy).action).toBe("allow");
+  });
+
+  test("a dangerous verdict blocks with the factor line", () => {
+    const r = nonInteractiveResolution(confirm("bash"), dangerous, "careful", policy);
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("history_rewrite 0.9");
+  });
+
+  test("with auto-classify off the blanket block stands, even for a safe verdict", () => {
+    const r = nonInteractiveResolution(confirm("bash"), safe, "careful", { ...policy, classifier: false });
+    expect(r).toEqual({ action: "block", reason: policy.blockReason });
+  });
+
+  test("a tirith floor blocks a safe verdict too", () => {
+    const r = nonInteractiveResolution(confirm("bash"), safe, "careful", { ...policy, floor: true });
+    expect(r).toEqual({ action: "block", reason: policy.blockReason });
+  });
+
+  test("no verdict blocks with the headless sentence in front of the shared denial", () => {
+    const r = nonInteractiveResolution(confirm("bash"), null, "careful", policy);
+    expect(r.action).toBe("block");
+    const shared = autoResolve(confirm("bash"), null, "careful", "unattended").reason;
+    expect(r.reason).toBe(`${policy.blockReason} ${shared}`);
+  });
+
+  test("the sensitive floor blocks even when the verdict is safe, with the floor's reason", () => {
+    const r = nonInteractiveResolution(confirm("sensitive"), safe, "trust-project", policy);
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("credential");
+    // The floor's reason, not "no verdict", even when nothing was classified.
+    expect(nonInteractiveResolution(confirm("sensitive"), null, "trust-project", policy).reason).toContain(
+      "credential",
+    );
+  });
+
+  test("a deterministic allow or block needs no classifier", () => {
+    const off = { ...policy, classifier: false };
+    expect(nonInteractiveResolution({ action: "allow" }, null, "careful", off).action).toBe("allow");
+    const blocked = nonInteractiveResolution({ action: "block", reason: "tirith" }, null, "careful", off);
+    expect(blocked.reason).toBe("tirith");
   });
 });
 

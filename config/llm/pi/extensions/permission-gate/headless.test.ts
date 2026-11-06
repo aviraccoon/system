@@ -1,0 +1,257 @@
+/**
+ * The tool_call handler with no UI: a call that would confirm reaches the
+ * classifier, and the unattended bands decide it.
+ *
+ * A real session and a real handler come from the harness. Most cases inject the
+ * classifier, because the real one needs a decisions model and a provider key;
+ * one runs without the seam to cover the production path. The preference file is
+ * injected for the same reason: a test must not read this machine's auto-classify
+ * setting.
+ */
+import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Harness, ScriptedResponse } from "../shared/testing/session-harness";
+import type { ExplanationResult } from "./logic";
+
+// The suite runs against this machine's `roles.json`; each case sets its own
+// `PI_JEV`, provider keys and `PATH` (see isolateEnvironment) and restores them.
+const { createHarness } = await import("../shared/testing/session-harness");
+const { default: permissionGate } = await import("./index");
+
+const SAFE: ExplanationResult = { verdict: "safe", short: "nothing fired", detail: "" };
+const DANGEROUS: ExplanationResult = { verdict: "dangerous", short: "history_rewrite 0.9", detail: "" };
+
+interface Run {
+  harness: Harness;
+  classifierCalls: string[];
+}
+
+interface HeadlessOptions {
+  verdict: ExplanationResult | null;
+  autoClassify?: "on" | "off";
+  /** A directory to put first on PATH, for a fake `tirith`. */
+  pathPrefix?: string;
+  /** Tools to allow in the session; default `["bash"]`. */
+  tools?: string[];
+  /** Register the gate with no classifier seam, so it must find a backend itself. */
+  noSeam?: boolean;
+  responses?: Array<ScriptedResponse | string>;
+}
+
+const ONE_CALL: Array<ScriptedResponse | string> = [
+  { toolCalls: [{ name: "bash", arguments: { command: "touch out.txt" } }] },
+  "done",
+];
+
+/** A `tirith` that answers --version and then whatever JSON the case wants from `check`. */
+function fakeTirith(json: string): { dir: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "fake-tirith-"));
+  const fake = join(dir, "tirith");
+  writeFileSync(
+    fake,
+    ["#!/bin/sh", 'if [ "$1" = "--version" ]; then echo "tirith 1.0"; exit 0; fi', `echo '${json}'`, "exit 0"].join(
+      "\n",
+    ),
+  );
+  chmodSync(fake, 0o755);
+  // Run it once: a cold first exec of a fresh script is what made detection hit
+  // its two-second timeout and silently drop the floor on a loaded machine.
+  const warm = spawnSync(fake, ["--version"], { encoding: "utf-8" });
+  if (warm.status !== 0) throw new Error(`fake tirith did not run: ${warm.stderr}`);
+  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+const PROVIDER_KEYS = ["OPENROUTER_API_KEY", "ZAI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"] as const;
+
+/**
+ * The gate's own environment: the decisions backend on, the common provider keys
+ * gone, and a failing `tirith` first on PATH so an installed one cannot grade a
+ * call. The roles file is this machine's; no case may depend on what it names.
+ */
+function isolateEnvironment(dir: string, pathPrefix?: string): () => void {
+  const bin = join(dir, "bin");
+  mkdirSync(bin);
+  // A tirith that fails detection, so an installed one cannot grade a call.
+  const stub = join(bin, "tirith");
+  writeFileSync(stub, "#!/bin/sh\nexit 127\n");
+  chmodSync(stub, 0o755);
+  const savedPath = process.env.PATH;
+  const saved: Record<string, string | undefined> = {};
+  for (const key of [...PROVIDER_KEYS, "PI_JEV"]) saved[key] = process.env[key];
+  process.env.PATH = [pathPrefix, bin, savedPath].filter(Boolean).join(":");
+  process.env.PI_JEV = "on";
+  for (const key of PROVIDER_KEYS) delete process.env[key];
+  return () => {
+    process.env.PATH = savedPath;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  };
+}
+
+/** One headless session; the callback runs before the temp files go away. */
+async function headless(options: HeadlessOptions, body: (run: Run) => void): Promise<void> {
+  const dir = mkdtempSync(join(tmpdir(), "permission-gate-headless-"));
+  const settingsPath = join(dir, "permission-gate.json");
+  writeFileSync(settingsPath, JSON.stringify({ mode: "careful", autoClassify: options.autoClassify ?? "on" }));
+  const classifierCalls: string[] = [];
+  const restoreEnvironment = isolateEnvironment(dir, options.pathPrefix);
+  let harness: Harness | undefined;
+  try {
+    harness = await createHarness({
+      ui: false,
+      tools: options.tools ?? ["bash"],
+      extensions: [
+        (pi) =>
+          permissionGate(pi, {
+            settingsPath,
+            ...(options.noSeam
+              ? {}
+              : {
+                  classifyCall: async (_ctx: unknown, toolName: string) => {
+                    classifierCalls.push(toolName);
+                    return options.verdict;
+                  },
+                }),
+          }),
+      ],
+      responses: options.responses ?? ONE_CALL,
+    });
+    await harness.run("create the file");
+    body({ harness, classifierCalls });
+  } finally {
+    harness?.cleanup();
+    restoreEnvironment();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function resultText(harness: Harness): string {
+  const [first] = harness.toolResults();
+  return JSON.stringify(first?.result);
+}
+
+describe("a call with no dialog", () => {
+  test("a safe verdict runs the call", async () => {
+    await headless({ verdict: SAFE }, ({ harness, classifierCalls }) => {
+      expect(classifierCalls).toEqual(["bash"]);
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(true);
+      expect(harness.toolResults()[0]?.isError).toBe(false);
+    });
+  });
+
+  test("a dangerous verdict blocks, names the factor and records the verdict", async () => {
+    await headless({ verdict: DANGEROUS }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(false);
+      expect(harness.toolResults()[0]?.isError).toBe(true);
+      expect(resultText(harness)).toContain("history_rewrite 0.9");
+      // A blocked call leaves nothing else: the entry is the record of what the
+      // classifier said about it.
+      const recorded = harness.session.sessionManager
+        .getEntries()
+        .some((entry) => entry.type === "custom" && entry.customType === "permission_gate");
+      expect(recorded).toBe(true);
+    });
+  });
+
+  test("a missing verdict blocks instead of allowing", async () => {
+    await headless({ verdict: null }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(false);
+      expect(resultText(harness)).toContain("no risk classification was available");
+    });
+  });
+
+  test("an advisory that blocks on an allowed verdict still blocks", async () => {
+    const advised: ExplanationResult = { ...SAFE, advices: { advice: 0.9 } };
+    await headless({ verdict: advised }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(false);
+      expect(resultText(harness)).toContain("output-capture");
+    });
+  });
+
+  test("the patch reminder rides the result of a call the verdict allowed", async () => {
+    const reminded: ExplanationResult = { ...SAFE, advices: { patch: 0.9 } };
+    await headless({ verdict: reminded }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(true);
+      // recordClassification is what stages this note; without it the model never learns.
+      expect(resultText(harness)).toContain("patch tool refuses an unmatched edit");
+    });
+  });
+
+  test("a credential path is refused by the floor without classifying anything", async () => {
+    const call = { toolCalls: [{ name: "write", arguments: { path: ".ssh/id_ed25519", content: "x" } }] };
+    await headless(
+      { verdict: SAFE, tools: ["bash", "write"], responses: [call, "done"] },
+      ({ harness, classifierCalls }) => {
+        expect(classifierCalls).toEqual([]);
+        expect(resultText(harness)).toContain("credential");
+        expect(existsSync(join(harness.cwd, ".ssh", "id_ed25519"))).toBe(false);
+      },
+    );
+  });
+
+  test("a repeated call reuses the verdict instead of classifying twice", async () => {
+    const call = { toolCalls: [{ name: "bash", arguments: { command: "touch out.txt" } }] };
+    await headless({ verdict: SAFE, responses: [call, call, "done"] }, ({ harness, classifierCalls }) => {
+      expect(classifierCalls).toEqual(["bash"]);
+      expect(harness.toolResults()[0]?.isError).toBe(false);
+    });
+  });
+
+  test("a tirith floor blocks a safe verdict and skips the classifier", async () => {
+    const tirith = fakeTirith(
+      '{"action":"block","findings":[{"severity":"CRITICAL","rule_id":"fake-rule","title":"fake finding","description":"x"}]}',
+    );
+    try {
+      await headless({ verdict: SAFE, pathPrefix: tirith.dir }, ({ harness, classifierCalls }) => {
+        expect(existsSync(join(harness.cwd, "out.txt"))).toBe(false);
+        expect(resultText(harness)).toContain("fake finding");
+        expect(classifierCalls).toEqual([]);
+      });
+    } finally {
+      tirith.cleanup();
+    }
+  });
+
+  test("a tirith warning rides the result of a call the verdict allowed", async () => {
+    const tirith = fakeTirith(
+      '{"action":"warn","findings":[{"severity":"WARN","rule_id":"fake-rule","title":"fake finding","description":"x"}]}',
+    );
+    try {
+      await headless({ verdict: SAFE, pathPrefix: tirith.dir }, ({ harness }) => {
+        expect(existsSync(join(harness.cwd, "out.txt"))).toBe(true);
+        // The only channel a headless run has for a non-CRITICAL finding.
+        expect(resultText(harness)).toContain("fake-rule");
+      });
+    } finally {
+      tirith.cleanup();
+    }
+  });
+
+  test("without a test seam the gate still finds the backend session_start reported", async () => {
+    // A credential path is refused by the floor before any verdict is wanted, so
+    // the reason is the floor's only when the policy saw a classifier: the frozen
+    // constant this replaced (read at factory time) yields the blanket block
+    // instead. No classifier runs, so no role or provider key can decide this.
+    const call = { toolCalls: [{ name: "write", arguments: { path: ".ssh/id_ed25519", content: "x" } }] };
+    await headless(
+      { verdict: null, noSeam: true, tools: ["bash", "write"], responses: [call, "done"] },
+      ({ harness }) => {
+        expect(resultText(harness)).toContain("credential");
+        expect(existsSync(join(harness.cwd, ".ssh", "id_ed25519"))).toBe(false);
+      },
+    );
+  });
+
+  test("with auto-classify off the blanket block stands and no classifier runs", async () => {
+    await headless({ verdict: SAFE, autoClassify: "off" }, ({ harness, classifierCalls }) => {
+      expect(classifierCalls).toEqual([]);
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(false);
+      expect(resultText(harness)).toContain("blocked in non-interactive mode");
+    });
+  });
+});

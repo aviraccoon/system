@@ -24,7 +24,8 @@ If in doubt between SAFE and RISKY, the sidecar chooses RISKY.
 
 When enabled (`/permissions` > Toggle auto-classify), the sidecar classifies each
 tool call *before* showing the dialog. If the verdict is auto-allowable for the
-current mode, the call proceeds without confirmation.
+current mode, the call proceeds without confirmation. This table is the case with
+a dialog available; a run with no UI is below.
 
 | Mode | Auto-allows | Confirms |
 |------|-------------|----------|
@@ -40,8 +41,19 @@ reuse the previous verdict — useful for repeated test/lint/build commands. For
 edit-like calls the key includes the previewed state (create vs overwrite, the
 added lines), so a create verdict is never reused for an overwrite.
 
-Parse failures and sidecar failures both fall through to the dialog — a failed
-parse never auto-allows, and a dead sidecar just means the user confirms.
+Parse failures and sidecar failures both fall through to the dialog, or to the refusal when
+there is no UI: a failed parse never auto-allows, and a dead sidecar means the user confirms
+or the call is refused.
+
+### No dialog to answer
+
+A run with no UI — print mode, or a parent that bound none — has nobody to answer a dialog.
+Every call that would confirm is refused, and the reason says it was blocked in
+non-interactive mode. There is one exception: when auto-classify is on and a classifier is
+configured, the classifier resolves the call under the unattended bands. There a sensitive
+path, a missing verdict and a dangerous verdict block; a safe or risky one runs, unless an
+advisory blocks it. A tirith finding that forces a dialog blocks as well, whatever the
+classifier says. With auto-classify off the blanket block stands.
 
 ### Classifier
 
