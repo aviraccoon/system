@@ -11,10 +11,10 @@
  * Commands: /lsp (status), /lsp-dedup, /lsp-restart
  */
 
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { stringEnum } from "../shared/schema";
 import { runAction } from "./actions";
 import { restartWithRedetect } from "./client-mgmt";
 import { startSession, stopSession } from "./file-events";
@@ -112,7 +112,7 @@ export default function (pi: ExtensionAPI) {
       "Use `lsp` with action `restart` to restart language servers. Without `file`, restarts all servers. With `file`, restarts only the server for that file's project. Use when a server is stuck, dead, or giving stale results.",
     ],
     parameters: Type.Object({
-      action: StringEnum([...LSP_ACTIONS]),
+      action: stringEnum(LSP_ACTIONS),
       file: Type.Optional(Type.String({ description: "File path (relative to cwd)" })),
       line: Type.Optional(Type.Number({ description: "Line number (1-indexed)" })),
       symbol: Type.Optional(Type.String({ description: "Symbol name at the line (for precise column resolution)" })),

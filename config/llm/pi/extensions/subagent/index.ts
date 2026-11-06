@@ -17,10 +17,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { journalNotesDir } from "../shared/journal-context";
+import { stringEnum } from "../shared/schema";
 import {
   type AgentConfig,
   buildToolDescription,
@@ -90,7 +90,7 @@ const ChainItem = Type.Object({
   cwd: Type.Optional(Type.String({ description: "Working directory for the agent process" })),
 });
 
-const AgentScopeSchema = StringEnum(["user", "project", "both"] as const, {
+const AgentScopeSchema = stringEnum(["user", "project", "both"] as const, {
   description:
     'Which repo agent dirs to use: "both" includes .agents/agents and .pi/agents. Default: "user" (repo dirs excluded). Private notes agents always load.',
   default: "user",
