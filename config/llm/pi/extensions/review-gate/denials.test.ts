@@ -17,10 +17,17 @@ describe("shell command denials", () => {
     expect(shellDenialReason("git -c core.hookspath=/tmp/foo commit", STATE)).toContain("core.hooksPath");
   });
 
-  test("clearing or reassigning the session marker is refused", () => {
-    expect(shellDenialReason("env -u PI_SESSION_ID git commit", STATE)).toContain("PI_SESSION_ID");
-    expect(shellDenialReason("unset PI_SESSION_ID; git commit", STATE)).toContain("PI_SESSION_ID");
-    expect(shellDenialReason("PI_SESSION_ID= git commit", STATE)).toContain("PI_SESSION_ID");
+  test("clearing or reassigning an agent marker is refused", () => {
+    for (const marker of ["PI_SESSION_ID", "PI_CODING_AGENT"]) {
+      for (const command of [`env -u ${marker} git commit`, `unset ${marker}; git commit`, `${marker}= git commit`]) {
+        const reason = shellDenialReason(command, STATE);
+        expect(reason).toContain("do not clear or reassign");
+        // The text an agent reads has to name the marker it just cleared.
+        expect(reason).toContain(marker);
+      }
+      // Naming a marker without clearing it is ordinary work.
+      expect(shellDenialReason(`git log --grep ${marker}`, STATE)).toBeNull();
+    }
   });
 
   test("an unrelated command is allowed", () => {

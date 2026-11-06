@@ -13,15 +13,17 @@ const STATE_REASON = "review-gate state is written only by the extension; use /r
 const HOOKS_PATH_REASON =
   "core.hooksPath selects the hook directory, so any command naming it is refused: changing or overriding it can bypass the review gate. /review-gate status shows the effective path.";
 
-/** The gate applies to agent sessions only, so clearing the marker skips it. */
-const SESSION_REASON = "PI_SESSION_ID is the review gate's agent-session marker; do not clear or reassign it.";
+/** The gate applies to agent sessions only, so clearing a marker skips it. */
+const MARKER_REASON =
+  "PI_SESSION_ID and PI_CODING_AGENT are the review gate's agent markers; do not clear or reassign them.";
 
-const SESSION_CLEARED = /(\benv\b[^;&\n]*-u\s+PI_SESSION_ID\b|\bunset\s+PI_SESSION_ID\b|PI_SESSION_ID=)/;
+const MARKER = "(?:PI_SESSION_ID|PI_CODING_AGENT)";
+const MARKERS_CLEARED = new RegExp(`(\\benv\\b[^;&\\n]*-u\\s+${MARKER}\\b|\\bunset\\s+${MARKER}\\b|${MARKER}=)`);
 
 export function shellDenialReason(command: string, stateDir: string): string | null {
   if (command.includes(stateDir) || command.includes(".pi/agent/state")) return STATE_REASON;
   // git's config names are case-insensitive: `core.hookspath` selects a directory too.
   if (/core\.hookspath/i.test(command)) return HOOKS_PATH_REASON;
-  if (SESSION_CLEARED.test(command)) return SESSION_REASON;
+  if (MARKERS_CLEARED.test(command)) return MARKER_REASON;
   return null;
 }

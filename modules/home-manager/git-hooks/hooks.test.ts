@@ -114,6 +114,9 @@ function setup(objectFormat?: "sha256"): Fixture {
     GIT_COMMITTER_NAME: "Probe",
     GIT_COMMITTER_EMAIL: "probe@example.com",
   };
+  // The session marker comes from this fixture. Without this delete, a terminal
+  // test that removes only the session marker would still be gated by the inherited one.
+  delete env.PI_CODING_AGENT;
   const fx: Fixture = { root, repo: realpathSync(repo), home, state, env };
   fixtures.push(fx);
   // The deployed layout: one directory holding the lib next to symlinks that
@@ -376,6 +379,17 @@ describe("review gate hooks", () => {
     const env = { ...fx.env };
     delete env.PI_SESSION_ID;
     expect(git(fx, ["commit", "-m", "feat: add a"], env).status).toBe(0);
+  });
+
+  test("the process marker alone gates a commit whose shell lost the session marker", () => {
+    const fx = setup();
+    stage(fx, "a.txt", "a\n");
+    const env = { ...fx.env };
+    delete env.PI_SESSION_ID;
+    env.PI_CODING_AGENT = "true";
+    const commit = git(fx, ["commit", "-m", "feat: add a"], env);
+    expect(commit.status).not.toBe(0);
+    expect(commit.out).toContain("no clean review");
   });
 
   test("the off switch and a repository exemption each let the commit through", () => {
@@ -757,7 +771,6 @@ describe("decision log", () => {
     // The skip path is the one that must not fire; an agent ref update would take the reviewed path.
     const human = { ...fx.env };
     delete human.PI_SESSION_ID;
-    delete human.PI_CODING_AGENT;
     expect(git(fx, ["checkout", "-b", "feature"], human).status).toBe(0);
     expect(git(fx, ["tag", "v1"], human).status).toBe(0);
     // A stash and a note are new commits on refs that are not history being made now.
@@ -793,7 +806,6 @@ describe("decision log", () => {
     stage(terminal, "a.txt", "a\n");
     const human = { ...terminal.env };
     delete human.PI_SESSION_ID;
-    delete human.PI_CODING_AGENT;
     expect(git(terminal, ["commit", "-m", "feat: human"], human).status).toBe(0);
     const [, decision, , loggedTree, reason] = onlyDecision(terminal);
     expect([decision, loggedTree, reason]).toEqual(["skipped", "-", "no-marker"]);

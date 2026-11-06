@@ -2,11 +2,13 @@
 # pinned PATH, so nothing here needs an absolute program path.
 #
 # The gate applies only to agent runs: the shell pi spawns for the agent carries
-# PI_SESSION_ID, and a commit typed in a terminal has no such marker, so it is
-# not gated. Skipping the gate by unsetting the variable is outside the threat
-# model; this is a compliance gate, not a sandbox. The state directory is always
-# derived from $HOME for the same reason: an environment override would be a
-# one-line bypass.
+# PI_SESSION_ID, and every process pi starts carries PI_CODING_AGENT, so a
+# commit typed in a terminal has neither and is not gated. Two markers because
+# the second survives a shell tool that builds its own environment; the cost is
+# that a `!` command typed inside pi is gated too. Skipping the gate by unsetting
+# a marker is outside the threat model; this is a compliance gate, not a sandbox.
+# The state directory is always derived from $HOME for the same reason: an
+# environment override would be a one-line bypass.
 #
 # Running a repository's own hook is a separate decision from the gate, and
 # applies to every commit: see commit_hook.
@@ -32,7 +34,7 @@ refuse() {
   exit 1
 }
 
-agent_run() { test -n "${PI_SESSION_ID:-}"; }
+agent_run() { test -n "${PI_SESSION_ID:-}" || test -n "${PI_CODING_AGENT:-}"; }
 
 # Why `gate_active` said no, so a skipped commit still carries a reason.
 gate_skip_reason() {

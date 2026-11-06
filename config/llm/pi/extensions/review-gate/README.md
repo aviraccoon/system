@@ -33,10 +33,12 @@ another way is not caught.
 
 ## Hooks and state
 
-The gate applies to agent sessions only: the shell pi runs for the agent carries `PI_SESSION_ID`, and a
-commit without it is not gated. A tool that replaces `bash` has to inject it too (as `/jobs` does); a
-missing marker leaves the gate silent, not complaining. The hooks read these files, written only by the
-extension (`/review-gate` or the `review` tool), never by another tool call:
+The gate applies to agent sessions only: the shell pi runs for the agent carries `PI_SESSION_ID`, and
+every process pi starts carries `PI_CODING_AGENT`. Either marker gates the commit; a command typed in a
+terminal has neither and is not gated, and a `!` command typed inside pi is, because it inherits the
+process marker. Two markers because a tool that replaces `bash` can drop the session variables. No marker
+leaves the gate silent, not complaining. The hooks read these files, written only by the extension
+(`/review-gate` or the `review` tool), never by another tool call:
 
 | File | Written by | Effect |
 |------|-----------|--------|
@@ -75,7 +77,7 @@ A repository-local `core.hooksPath` shadows the gate's hooks; `status` reports t
 that repository, and a shell command that names `core.hooksPath` is blocked (a text match, not a
 parser). The tool records the round either way, so a later install finds the reviewed tree already
 recorded. Every check is a compliance gate against a forgetful agent, not a sandbox: a command that
-clears `PI_SESSION_ID` another way (a nested shell, `env -i`), points `HOME` or the global git config
+clears both markers another way (a nested shell, `env -i`), points `HOME` or the global git config
 elsewhere, or reaches the state files another way is outside what the text matches catch. So is a
 commit made while merge, cherry-pick or rebase state is present, which the hooks treat as history
 being rewritten rather than created.

@@ -26,7 +26,7 @@ const SESSION_ENV_VARS = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_PROVIDER", "PI
 /** The only parts of the context the injection reads; renaming one in pi fails here. */
 export type SessionContext = Pick<ExtensionContext, "sessionManager" | "model" | "thinkingLevel">;
 
-/** The review-gate git hooks key off `PI_SESSION_ID`. */
+/** The review-gate git hooks read `PI_SESSION_ID`; pi's process marker covers a child that drops it. */
 export function sessionEnv(ctx: SessionContext | undefined, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const key of SESSION_ENV_VARS) delete env[key];
