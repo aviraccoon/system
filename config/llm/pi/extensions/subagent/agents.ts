@@ -91,6 +91,49 @@ function parseFrontmatter<T extends Record<string, string>>(
   return { frontmatter: fm as T, body: match[2] };
 }
 
+const INCLUDE_RE = /^@(rules\/[A-Za-z0-9._-]+\.md)$/;
+
+function fragmentPaths(baseDir: string, target: string): string[] {
+  const paths: string[] = [];
+  let dir = baseDir;
+  for (;;) {
+    paths.push(path.join(dir, target));
+    const parent = path.dirname(dir);
+    if (parent === dir) return paths;
+    dir = parent;
+  }
+}
+
+/** Splices `@rules/<name>.md` lines, resolving from `baseDir` then each ancestor; one level, and a
+ * missing fragment throws. Only ``` fences are skipped; `~~~` and indented blocks are not. */
+export function expandIncludes(body: string, baseDir: string): string {
+  const out: string[] = [];
+  let fenced = false;
+  for (const line of body.split("\n")) {
+    if (line.trimStart().startsWith("```")) fenced = !fenced;
+    const match = fenced ? null : line.trim().match(INCLUDE_RE);
+    if (!match) {
+      out.push(line);
+      continue;
+    }
+    const candidates = fragmentPaths(baseDir, match[1]);
+    const found = candidates.find((candidate) => fs.existsSync(candidate));
+    if (!found) throw new Error(`include not found: ${match[0]} (tried ${candidates.join(", ")})`);
+    const text = fs.readFileSync(found, "utf-8");
+    let inFence = false;
+    const nested = text.split("\n").find((l) => {
+      if (l.trimStart().startsWith("```")) inFence = !inFence;
+      return !inFence && INCLUDE_RE.test(l.trim());
+    });
+    if (nested) throw new Error(`${match[0]} includes another fragment (${nested.trim()}); includes do not nest`);
+    out.push(`${text.replace(/\n+$/, "")}\n`);
+  }
+  return out.join("\n");
+}
+
+/** Discovery loads a level more than once, so a skip is reported once per file. */
+const reportedSkips = new Set<string>();
+
 export function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
   const agents: AgentConfig[] = [];
 
@@ -131,6 +174,21 @@ export function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig
       .map((e) => e.trim())
       .filter(Boolean);
 
+    let systemPrompt: string;
+    try {
+      systemPrompt = expandIncludes(body, realDir(filePath));
+    } catch (error) {
+      // A throw here would exit pi: a factory error becomes a load diagnostic and pi exits 1, in every
+      // mode, and this runs before trust filtering, so a repo definition could not be opted out of.
+      if (!reportedSkips.has(filePath)) {
+        reportedSkips.add(filePath);
+        process.stderr.write(
+          `subagent: skipped ${filePath}: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      }
+      continue;
+    }
+
     agents.push({
       name: frontmatter.name,
       description: frontmatter.description,
@@ -139,13 +197,21 @@ export function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig
       model: model || undefined,
       thinking: thinking || undefined,
       extensions: extensions && extensions.length > 0 ? extensions : undefined,
-      systemPrompt: body,
+      systemPrompt,
       source,
       filePath,
     });
   }
 
   return agents;
+}
+
+function realDir(file: string): string {
+  try {
+    return path.dirname(fs.realpathSync(file));
+  } catch {
+    return path.dirname(file);
+  }
 }
 
 function dirIfExists(candidate: string): string | null {
@@ -166,7 +232,8 @@ function hasAgents(dir: string | null): boolean {
  * or `.pi/agents`, walking up from cwd and stopping at the home directory (or
  * the filesystem root for a cwd outside home). Both kinds at one level form a
  * single level, so a nested repo's dirs win over an outer repo's, and a level
- * without usable definitions does not shadow an outer one. */
+ * whose definitions all fail to load does not shadow an outer one. A throw out of the
+ * load path exits pi with a load diagnostic, which is why the loader catches its own per-file errors. */
 export function findNearestProjectAgentDirs(cwd: string, home: string = os.homedir()): AgentDirs {
   let currentDir = cwd;
   while (currentDir !== home) {

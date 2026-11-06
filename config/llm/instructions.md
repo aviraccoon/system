@@ -2,11 +2,11 @@
 
 ## Communication Style
 
-- No yapping, in everything — code comments, commit messages, docs, chat, prose. Say the least that fully conveys it and no more: less is more, but only when it still explains everything (dense, not caveman-terse). No padding, no restated obviousness, no filler to sound thorough.
-- Commit messages, code comments, and docs are public and must be self-contained — a reader has only the repo, not your journal or session log. Don't reference any of those (journal entries, session names, internal jargon or codenames), and don't lean on context the repo cannot show: an audit, a conversation, a ticket, a session finding, a measurement taken outside the repo. Describe the change on its own terms. A commit message mirrors the repo's own messages: personal content there licenses it here; otherwise it carries no personal name — where the change legitimately names someone, write "the user" (a path or identifier stays exact).
+@rules/prose.md
+@rules/private-content.md
+@rules/comments.md
+
 - Docs and comments are written for the reader's environment, not the author's: a command must run in the context the doc names (host or container, CI or local) against the stack the project actually uses.
-- A measured number stays out of durable prose; name the probe that produces it beside the rule instead, so it can be re-run. The `writing-style` skill carries the rule and its exemptions.
-- Test fixtures, examples, and sample data are fully synthetic. Write them from scratch — never adapt them from the user's real files, project names, work topics, or any other private content, even "neutralized". Generic names only: `foo`, `acme`, `example.com`.
 - No emoji by default, unless a project's AGENTS.md says otherwise
 - US spelling (color, behavior, summarize), not British
 - No marketing language ("comprehensive", "robust", "cutting-edge", etc.)
@@ -130,38 +130,7 @@ Never edit AGENTS.md or AGENTS.local.md directly — suggest the change. If the 
 
 ## Tests
 
-A pin (a test that locks down one behavior) is evidence only if it can fail. Where green could be
-coincidence — presence asserted rather than the effect, a proxy that holds under both
-implementations (a count, an ordering, a snapshot), an either/or asserted on one side, an
-expectation that cannot disagree, a subject the test replaces with a mock — prove it can fail:
-undo the behavior, watch the pin go red, restore. A pin that stays green under the undo asserts
-nothing: tighten it or delete it. Run the proof against the pin's own file so the run actually
-includes it.
-
-One undo at a time, baseline green between them (a stacked or unrestored edit lies), and check the
-undo reached the asserted behavior: a green round trip can mean the mutation never exercised the
-path — a fake that models only the happy path, a mock standing in for the subject — as easily as a
-weak pin. Prefer the real implementation over a mock of the thing under test; a fake must model
-the contract the code relies on, failure modes included.
-
-Every new branch — `else if`, early return, guard — needs a test that fails when the branch is
-deleted. An assertion added to an existing test is evidence too; it needs the same proof.
-
-A universal claim (`never`, `every`, `each`, `all`, `no …`) in a comment, doc, or commit message
-needs a test over that domain, one test per case the claim spans.
-
-A hand-edited input file (config, settings, secrets) gets one parser and a table test over its
-value domain. The parser reports every entry it drops, and one row per way the file can be wrong
-asserts that report; a file checked per consumer drifts into two rules.
-
-A check is fixed at the cause, never greened by weakening it: a relaxed assertion, a skipped test,
-a widened catch, a disabled rule. An expectation edited to match new output claims that output is
-correct. A result a rerun, a sleep, or a run order decides is a defect, not noise — make the test
-deterministic.
-
-Before reporting done, run the project's full check in its one-shot form — the suite, not just the
-files touched. A run that never exits is not a gate, and a run that selects no tests exits 0
-without proving anything.
+@rules/tests.md
 
 ## Version Control
 
@@ -180,7 +149,9 @@ The loop ends on a round that reports no in-scope CRITICAL, no in-scope MAJOR, n
 
 **Delta-scoped rounds.** Once rounds re-report areas an earlier round settled, a full review buys nothing but cost: scope the next round, not your own pass. Re-read the whole change as above, then hand the reviewer a baseline taken before the last round's fixes and limit the round to the changes those fixes produced plus the tests covering them, with the settled areas out of scope, the proposed message excepted. The round answers three questions and judges the message, unchanged or not: does the delta hold, can its pins fail, and does it regress anything it touches.
 
-Standalone prose goes through `reviewer` (in pi, the plain `subagent` tool: a standalone review has no commit message or tree to record); the prose a change adds goes through the same `review` dispatch as the commit, so the round covers it. Prose the user co-authored in the session gets a single `reviewer` pass, plus whatever re-review the Review loop requires. Project AGENTS.md guidelines override these. Update docs alongside code changes. Commit messages are short: a subject and at most two sentences of body, carrying only what the diff cannot show — a non-obvious constraint, a deliberate trade-off. Never restate the diff, list files or hunks, record measurements, or lean on a journal; the body follows the `writing-style` skill for how it reads. Message format is the repo's call; where the log shows no format of its own, conventional commits (`type(scope):`) are the default.
+Standalone prose goes through `reviewer` (in pi, the plain `subagent` tool: a standalone review has no commit message or tree to record); the prose a change adds goes through the same `review` dispatch as the commit, so the round covers it. Prose the user co-authored in the session gets a single `reviewer` pass, plus whatever re-review the Review loop requires. Project AGENTS.md guidelines override these. Update docs alongside code changes.
+
+@rules/message.md
 
 **Machine-local changes** (keep working locally, never push): permanent overrides of *tracked* files → `git update-index --skip-worktree <path>` — invisible to status/staging (even `git add -A`); a checkout that would overwrite the file refuses rather than clobbers; revert with `--no-skip-worktree`, list with `git ls-files -v | grep '^S'`, and document it in the repo's `AGENTS.local.md` (it's invisible). In-progress work → a branch; maybe-dead local tooling → `git stash`; brand-new local files → `.git/info/exclude`.
 

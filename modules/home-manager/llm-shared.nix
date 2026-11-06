@@ -41,10 +41,39 @@ in
 
   vanillaMessage = "Running in vanilla mode (LLM_VANILLA=1). Custom instructions skipped.";
 
-  # Global instructions with ~ resolved to home dir
-  globalInstructions = builtins.replaceStrings [ "~/" ] [ "${homeDir}/" ] (
-    builtins.readFile ../../config/llm/instructions.md
-  );
+  # `@rules/<name>.md` splices config/llm/rules; agents.ts runs the same directive at agent load, where
+  # a fence is skipped and a missing fragment only costs that definition. Here the match is textual.
+  globalInstructions =
+    let
+      rulesDir = ../../config/llm/rules;
+      ruleNames = builtins.filter (name: builtins.match ".*[.]md" name != null) (
+        builtins.attrNames (builtins.readDir rulesDir)
+      );
+      directives = map (name: "@rules/${name}") ruleNames;
+      fragments = map (name: builtins.readFile (rulesDir + "/${name}")) ruleNames;
+      source = builtins.readFile ../../config/llm/instructions.md;
+      spliced = builtins.replaceStrings directives fragments source;
+      inlineDirective = builtins.filter (
+        line:
+        builtins.match ".*@rules/.*" line != null
+        && builtins.match "[[:space:]]*@rules/[A-Za-z0-9._-]+[.]md[[:space:]]*" line == null
+      ) (builtins.filter builtins.isString (builtins.split "\n" source));
+      # A directive the splice did not resolve, or a fragment that quotes one.
+      unexpanded =
+        builtins.stringLength spliced
+        != builtins.stringLength (builtins.replaceStrings [ "@rules/" ] [ "" ] spliced);
+      noNewline = builtins.filter (
+        name: builtins.match ".*\n" (builtins.readFile (rulesDir + "/${name}")) == null
+      ) ruleNames;
+    in
+    if inlineDirective != [ ] then
+      throw "instructions.md: a directive must be a line of its own, not shared with other text"
+    else if unexpanded then
+      throw "instructions.md: an @rules directive names no file in config/llm/rules, or a fragment quotes one"
+    else if noNewline != [ ] then
+      throw "a rule fragment must end with a newline: ${builtins.concatStringsSep ", " noNewline}"
+    else
+      builtins.replaceStrings [ "~/" ] [ "${homeDir}/" ] spliced;
 
   skills = bundledSkills ++ externalSkills;
 }

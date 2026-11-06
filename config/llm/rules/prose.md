@@ -1,0 +1,5 @@
+**Least words, everywhere** (chat, comments, messages, docs). Say the least that fully conveys it: less is more, but only when it still explains everything (dense, not caveman-terse). No padding, no restated obviousness, no filler to sound thorough. Verbosity is a defect, not a style preference.
+
+**No measured numbers.** A number a reader cannot re-run does not belong in durable prose (comments, docs, error strings, commit bodies): test counts, timings, scores, coverage. Name the probe that produces it instead (a command, a fixture, a benchmark) so it can be produced again. `writing-style` carries the rule and its exemptions. A protocol value or a port is not a measurement, and a value the code itself derives from (a calibration constant, a measured baseline) stays with the value.
+
+**No status or change prose.** Test pass counts, "verified by" lines, check transcripts, and how the text came to be are not content. Change-relative framing ("now", "previously", "replaces X") is the same: a reader with only the tree cannot check it.

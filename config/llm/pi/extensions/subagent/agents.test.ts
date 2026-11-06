@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   type AgentConfig,
   buildToolDescription,
   discoverAgents,
+  expandIncludes,
   findNearestProjectAgentDirs,
   loadAgentsFromDir,
   markShadowed,
@@ -171,6 +172,38 @@ describe("findNearestProjectAgentDirs", () => {
     const agentsDir = makeDir("project", ".pi", "agents");
     writeAgent(agentsDir, "a.md", { name: "a", description: "A" }, "A");
     expect(findNearestProjectAgentDirs(project)).toEqual({ neutral: null, pi: agentsDir });
+  });
+
+  test("a broken directive is skipped, not fatal to discovery", () => {
+    const project = makeDir("project-broken");
+    const agentsDir = makeDir("project-broken", ".pi", "agents");
+    writeAgent(agentsDir, "a.md", { name: "a", description: "A" }, "@rules/missing.md");
+    writeAgent(agentsDir, "b.md", { name: "b", description: "B" }, "B");
+    const written: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      expect(loadAgentsFromDir(agentsDir, "project").map((a) => a.name)).toEqual(["b"]);
+      expect(findNearestProjectAgentDirs(project)).toEqual({ neutral: null, pi: agentsDir });
+    } finally {
+      process.stderr.write = original;
+    }
+    const report = written.join("");
+    expect(report).toContain("missing.md");
+    expect(report.match(/skipped/g)).toHaveLength(1);
+  });
+
+  test("a level whose only definition is broken does not shadow the outer one", () => {
+    makeDir("outer-repo");
+    const outerAgents = makeDir("outer-repo", ".pi", "agents");
+    writeAgent(outerAgents, "o.md", { name: "o", description: "O" }, "O");
+    const inner = makeDir("outer-repo", "nested");
+    const innerAgents = makeDir("outer-repo", "nested", ".pi", "agents");
+    writeAgent(innerAgents, "b.md", { name: "b", description: "B" }, "@rules/missing.md");
+    expect(findNearestProjectAgentDirs(inner)).toEqual({ neutral: null, pi: outerAgents });
   });
 
   test("finds both kinds at the same level", () => {
@@ -452,6 +485,115 @@ describe("respectProjectTrust", () => {
   test("keeps every source when trusted", () => {
     const agents = [agent("u", "user"), agent("p", "project"), agent("n", "notes")];
     expect(respectProjectTrust(agents, true).map((a) => a.name)).toEqual(["u", "p", "n"]);
+  });
+});
+
+// ── expandIncludes ──
+
+describe("expandIncludes", () => {
+  const dir = () => makeDir("includes");
+
+  test("splices a fragment from the agent's own directory", () => {
+    const d = dir();
+    mkdirSync(join(d, "rules"), { recursive: true });
+    writeFileSync(join(d, "rules", "rule.md"), "RULE TEXT\n");
+    expect(expandIncludes("before\n@rules/rule.md\nafter", d)).toBe("before\nRULE TEXT\n\nafter");
+  });
+
+  test("a missing fragment throws instead of dropping the rule", () => {
+    expect(() => expandIncludes("@rules/nope.md", dir())).toThrow(/include not found/);
+  });
+
+  test("a directive inside a fenced block stays literal", () => {
+    const d = dir();
+    mkdirSync(join(d, "rules"), { recursive: true });
+    writeFileSync(join(d, "rules", "rule.md"), "RULE TEXT\n");
+    expect(expandIncludes("```\n@rules/rule.md\n```", d)).toBe("```\n@rules/rule.md\n```");
+  });
+
+  test("a fragment that includes another fragment throws", () => {
+    const d = dir();
+    mkdirSync(join(d, "rules"), { recursive: true });
+    writeFileSync(join(d, "rules", "outer.md"), "@rules/inner.md\n");
+    expect(() => expandIncludes("@rules/outer.md", d)).toThrow(/do not nest/);
+  });
+
+  test("a fragment may document the directive inside a fence", () => {
+    const d = dir();
+    mkdirSync(join(d, "rules"), { recursive: true });
+    writeFileSync(join(d, "rules", "doc.md"), "Use a line like:\n\n```\n@rules/other.md\n```\n");
+    expect(expandIncludes("@rules/doc.md", d)).toContain("@rules/other.md");
+  });
+});
+
+describe("a loaded agent", () => {
+  test("carries the fragment text, not the directive", () => {
+    const d = makeDir("loaded");
+    mkdirSync(join(d, "rules"), { recursive: true });
+    writeFileSync(join(d, "rules", "rule.md"), "RULE TEXT\n");
+    writeAgent(d, "a.md", { name: "a", description: "d" }, "before\n@rules/rule.md\nafter");
+    expect(loadAgentsFromDir(d, "user")[0].systemPrompt).toBe("before\nRULE TEXT\n\nafter");
+  });
+
+  test("resolves through a symlinked agent directory", () => {
+    // The fragment sits above the symlink's target, so only the real path reaches it:
+    // <real>/rules/rule.md, agent at <real>/sub/agents/a.md, symlink -> <real>/sub.
+    const real = makeDir("real");
+    mkdirSync(join(real, "rules"), { recursive: true });
+    writeFileSync(join(real, "rules", "rule.md"), "RULE TEXT\n");
+    const sub = makeDir("real", "sub", "agents");
+    writeAgent(sub, "a.md", { name: "a", description: "d" }, "@rules/rule.md");
+    const linked = join(TEST_DIR, "linked-agents");
+    symlinkSync(join(real, "sub"), linked);
+    expect(loadAgentsFromDir(join(linked, "agents"), "user")[0].systemPrompt).toBe("RULE TEXT\n");
+  });
+});
+
+// ── every deployed directive resolves ──
+
+describe("deployed @rules directives", () => {
+  const llmDir = join(import.meta.dir, "..", "..", "..");
+  const agentDir = join(llmDir, "pi", "agents");
+  const targets = [
+    join(llmDir, "instructions.md"),
+    ...readdirSync(agentDir)
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => join(agentDir, name)),
+  ];
+  const directives = (file: string) =>
+    readFileSync(file, "utf-8")
+      .split("\n")
+      .map((line) => line.trim().match(/^@(rules\/[A-Za-z0-9._-]+\.md)$/)?.[1])
+      .filter((name): name is string => Boolean(name));
+
+  test("the loader expands each named fragment and leaves no directive", () => {
+    for (const file of targets) {
+      const out = expandIncludes(readFileSync(file, "utf-8"), dirname(file));
+      expect(out).not.toMatch(/^@rules\//m);
+      for (const name of directives(file)) {
+        const first = readFileSync(join(llmDir, name), "utf-8").split("\n")[0].slice(0, 40);
+        expect(out).toContain(first);
+      }
+    }
+  });
+
+  test("the reviewer keeps all five fragments", () => {
+    expect(directives(join(agentDir, "reviewer.md"))).toEqual([
+      "rules/prose.md",
+      "rules/comments.md",
+      "rules/private-content.md",
+      "rules/tests.md",
+      "rules/message.md",
+    ]);
+  });
+
+  test("the instructions name every fragment", () => {
+    const named = directives(join(llmDir, "instructions.md")).sort();
+    const files = readdirSync(join(llmDir, "rules"))
+      .filter((name) => name.endsWith(".md"))
+      .map((name) => `rules/${name}`)
+      .sort();
+    expect(named).toEqual(files);
   });
 });
 
