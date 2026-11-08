@@ -9,6 +9,7 @@ mise nix-switch       # Format, build, and apply (or: nix-switch from anywhere)
 mise fast-switch      # Build/apply without formatting
 mise nix-diff         # Preview changes before applying
 mise fmt              # Format .nix files
+mise check            # fmt-check + biome-check + tree-check, the one-shot gate
 mise repl             # REPL with flake outputs
 mise cpu              # Check custom packages for upstream updates
 ```
@@ -50,6 +51,7 @@ mise cpu              # Check custom packages for upstream updates
 - CLIs and scripts declare their arguments in a `config/shared/cli.ts` spec. Do not hand-roll `process.argv` parsing, and do not call `node:util` `parseArgs` directly (existing sites migrate as they are touched).
 - macOS app bundles from custom packages need symlinks in `modules/home-manager/default.nix` to appear in `~/Applications`.
 - Test format with `mise fmt-check` before proposing changes.
+- A commit scope names the component the change is in: the extension, package, module, machine or directory a log reader filters by, or the wider area when the change spans several components or touches a file outside every component. Reuse a scope the log already has when it names that same component.
 - When adding Homebrew casks, prefer nixpkgs if the package is available and works well on macOS.
 - Never guess hostnames. Run `hostname` or check `machines/` directory for actual machine names.
 - Do NOT run `mise nix-switch` or `mise fast-switch` yourself. Use `mise nix-diff` to verify changes build, then tell the user to run the switch. This is their live system - they control when changes are applied.
