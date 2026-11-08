@@ -6,6 +6,7 @@ import {
   durationLabel,
   lastAnswer,
   oneLine,
+  pendingLabel,
   settledNote,
   settledPushBody,
 } from "./format";
@@ -88,6 +89,22 @@ describe("durationLabel", () => {
 
 const facts = { startedAt: 0, toolCalls: 3, lastAction: "bash bun test" };
 
+describe("pendingLabel", () => {
+  const cases: Array<[string, Array<{ kind: string }>, string | undefined]> = [
+    ["none", [], undefined],
+    ["one", [{ kind: "job" }], "1 job running"],
+    ["several of one kind", [{ kind: "job" }, { kind: "job" }], "2 jobs running"],
+    ["two kinds, sorted", [{ kind: "subagent" }, { kind: "job" }], "1 job, 1 subagent running"],
+    ["many kinds", [{ kind: "subagent" }, { kind: "job" }, { kind: "job" }], "2 jobs, 1 subagent running"],
+  ];
+
+  for (const [name, pending, expected] of cases) {
+    test(name, () => {
+      expect(pendingLabel(pending)).toBe(expected);
+    });
+  }
+});
+
 describe("settledNote", () => {
   test("title carries the duration and the body carries the run", () => {
     const note = settledNote(
@@ -105,15 +122,21 @@ describe("settledNote", () => {
   test("truncation is named", () => {
     expect(settledNote({ ...facts, truncated: true }, { project: "acme", now: 10_000 }).body).toContain("truncated");
   });
+
+  test("work still in flight is named in the title and the body", () => {
+    const note = settledNote(facts, { project: "acme", now: 240_000 }, [{ kind: "job" }]);
+    expect(note.title).toBe("pi done, 1 job running, 4m");
+    expect(note.body).toBe("acme, 1 job running, 3 tools, bash bun test");
+  });
 });
 
 describe("settledPushBody", () => {
-  test("carries counts and duration but never the command or the answer", () => {
-    const context = { project: "acme", now: 240_000, snippet: "secret model output" };
-    const body = settledPushBody({ ...facts, lastAction: "bash cat token.txt" }, context);
-    expect(body).toBe("acme, 4m, 3 tools");
-    expect(body).not.toContain("token.txt");
-    expect(body).not.toContain("secret");
+  test("carries counts and outcome flags, and never the command", () => {
+    const body = settledPushBody(
+      { ...facts, lastAction: "bash cat token.txt", lastToolError: "bash", truncated: true },
+      { project: "acme" },
+    );
+    expect(body).toBe("acme, 3 tools, FAILED bash, truncated");
   });
 });
 

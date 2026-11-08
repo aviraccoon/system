@@ -24,6 +24,20 @@ truncated) and which kind of dialog is waiting: `confirm`, `select`, `input`,
 `editor`, or `dialog` for `custom()`. It never carries command text, model output
 or a dialog title: titles are authored by other extensions and can quote a diff.
 
+## Work still running
+
+A run can end while another extension still has background work going: a promoted
+job today, any other background unit that writes a marker. Such a run is not over,
+and its owner says so through `shared/pending-work.ts`, a directory of markers
+keyed by session. This extension reads it when a run settles, so the frame and the
+push say `1 job running` instead of reporting a finished run.
+
+The facts of such a run carry into the next notification, so the one that lands
+after the work reports the whole span rather than the segment the work's
+completion started, and it still passes the minimum run length for a push. A
+producer writes a marker when its work starts and clears it when the work ends;
+nothing else couples the two extensions.
+
 ## When a push fires
 
 `away` is measured from macOS keyboard and pointer idle time. Unknown idle counts
@@ -74,8 +88,8 @@ Cues play on macOS only: the player is `afplay`. Elsewhere they stay off.
 
 ## Configuration
 
-The cue cache under `~/Library/Caches/llm/notify/` and the optional topic file
-are the only files it touches.
+The cue cache under `~/Library/Caches/llm/notify/`, the optional topic file and the
+work markers directory are the only files it touches.
 
 - `PI_NOTIFY_OFF=1` turns every channel off.
 - `PI_NOTIFY_NTFY_URL` is an ntfy topic or a full URL; a bare topic means ntfy.sh.
@@ -91,6 +105,8 @@ are the only files it touches.
   play.
 - `PI_NOTIFY_SOUNDS_IDLE_SECONDS` is the idle time that counts as away for a cue.
   Default 20; `0` plays a cue whenever a run settles or a dialog opens.
+- `PI_PENDING_WORK_DIR` is where the work markers live, shared with the
+  extensions that write them. Default `$TMPDIR/pi-pending-work`.
 
 The topic is a secret: export `PI_NOTIFY_NTFY_URL` from the environment that
 starts pi, or keep it in the file. No URL configured means no push, silently. A

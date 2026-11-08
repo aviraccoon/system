@@ -20,6 +20,7 @@ import { join } from "node:path";
 import type { TranscriptContext } from "@earendil-works/pi-ai";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { listPending } from "../shared/pending-work";
 import { createHarness, type Harness, type ScriptedResponse } from "../shared/testing/session-harness";
 import jobsExtension from "./index";
 
@@ -48,7 +49,13 @@ const COMPLETION = "[job j-";
 const carriesCompletion = (context: TranscriptContext | undefined): boolean =>
   (context?.messages ?? []).some((message) => JSON.stringify(message).includes(COMPLETION));
 
-const JOB_ENV_KEYS = ["PI_JOBS_DIR", "PI_JOBS_FOREGROUND_SECONDS", "PI_BASH_SANDBOX", "PI_SUBAGENT"] as const;
+const JOB_ENV_KEYS = [
+  "PI_JOBS_DIR",
+  "PI_JOBS_FOREGROUND_SECONDS",
+  "PI_PENDING_WORK_DIR",
+  "PI_BASH_SANDBOX",
+  "PI_SUBAGENT",
+] as const;
 
 /**
  * Point the extension at a temp job directory for the duration of one test. The sandbox markers must
@@ -59,6 +66,7 @@ function isolateJobsEnv(jobsDir: string): () => void {
   const saved = new Map(JOB_ENV_KEYS.map((key) => [key, process.env[key]]));
   process.env.PI_JOBS_DIR = jobsDir;
   process.env.PI_JOBS_FOREGROUND_SECONDS = FOREGROUND_SECONDS;
+  process.env.PI_PENDING_WORK_DIR = join(jobsDir, "pending");
   delete process.env.PI_BASH_SANDBOX;
   delete process.env.PI_SUBAGENT;
   return () => {
@@ -169,6 +177,9 @@ test(
       await live.run("start the job");
       const settledCalls = live.modelCalls();
       expect(settledCalls).toBe(2);
+      // A promoted job is work in flight, which is what a notification reads to say the run is not over.
+      const session = live.session.sessionManager.getSessionId();
+      expect(listPending(session).map((item) => item.kind)).toEqual(["job"]);
       await until(
         () => `the model was called ${live.modelCalls()} time(s), not ${settledCalls + 1}`,
         () => live.modelCalls() > settledCalls,
@@ -188,6 +199,8 @@ test(
         () => `the session settled ${live.eventsOfType("agent_settled").length} time(s), not 2`,
         () => live.eventsOfType("agent_settled").length >= 2,
       );
+      // The job's exit released the marker, so the next notification reports a finished run.
+      expect(listPending(session)).toEqual([]);
     } finally {
       harness?.cleanup();
       rmSync(dir, { recursive: true, force: true });

@@ -15,7 +15,8 @@
  * cue plays locally when the user is away, at a lower idle threshold and with no
  * minimum run, and carries the project and which event fired rather than the
  * run's facts. See `idle.ts` for that rule, `format.ts` for what the frame and the
- * push carry, and `sound.ts` for the cue.
+ * push carry, `sound.ts` for the cue, and `../shared/pending-work.ts` for the work
+ * another extension still has running when a run settles.
  *
  * The interactive UI only: an rpc client renders those dialogs itself, and a
  * terminal frame written into its stdout would corrupt the JSON-RPC stream.
@@ -26,6 +27,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { listPending } from "../shared/pending-work";
 import {
   type AnswerFacts,
   blockedNote,
@@ -34,7 +36,6 @@ import {
   lastAnswer,
   type Note,
   type RunFacts,
-  type SettledContext,
   settledNote,
   settledPushBody,
 } from "./format";
@@ -169,13 +170,13 @@ export default function notify(pi: ExtensionAPI) {
   async function pushSettledNote(
     ctx: ExtensionContext,
     url: string,
-    facts: RunFacts,
-    context: SettledContext,
+    content: Note,
+    runMs: number,
     idle: () => Promise<number | null>,
   ): Promise<void> {
-    if (context.now - facts.startedAt < policy.minRunMs) return;
-    if (!pushSettled(context.now - facts.startedAt, await idle(), policy)) return;
-    await sendPush(ctx, url, "pi done", settledPushBody(facts, context), "default");
+    if (runMs < policy.minRunMs) return;
+    if (!pushSettled(runMs, await idle(), policy)) return;
+    await sendPush(ctx, url, content.title, content.body, "default");
   }
 
   async function pushBlockedNote(
@@ -194,13 +195,18 @@ export default function notify(pi: ExtensionAPI) {
     run = null;
     // A run the user ended with Escape is a decision, not news.
     if (off(process.env) || ctx.mode !== "tui" || !facts || event.aborted) return;
+    // Work still in flight means the run is not over: its facts carry into the notification that
+    // follows the work, so that one reports the whole span instead of the segment a wake started.
+    const pending = listPending(ctx.sessionManager.getSessionId());
+    if (pending.length > 0) run = facts;
     const context = {
       project: basename(ctx.cwd),
       session: pi.getSessionName(),
       now: Date.now(),
       snippet: facts.snippet,
     };
-    writeFrame(settledNote(facts, context));
+    const note = settledNote(facts, context, pending);
+    writeFrame(note);
     const url = pushUrl(process.env);
     if (!url && !cues) return;
     // One probe per event, shared by both gates. The push helper calls it after
@@ -208,7 +214,11 @@ export default function notify(pi: ExtensionAPI) {
     // decides whether the cue plays at all.
     const idle = idleProbe();
     if (cues) playWhenAway(context.project, "done", idle);
-    if (url) void pushSettledNote(ctx, url, facts, context, idle);
+    if (url) {
+      // The push reuses the frame's title, so the phone says "1 job running" where the user looks first.
+      const body = settledPushBody(facts, context);
+      void pushSettledNote(ctx, url, { title: note.title, body }, context.now - facts.startedAt, idle);
+    }
   });
 
   pi.on("ui_prompt_start", (event, ctx) => {

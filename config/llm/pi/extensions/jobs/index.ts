@@ -27,6 +27,7 @@ import * as fs from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth } from "@earendil-works/pi-tui";
 import { copyText, openFolder } from "../shared/host-actions";
+import { markPending } from "../shared/pending-work";
 import { isConfinedBash } from "../shared/sandbox";
 import { ScrollableText } from "../shared/scrollable-text";
 import { shortcutLabel } from "../shared/shortcuts";
@@ -97,6 +98,8 @@ interface Tracked {
   dir: string;
   /** Set when this process killed the job, so the wake is labelled from that, not from a racing file. */
   killKind?: KillKind;
+  /** Clears the "work in flight" marker this job announced when it was promoted. */
+  releasePending?: () => void;
 }
 
 /** A completion message, kept until the session shows it. */
@@ -165,6 +168,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
     // visible, then decide whether the model is owed a wake.
     setTimeout(() => {
       tracked.delete(job.id);
+      job.releasePending?.();
       let record = readJob(dir(), job.id);
       // A kill this process asked for is known here even when the killer's own status write is still
       // in flight, which is how a budget timeout used to wake as `exit unknown`. Only when the wrapper
@@ -277,6 +281,11 @@ export default function jobsExtension(pi: ExtensionAPI): void {
       promoted: (id) => {
         const job = tracked.get(id);
         if (job) job.promoted = true;
+        // A promoted job is work in flight: the notification that lands when the agent settles says
+        // so, instead of reporting the run as finished. The session comes from the job's own record,
+        // which is the same id the reader uses.
+        const session = job ? readJob(dir(), id)?.status.session : undefined;
+        if (job && session) job.releasePending = markPending(session, { kind: "job", id });
       },
       killed: (id, kind) => {
         const job = tracked.get(id);

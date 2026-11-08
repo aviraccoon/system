@@ -69,6 +69,9 @@ nothing selected it opens the directory holding all of them.
 - A job records the session that started it, and another session's job is marked `@other`. `/jobs kill all` and
   `Ctrl+X` only touch this session's jobs, so a second pi window in the same project cannot lose a build to your
   cleanup.
+- A promoted job announces itself as work in flight through `shared/pending-work.ts`, and clears that when it
+  exits, so the notification that lands when the agent stops says `1 job running` instead of reporting a finished
+  run. The read side is `notify`; nothing couples the two extensions beyond that directory.
 - `/jobs` shows the last 2000 lines of a log, with a line saying how many it skipped. `Ctrl+Y` copies up to the
   last 1 MB and says so when it cut.
 - Commands run without a pty, so there is no pager and no password prompt.

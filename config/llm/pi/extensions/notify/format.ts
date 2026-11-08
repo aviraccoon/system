@@ -5,10 +5,10 @@
  *   of the answer.
  * - The push leaves the machine (ntfy.sh by default: anyone holding the topic
  *   can read it), so it carries the project, counts, durations, two outcome
- *   flags and the blocked dialog's kind: the last tool failed, the answer was
- *   truncated, a confirm or a picker is waiting. Never a command, never model
- *   output, and never a dialog title: titles are authored by other extensions and
- *   can quote a diff.
+ *   flags, how much background work is still running by kind and the blocked
+ *   dialog's kind: the last tool failed, the answer was truncated, a confirm or a
+ *   picker is waiting. Never a command, never model output, and never a dialog
+ *   title: titles are authored by other extensions and can quote a diff.
  */
 
 import { basename } from "node:path";
@@ -17,6 +17,27 @@ import { collectToolPaths } from "../shared/edit-tools";
 export interface Note {
   title: string;
   body: string;
+}
+
+/** The part of an announced unit of work a notification reads: not what it is doing. */
+export interface PendingKind {
+  kind: string;
+}
+
+/**
+ * "1 job", "2 subagents": work still running when the agent stopped calling tools.
+ * The kinds are the owners' own words, pluralized here, so a producer that
+ * announces work carries no wording of its own. Sorted, so the same set always
+ * reads the same way.
+ */
+export function pendingLabel(pending: readonly PendingKind[]): string | undefined {
+  if (pending.length === 0) return undefined;
+  const counts = new Map<string, number>();
+  for (const item of pending) counts.set(item.kind, (counts.get(item.kind) ?? 0) + 1);
+  const parts = [...counts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([kind, count]) => `${count} ${kind}${count === 1 ? "" : "s"}`);
+  return `${parts.join(", ")} running`;
 }
 
 export interface RunFacts {
@@ -74,10 +95,12 @@ export function durationLabel(ms: number): string | undefined {
 }
 
 /** Terminal-frame note for a run that finished and will not continue. */
-export function settledNote(facts: RunFacts, context: SettledContext): Note {
+export function settledNote(facts: RunFacts, context: SettledContext, pending: readonly PendingKind[] = []): Note {
   const duration = durationLabel(context.now - facts.startedAt);
-  const title = duration ? `pi done, ${duration}` : "pi done";
+  const waiting = pendingLabel(pending);
+  const title = ["pi done", waiting, duration].filter((part): part is string => part !== undefined).join(", ");
   const parts = [context.project];
+  if (waiting) parts.push(waiting);
   if (facts.toolCalls > 0) parts.push(`${facts.toolCalls} tools`);
   if (facts.lastAction) parts.push(facts.lastAction);
   if (facts.lastToolError) parts.push(`FAILED ${facts.lastToolError}`);
@@ -88,13 +111,12 @@ export function settledNote(facts: RunFacts, context: SettledContext): Note {
 }
 
 /**
- * Push body for a settled run: project, duration, counts and outcome flags. The
- * last command and the answer stay on the machine.
+ * Push body for a settled run: project, counts and outcome flags. The last command
+ * and the answer stay on the machine, and the duration belongs to the title, which
+ * the push shares with the frame.
  */
-export function settledPushBody(facts: RunFacts, context: SettledContext): string {
+export function settledPushBody(facts: RunFacts, context: { project: string }): string {
   const parts = [context.project];
-  const duration = durationLabel(context.now - facts.startedAt);
-  if (duration) parts.push(duration);
   if (facts.toolCalls > 0) parts.push(`${facts.toolCalls} tools`);
   if (facts.lastToolError) parts.push(`FAILED ${facts.lastToolError}`);
   if (facts.truncated) parts.push("truncated");
