@@ -7,10 +7,10 @@ description: Read this file in full before creating, editing, or proposing a cha
 
 Create and edit agent skills. Each skill is a directory with SKILL.md following the Agent Skills specification. Two targets exist:
 
-- **Global** — a shared skills directory owned by the user's dotfiles manager, linked into `~/.pi/agent/skills/`. On this machine it is usually `~/system/config/llm/skills/<name>`; otherwise follow the deployed symlink to its end to find the source.
+- **Global** — a shared skills directory owned by the user's dotfiles manager, linked into `~/.pi/agent/skills/`. On this machine it is usually `~/system/config/llm/skills/<name>`; the deployment paragraph below says how to find the source the link ends at.
 - **Project-local** — `<project>/.agents/skills/<name>/SKILL.md`, the cross-harness standard location. pi loads project skills only after the project is trusted. Always use the `<name>/SKILL.md` directory shape — bare root `.md` files in `.agents/skills/` are ignored. Commit in the project repo per its conventions.
 
-A deployed chain that ends at a repo directory makes a file edit live, with no deployment step; one that ends in a store path is read-only. A new global skill directory appears only after the deployment step (`mise nix-switch`), which the user runs. Removing or renaming one takes effect at once: the stale entry dangles and agents skip it, and a renamed skill reappears only after the step. Commit a global skill's change in its source repo, per that repo's conventions.
+A deployed chain that ends at a repo directory makes a file edit live, with no deployment step; one that ends in a store path is read-only. Resolve the whole chain with `readlink -f ~/.pi/agent/skills/<name>` before deciding which case holds: the home entry may point at a store path that is itself a directory symlink back to the repo, and a single `readlink` stops at the store link. A new global skill directory appears only after the deployment step (`mise nix-switch`), which the user runs. Removing or renaming one takes effect at once: the stale entry dangles and agents skip it, and a renamed skill reappears only after the step. Commit a global skill's change in its source repo, per that repo's conventions.
 
 Ask which target when ambiguous. Heuristic: the skill is about one project's domain or machinery → project-local; it would make sense in any repo → global.
 
