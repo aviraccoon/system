@@ -72,9 +72,15 @@ function detailsOf(result: unknown): Partial<JobResultDetails> {
 }
 
 describe("the bash tool", () => {
-  test("the guideline scopes the edit ban to what a running job reads", () => {
+  test("the guideline names every way to fill a wait", () => {
     const { instance } = tool(path.join(os.tmpdir(), "unused"), 1000);
-    expect(instance.promptGuidelines?.join("\n") ?? "").toContain("does not edit the files a running job is reading");
+    const guideline = instance.promptGuidelines?.join("\n") ?? "";
+    expect(guideline).toContain("does not edit the files a running job is reading");
+    // A model that fills the wait with a sleep holds the turn open for the whole job; the guideline
+    // names ending the turn as the alternative, and the delivery fact that makes it safe.
+    expect(guideline).toContain("never sleep to wait");
+    expect(guideline).toContain("it is fine to end your turn");
+    expect(guideline).toContain("starts a new turn when yours has ended");
   });
 
   test("a command that finishes in the window returns its output and its exit code", async () => {
@@ -310,6 +316,10 @@ describe("the bash tool", () => {
       // path notice is what licenses reading what it withheld.
       expect(text).toContain("to check on it");
       expect(text).toContain("editing them while it runs invalidates its result");
+      // A wait with no work left is the third way, and holding the turn open to burn it is the worst:
+      // the message has to name ending the turn, and the delivery that makes it safe.
+      expect(text).toContain("starts a new turn if you have ended yours");
+      expect(text).toContain("it is fine to end your turn");
       // The log's path, because a model that wants the line above the tail has to be able to open it.
       expect(text).toContain(readJob(dir, promoted[1])?.paths.log ?? "(no record)");
       expect(readJob(dir, promoted[1])?.status.budgetSeconds).toBe(30);

@@ -126,7 +126,9 @@ export function promotionText(
   return [
     `Still running after ${formatElapsed(elapsed)}: backgrounded as job ${id} (${budget}).`,
     "",
-    `Its completion arrives as a message at your next step once it finishes, so keep working. Do NOT poll for it (no sleep, ps, pgrep, tail) or read ${logPath} to check on it: the completion carries the tail, the start of a failure when the log fits, and names this path when it left anything out or the job failed.`,
+    "Its completion arrives as a message at your next step once it finishes, and starts a new turn if you have ended yours. Do other work that does not edit the files it is reading; when nothing else is worth doing, it is fine to end your turn.",
+    "",
+    `Do NOT poll for it: no sleep, ps, pgrep or tail, and no reading ${logPath} to check on it. The completion carries the tail, the start of a failure when the log fits, and names this path when it left anything out or the job failed.`,
     "",
     "A job that reads the tree (tests, linter, build) reports the files as they were when it read them: editing them while it runs invalidates its result.",
     "",
@@ -143,7 +145,7 @@ export function createJobBashTool(options: JobToolOptions) {
       "Run a shell command in the current working directory. Returns stdout and stderr, truncated to the last 2000 lines or 50KB. A command still running after the foreground window becomes a background job: the call returns with a job id, its completion arrives as a message, and its output is readable with /jobs. `timeout` is the command's total budget in seconds, not a wait limit.",
     parameters: bashJobParameters,
     promptGuidelines: [
-      "A bash call that outlives its foreground window is promoted to a background job and its completion arrives as a message at your next step once it finishes. Never poll a job (no sleep, ps, pgrep, tail loops); do other work that does not edit the files a running job is reading.",
+      "A bash call that outlives its foreground window is promoted to a background job and its completion arrives as a message at your next step once it finishes. Never poll a job and never sleep to wait for one: do other work that does not edit the files a running job is reading, and when nothing else is worth doing, it is fine to end your turn. A completion starts a new turn when yours has ended.",
     ],
 
     async execute(

@@ -7,8 +7,9 @@
  *   wrapper writes the exit code to a status file, so a later session can report it.
  * - Completion is pushed, never polled. A model given a job id and a wait tool writes its own poll
  *   loop, which burns turns and ends with it abandoning a healthy build; the wake message is the
- *   whole reason this can be better than killing on timeout. It is steered in at the next turn
- *   boundary, so a job that finishes mid-task is known at the step after it finishes.
+ *   whole reason this can be better than killing on timeout. It is steered in at the next turn boundary, so
+ *   a job that finishes mid-task is known at the step after it finishes, and a completion that lands once the
+ *   agent has stopped calling tools starts a new turn, which is what lets it end its turn instead of waiting.
  * - `/jobs` is the human surface: a bottom panel of this project's running jobs, with the full command
  *   and a live, scrollable log. Both views are laid out from `panelHeight` and the frame that carries
  *   them from `dialogHeight`; a render past the screen loses its bottom, the hint line first.
