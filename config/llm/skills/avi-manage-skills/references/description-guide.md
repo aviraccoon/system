@@ -7,13 +7,13 @@ The description is the only thing an agent sees when deciding whether to load a 
 Give the agent just enough info to know:
 1. What capability this skill provides
 2. When/why to trigger it (specific keywords, contexts)
+3. What it must read before acting, when the skill governs a file the agent edits while working
 
 ## Format
 
 - Max 1024 characters
-- Third person only
-- First sentence: what it does
-- Second sentence: "Use when [specific triggers]"
+- Open with the mandate when the skill governs a file the agent edits while working: "Read this file in full before ...", then a sentence ending "Mandatory first step whenever <X> is the subject". Capability and triggers follow, because selection is not the description's only job; a skill about a file the agent is already touching has to stop it first.
+- Otherwise third person only: first sentence what it does, second sentence "Use when [specific triggers]".
 
 ## Good Examples
 
@@ -61,7 +61,7 @@ Include natural language patterns users might say:
 
 **Too few triggers**: Only mentioning one aspect of the skill's capability. If a skill does three things, mention all three in the description so the agent can trigger on any of them.
 
-**Second person**: "You can use this to..." → always third person: "Extracts text from PDF files."
+**Second person**: "You can use this to..." → always third person: "Extracts text from PDF files." The mandate opening is the one exception, and it is imperative by design.
 
 **Vague verbs**: "Helps with", "deals with", "handles" → be specific: "extracts", "generates", "analyzes", "validates".
 

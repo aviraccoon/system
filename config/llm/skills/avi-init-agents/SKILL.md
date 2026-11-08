@@ -1,6 +1,6 @@
 ---
 name: avi-init-agents
-description: Create or update AGENTS.md (AI instructions) for a directory. Use for new projects, reviewing existing setup, or when AI keeps making the same mistakes.
+description: Read this file in full before creating or editing an AGENTS.md, a personal instructions file (AGENTS.local.md or the project's instructions file in the notes tree), or before proposing a rule to add to one, including a single line. Mandatory first step whenever project or personal instructions are the subject. Covers new projects, reviewing an existing setup, and repeated AI mistakes.
 ---
 
 # Initialize or Update AGENTS.md
@@ -112,24 +112,16 @@ If found (`.cursorrules`, copilot instructions, etc.):
 - No generic advice ("write tests", "use meaningful names")
 - Use the project's actual file names, not hypothetical ones
 
-### Step 6: Create Symlink
+### Step 6: Personal instructions (if applicable)
 
-```bash
-ln -sf AGENTS.md CLAUDE.md
-```
+If the project has private context (references to private files, personal context, development notes not for the public repo), it belongs in a file the project's sessions load: `AGENTS.local.md` reaches every session, and a `meta.json` entry reaches agent children only when it sets `subagents: true`. Unfinished work is not that: it goes in the journal's `TODO.md`.
 
-### Step 7: Suggest .local.md (if applicable)
+- **The project has a journal project** (a directory under the notes tree named for the checkout directory; for a worktree, the main project's name): declare the file in its `meta.json` `instructions` list, using the object form when children need it too: `"instructions": [{"path": "~/notes/llm/<project>/.agents/instructions.md", "subagents": true}]`. The journal directory is matched by name, not by the `path` field, so it has to carry the checkout's name. The file then works in every checkout, including git worktrees, and nothing private is written into the repository.
+- **No journal project**: create `AGENTS.local.md` in the checkout, holding private file references, personal context, and development notes not for the public repo.
 
-If the project has private context (references to private files, personal planning docs, TODOs not in repo), suggest creating `AGENTS.local.md` with:
-- Private file references
-- Personal context
-- Development notes not for public repo
+**Verify gitignore** before creating an `AGENTS.local.md` — run `git check-ignore AGENTS.local.md`. If not ignored, suggest adding to `.gitignore` (local or global). These files are personal and should never be committed.
 
-And symlink: `ln -sf AGENTS.local.md CLAUDE.local.md`
-
-**Verify gitignore** before creating — run `git check-ignore AGENTS.local.md CLAUDE.local.md`. If not ignored, suggest adding to `.gitignore` (local or global). These files are personal and should never be committed.
-
-### Step 8: Suggest Missing Docs
+### Step 7: Suggest Missing Docs
 
 If gaps found during exploration, describe what's missing by purpose:
 - Development workflow documentation (if setup is complex)
@@ -161,7 +153,7 @@ Quick checks:
 2. Are @-mentions still valid and useful?
 3. Is there stale content that no longer applies?
 4. Are there missing sections based on current project state?
-5. Is the symlink setup correct?
+5. Are the personal instruction files current, and covered by an ignore rule or a `meta.json` declaration?
 
 ## Reframing Negatives
 

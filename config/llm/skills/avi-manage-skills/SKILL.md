@@ -1,6 +1,6 @@
 ---
 name: avi-manage-skills
-description: Create or edit agent skills - global skills in the ~/system repo (config/llm/skills) or project-local skills (.agents/skills/). Triggers when user wants to "create a skill", "add a skill", "make a new skill", "edit [name] skill", "update [name]", "change the [name] skill", "write a skill", or needs guidance on skill structure, description writing, progressive disclosure, or skill design. Follows the Agent Skills standard (compatible with Claude Code, Codex, pi).
+description: Read this file in full before creating, editing, or proposing a change to any agent skill, global (~/system/config/llm/skills) or project-local (.agents/skills/), including a one-line edit to a description. Mandatory first step whenever a SKILL.md is the subject. Covers skill structure, description writing, progressive disclosure, scripts, and skill design.
 ---
 
 # Avi Manage Skills
@@ -8,7 +8,7 @@ description: Create or edit agent skills - global skills in the ~/system repo (c
 Create and edit agent skills. Each skill is a directory with SKILL.md following the Agent Skills specification. Two targets exist:
 
 - **Global** — a shared skills directory owned by the user's dotfiles manager, linked into `~/.pi/agent/skills/`. On this machine it is usually `~/system/config/llm/skills/<name>`; otherwise follow the deployed symlink to its end to find the source.
-- **Project-local** — `<project>/.agents/skills/<name>/SKILL.md`, the cross-harness standard location (Claude Code and Codex read it too). pi loads project skills only after the project is trusted. Always use the `<name>/SKILL.md` directory shape — bare root `.md` files in `.agents/skills/` are ignored. Commit in the project repo per its conventions.
+- **Project-local** — `<project>/.agents/skills/<name>/SKILL.md`, the cross-harness standard location. pi loads project skills only after the project is trusted. Always use the `<name>/SKILL.md` directory shape — bare root `.md` files in `.agents/skills/` are ignored. Commit in the project repo per its conventions.
 
 A deployed chain that ends at a repo directory makes a file edit live, with no deployment step; one that ends in a store path is read-only. A new global skill directory appears only after the deployment step (`mise nix-switch`), which the user runs. Removing or renaming one takes effect at once: the stale entry dangles and agents skip it, and a renamed skill reappears only after the step. Commit a global skill's change in its source repo, per that repo's conventions.
 
@@ -63,7 +63,7 @@ allowed-tools:
 ## Body Writing Style
 
 - **Imperative/infinitive form**: "Start by reading...", "Validate input before processing..." — not "You should read..." or "You need to validate..."
-- **Assume Claude is smart**: Don't explain basics. Add context Claude doesn't already have.
+- **Assume the agent is smart**: Don't explain basics. Add context it doesn't already have.
 - **Concise**: Each piece of information must justify its token cost.
 - **Consistent terminology**: Pick one term and use it throughout.
 

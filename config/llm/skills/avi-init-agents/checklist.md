@@ -43,10 +43,10 @@ For each @-mentioned file:
 - [ ] No duplication of parent instructions?
 - [ ] Subdirectory has its own README if complex enough?
 
-## Symlink Check
+## Local Files Check
 
-- [ ] `CLAUDE.md` exists and symlinks to `AGENTS.md`?
-- [ ] If `.local.md` files exist, symlinks are correct?
+- [ ] Private context sits in a file the agent loads on its own: a `meta.json` `instructions` entry, or `AGENTS.local.md`?
+- [ ] An `AGENTS.local.md` is covered by a git ignore rule?
 
 ## Consolidation Check
 
