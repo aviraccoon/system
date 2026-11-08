@@ -60,7 +60,7 @@ function tool(dir: string, foregroundMs: number, ctx: ExtensionContext = session
   });
   const run = (params: { command: string; timeout?: number }) =>
     instance.execute("call", params, undefined, undefined, ctx);
-  return { run, promoted };
+  return { run, promoted, instance };
 }
 
 function outputOf(result: { content: Array<{ type: string; text?: string }> }): string {
@@ -72,6 +72,11 @@ function detailsOf(result: unknown): Partial<JobResultDetails> {
 }
 
 describe("the bash tool", () => {
+  test("the guideline scopes the edit ban to what a running job reads", () => {
+    const { instance } = tool(path.join(os.tmpdir(), "unused"), 1000);
+    expect(instance.promptGuidelines?.join("\n") ?? "").toContain("does not edit the files a running job is reading");
+  });
+
   test("a command that finishes in the window returns its output and its exit code", async () => {
     const dir = tempDir();
     try {
@@ -300,6 +305,11 @@ describe("the bash tool", () => {
       expect(text).toContain(`backgrounded as job ${promoted[1]}`);
       expect(text).toContain("killed when its 30s budget runs out");
       expect(text).toContain("Do NOT poll");
+      // The two ways an agent fills the wait badly: it reads the log to check on the job, or it edits
+      // the tree a test or linter job is reading. The read ban is scoped, because the completion's own
+      // path notice is what licenses reading what it withheld.
+      expect(text).toContain("to check on it");
+      expect(text).toContain("editing them while it runs invalidates its result");
       // The log's path, because a model that wants the line above the tail has to be able to open it.
       expect(text).toContain(readJob(dir, promoted[1])?.paths.log ?? "(no record)");
       expect(readJob(dir, promoted[1])?.status.budgetSeconds).toBe(30);

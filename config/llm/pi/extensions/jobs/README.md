@@ -59,9 +59,10 @@ nothing selected it opens the directory holding all of them.
   and the job keeps running. Escape only reaches a call that is still in flight; a promoted job is killed from
   `/jobs`.
 - Completion is pushed, so polling is wasted work: `sleep`, `ps`, `pgrep` and log tailing all spend turns
-  learning nothing. A completion carries the log's tail and names the log's path whenever lines were left out or the
-  job failed. A failed log that was read whole also brings its start, when the tail leaves lines before it, and a
-  single line over 400 characters is shortened in place, keeping its start.
+  learning nothing. A completion is steered into the running turn: once the job finishes, it reaches the model
+  after the tool calls in flight and before its next step. It carries the log's tail and names the log's path
+  whenever lines were left out or the job failed. A failed log that was read whole also brings its start, when the
+  tail leaves lines before it, and a single line over 400 characters is shortened in place, keeping its start.
 - The footer and `/jobs` cover this directory's jobs. `Ctrl+A` widens `/jobs` to this session or to every
   directory, and work started elsewhere is counted as `+1 elsewhere` rather than named.
 - A job records the session that started it, and another session's job is marked `@other`. `/jobs kill all` and

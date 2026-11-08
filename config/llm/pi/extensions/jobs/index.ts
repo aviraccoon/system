@@ -7,7 +7,8 @@
  *   wrapper writes the exit code to a status file, so a later session can report it.
  * - Completion is pushed, never polled. A model given a job id and a wait tool writes its own poll
  *   loop, which burns turns and ends with it abandoning a healthy build; the wake message is the
- *   whole reason this can be better than killing on timeout.
+ *   whole reason this can be better than killing on timeout. It is steered in at the next turn
+ *   boundary, so a job that finishes mid-task is known at the step after it finishes.
  * - `/jobs` is the human surface: a bottom panel of this project's running jobs, with the full command
  *   and a live, scrollable log. Both views are laid out from `panelHeight` and the frame that carries
  *   them from `dialogHeight`; a render past the screen loses its bottom, the hint line first.
@@ -223,7 +224,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
             ...(wake.killed ? { killed: true } : {}),
           } satisfies Partial<JobResultDetails>,
         },
-        { triggerTurn: true, deliverAs: "followUp" },
+        { triggerTurn: true, deliverAs: "steer" },
       );
     } catch {
       /* the session is closing; the status file is the record either way */
@@ -239,8 +240,8 @@ export default function jobsExtension(pi: ExtensionAPI): void {
   });
 
   // Escape aborts the run and clears the queue the wake is waiting in, without showing it anywhere.
-  // Re-send once at the first settle after an abort, which is also the moment that queue was emptied;
-  // a normal settle never needs it, because the loop only ends after it has drained its follow-ups.
+  // Re-send once at the first settle after an abort, which is also the moment that queue was emptied.
+  // A normal settle needs no retry: pi starts another run for a steer still in the queue.
   pi.on("agent_settled", (event) => {
     if (!event.aborted) return;
     for (const wake of owed.takeForRetry()) sendWake(wake);

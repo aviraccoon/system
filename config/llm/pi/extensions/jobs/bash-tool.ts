@@ -126,7 +126,9 @@ export function promotionText(
   return [
     `Still running after ${formatElapsed(elapsed)}: backgrounded as job ${id} (${budget}).`,
     "",
-    `Output so far is in ${logPath}, and /jobs shows it live. Its completion will arrive as a message. Do NOT poll for it: no sleep, ps, pgrep, tail or repeated calls. Do other work, or end your reply and wait to be woken.`,
+    `Its completion arrives as a message at your next step once it finishes, so keep working. Do NOT poll for it (no sleep, ps, pgrep, tail) or read ${logPath} to check on it: the completion carries the tail, the start of a failure when the log fits, and names this path when it left anything out or the job failed.`,
+    "",
+    "A job that reads the tree (tests, linter, build) reports the files as they were when it read them: editing them while it runs invalidates its result.",
     "",
     `Command: ${commandLabel(command, 100)}`,
   ].join("\n");
@@ -141,7 +143,7 @@ export function createJobBashTool(options: JobToolOptions) {
       "Run a shell command in the current working directory. Returns stdout and stderr, truncated to the last 2000 lines or 50KB. A command still running after the foreground window becomes a background job: the call returns with a job id, its completion arrives as a message, and its output is readable with /jobs. `timeout` is the command's total budget in seconds, not a wait limit.",
     parameters: bashJobParameters,
     promptGuidelines: [
-      "A bash call that outlives its foreground window is promoted to a background job and its completion arrives as a message. Never poll a job (no sleep, ps, pgrep, tail loops); do other work or end the reply.",
+      "A bash call that outlives its foreground window is promoted to a background job and its completion arrives as a message at your next step once it finishes. Never poll a job (no sleep, ps, pgrep, tail loops); do other work that does not edit the files a running job is reading.",
     ],
 
     async execute(
