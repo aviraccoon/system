@@ -25,6 +25,20 @@ let
   vkquake = if isDarwin then pkgs.callPackage ../../packages/vkquake.nix { } else null;
   forepaw = if isDarwin then pkgs.callPackage ../../packages/forepaw.nix { } else null;
 
+  # The `forepaw` command on PATH runs the dev build when one exists, so agents get
+  # the code under development without a switch; the debug profile wins over
+  # release, and only with neither built does it fall back to `forepaw-stable`, the
+  # pinned release.
+  forepaw-wrapper = pkgs.writeShellScriptBin "forepaw" ''
+    for profile in debug release; do
+      dev="${config.home.homeDirectory}/dev/personal/forepaw/target/$profile/forepaw"
+      if [[ -x "$dev" ]]; then
+        exec "$dev" "$@"
+      fi
+    done
+    exec ${forepaw}/bin/forepaw-stable "$@"
+  '';
+
   # GNU tool symlinks (Darwin): expose GNU versions as g-prefixed names alongside
   # BSD defaults at /usr/bin/. On Linux these utilities are already GNU by default.
   # Symlink (not shell wrapper) so there's no fork overhead per invocation.
@@ -284,7 +298,8 @@ in
       # Custom packages not in nixpkgs
       lib.optionals isDarwin [
         ericw-tools # Quake map compiling (qbsp, vis, light)
-        forepaw # Desktop automation CLI for AI agents
+        forepaw # Desktop automation CLI for AI agents; installs forepaw-stable
+        forepaw-wrapper # `forepaw` on PATH: the dev build when present, else forepaw-stable
       ]
     ++ gnuWrappers;
 
@@ -293,10 +308,6 @@ in
     # Example: ".screenrc".source = ./dotfiles/screenrc;
     # QuakeSpasm game data
     ".quakespasm/id1".source = "${librequake}/share/quake/id1";
-    # forepaw dev build -- symlink so agents and shells both find it.
-    # forepaw-stable (Nix package) is the release binary fallback.
-    ".local/bin/forepaw".source =
-      config.lib.file.mkOutOfStoreSymlink "${config.home.homeDirectory}/dev/personal/forepaw/.build/release/forepaw";
 
     # harvest CLI (time tracking; bun-run TS source)
     ".local/bin/harvest".source =
