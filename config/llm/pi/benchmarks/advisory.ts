@@ -2,20 +2,25 @@
  * Advisory benchmark: one typed noul per case, no risk battery.
  *
  * Run: BENCH_SEED=run-a bun run benchmarks/advisory.ts
+ *      BENCH_QUESTION=background BENCH_SEED=background-a bun run benchmarks/advisory.ts
  *      BENCH_QUESTION=patch BENCH_SEED=patch-a bun run benchmarks/advisory.ts
+ *
+ * BENCH_QUESTION names the advice to score (default `advice`, the
+ * output-capture question); its cases come from the builder with the same key
+ * in `ADVISORY_CASES`.
  *
  * The answer at the selected advice's threshold is the decision — its own
  * action when it fires, `allow` when it does not — scored against each case's
  * expectation. BENCH_DUMP writes the raw noul per case for offline threshold
  * sweeps. BENCH_GROUP selects a subset; every case carries its question's group
- * name (`output-capture`, `patch-reminder`).
+ * name (`output-capture`, `background`, `patch-reminder`).
  */
 
 import { writeFileSync } from "node:fs";
 import { adviceByName, adviceFires, adviceQuestions } from "../extensions/shared/advisory";
 import { DEFAULT_DECISIONS_MODEL, type DecisionsAnswer, decisionsComplete } from "../extensions/shared/decisions";
-import { type AdviceOutcome, buildAdvisoryTests, buildPatchReminderTests } from "./advisory-cases";
-import { type Fixture, makeFixture } from "./explain-cases";
+import { ADVISORY_CASES, type AdviceOutcome } from "./advisory-cases";
+import { makeFixture } from "./explain-cases";
 import { fmt, mapWithConcurrency, resolveProviderKey, selectTests, type TestCase } from "./shared";
 
 const MODEL = process.env.DECISIONS_MODEL ?? DEFAULT_DECISIONS_MODEL;
@@ -24,15 +29,13 @@ const MODEL = process.env.DECISIONS_MODEL ?? DEFAULT_DECISIONS_MODEL;
 const PROVIDER = process.env.DECISIONS_PROVIDER ?? "openrouter-sidecar";
 const CONCURRENCY = Number(process.env.BENCH_CONCURRENCY ?? 6);
 
-const PATCH = process.env.BENCH_QUESTION === "patch";
-const selected = adviceByName(PATCH ? "patch" : "advice");
-if (!selected) throw new Error(`no advice named ${PATCH ? "patch" : "advice"}`);
+const ADVICE_NAME = process.env.BENCH_QUESTION ?? "advice";
+const selected = adviceByName(ADVICE_NAME);
+if (!selected) throw new Error(`no advice named ${ADVICE_NAME}`);
+const buildCases = ADVISORY_CASES[ADVICE_NAME];
+if (!buildCases) throw new Error(`no cases for the advice named ${ADVICE_NAME}`);
 const ADVICE = selected;
 const QUESTIONS = adviceQuestions([ADVICE]);
-const CASES: Record<string, (fixture: Fixture) => TestCase<AdviceOutcome>[]> = {
-  advice: buildAdvisoryTests,
-  patch: buildPatchReminderTests,
-};
 
 /** The label a noul earns: the advice's action when it fires, else `allow`. */
 function outcome(noul: number): AdviceOutcome {
@@ -76,7 +79,7 @@ async function runCase(apiKey: string, test: TestCase<AdviceOutcome>): Promise<A
 
 const apiKey = resolveProviderKey(PROVIDER);
 const fixture = makeFixture(process.env.BENCH_SEED);
-const cases: TestCase<AdviceOutcome>[] = CASES[ADVICE.name](fixture);
+const cases: TestCase<AdviceOutcome>[] = buildCases(fixture);
 const tests = selectTests(cases);
 const rows = await mapWithConcurrency(tests, CONCURRENCY, (test) => runCase(apiKey, test));
 

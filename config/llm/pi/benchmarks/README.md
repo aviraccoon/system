@@ -37,13 +37,17 @@ BENCH_SEED=run-a bun run benchmarks/explain.ts
 
 ## Advisory benchmark
 
-`advisory.ts` scores one of the two shell-advice questions from `extensions/shared/advisory.ts`
-over `advisory-cases.ts`. With `BENCH_QUESTION` unset it is the output-capture question
+`advisory.ts` scores one shell-advice question from `extensions/shared/advisory.ts` over
+`advisory-cases.ts`; `BENCH_QUESTION` names which. Unset (or `advice`) is the output-capture question
 (`output-capture` group): the shapes a bash-call advisory should block (long diagnostics filtered or
-silenced instead of captured) or allow (captured-then-read, genuinely small outputs). With
-`BENCH_QUESTION=patch` it is the patch reminder (`patch-reminder` group): shell rewrites that should
-carry a note (an inline script, `tee`, a redirect over the file) or stay quiet (a container or remote
-file, a new file, a bulk transform, scratch). One request per case; the row's noul and the advice's
+silenced instead of captured) or allow (captured-then-read, genuinely small outputs).
+`BENCH_QUESTION=background` is the backgrounding question (`background` group): verification work
+started behind the call (a shell `&`, `nohup`, `setsid`, or that shape inside a `bash -c`, `ssh` or
+`docker exec` payload) or left quiet (a command that waits for what it started, a service,
+text that merely contains `&`). `BENCH_QUESTION=patch` is the patch reminder (`patch-reminder`
+group): shell rewrites that should carry a note (an inline script, `tee`, a redirect over the file) or
+stay quiet (a container or remote file, a new file, a bulk transform, scratch). A new advice adds its
+cases to `ADVISORY_CASES` under its own name. One request per case; the row's noul and the advice's
 threshold decide the outcome — the advice's action when it fires, `allow` when it does not.
 `BENCH_DUMP` writes the raw noul per case, so threshold moves are computed offline over existing
 dumps. `BENCH_SEED`, `BENCH_GROUP`, `BENCH_CONCURRENCY`, `DECISIONS_MODEL` and

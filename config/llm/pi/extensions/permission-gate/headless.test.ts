@@ -173,6 +173,15 @@ describe("a call with no dialog", () => {
     });
   });
 
+  test("the backgrounding advisory blocks an allowed call and names the foreground rewrite", async () => {
+    const advised: ExplanationResult = { ...SAFE, advices: { background: 0.9 } };
+    await headless({ verdict: advised }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(false);
+      expect(resultText(harness)).toContain("background: this call was blocked");
+      expect(resultText(harness)).toContain("foreground");
+    });
+  });
+
   test("the patch reminder rides the result of a call the verdict allowed", async () => {
     const reminded: ExplanationResult = { ...SAFE, advices: { patch: 0.9 } };
     await headless({ verdict: reminded }, ({ harness }) => {

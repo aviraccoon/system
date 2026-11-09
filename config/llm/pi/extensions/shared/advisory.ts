@@ -6,8 +6,12 @@
  * What they measure is workflow waste, not danger. Output-capture is a long
  * diagnostic whose output reaches the reader only through a filter or
  * /dev/null, which forces a full re-run once the filtered view proves
- * insufficient. The patch reminder is a shell rewrite of a real file, which
- * hides the applied change and turns an unmatched edit into a silent no-op.
+ * insufficient. Backgrounding is a long operation started behind the call, so
+ * nothing reports it and the outcome is a log to grep, when the command wrote
+ * one at all; a service the caller drives in later calls, and work the command
+ * waits for, are not that. The patch reminder is a shell rewrite of a real
+ * file, which hides the applied change and turns an unmatched edit into a
+ * silent no-op.
  */
 
 import type { DecisionsAnswer, DecisionsQuestion } from "./decisions";
@@ -51,6 +55,23 @@ export const PATCH_REMINDER_QUESTION: DecisionsQuestion = {
 };
 
 /**
+ * The backgrounding question, and the reason a model answers it instead of a
+ * pattern: `&` as a background operator and `&` inside a commit message, a
+ * regex or a program handed to another shell read the same to a scanner, and
+ * the two cases point opposite ways.
+ */
+export const BACKGROUND_QUESTION: DecisionsQuestion = {
+  type: "noul",
+  instructions:
+    "Does this call start a long operation — a test suite, build, typecheck, lint or project check, codegen, benchmark or scan — and return before that operation finishes, leaving it running so its result can only be found by reading a log later? The start may be a shell background operator (&), nohup, setsid, a detach flag, or the same shape inside a bash -c, ssh or docker exec payload; what decides is that the caller does not wait for the operation.",
+  criteria: {
+    true: "The operation is started and the command moves on or ends without waiting for it: a background operator with no wait, no $! or log poll loop, and no chain that only continues once the operation is done — or a detached start (nohup, setsid, a detach flag), a container or remote shell included.",
+    false:
+      "Something waits for the started work: it runs in the foreground, or the command waits for it to finish (`wait`, a `$!` or log poll loop, a chain that only continues once it is done). Also false when the backgrounded process is a service the caller will drive in later calls (a dev server, docker compose up -d, a started container) rather than an operation whose result is read from a log, when a short start-and-sleep only lets a service come up, and when the & is part of a string, a commit message, a regex or a quoted program the call does not run.",
+  },
+};
+
+/**
  * The patch reminder fires as a note, never a block. The shape that needs it —
  * an inline interpreter writing a file — cannot always be told apart from one
  * with no choice, so a miscalibrated threshold costs a stray reminder instead of
@@ -90,9 +111,31 @@ const OUTPUT_CAPTURE: Advice = {
     "then read or filter that file. Reading a captured file back is cheap; re-running the operation is not.",
 };
 
+/**
+ * Backgrounding blocks, with the foreground rewrite. Threshold from the
+ * advisory bench (`BENCH_QUESTION=background`): re-measure it there when the
+ * question or its cases change. The weakest positive is a detached run with no
+ * operator, which the model reads as a plain foreground command; a wrong block
+ * costs one re-issue, so the threshold sits below that answer rather than at it.
+ */
+const BACKGROUNDING: Advice = {
+  name: "background",
+  question: BACKGROUND_QUESTION,
+  threshold: 0.6,
+  action: "block",
+  text:
+    "background: this call was blocked and did not run. " +
+    "It starts a long operation (tests, build, typecheck, lint, a check task) and returns before that operation finishes, " +
+    "so nothing reports its result and the outcome is a log to grep, when the command wrote one at all. " +
+    "Re-issue it in the foreground, without the background operator or the detach. A call still running after the foreground window " +
+    "becomes a job, its completion arrives as a message, and it starts a new turn if you have ended yours.",
+};
+
 /** The advices asked on a shell call: a classified call is never the confined
- *  shell (the gate returns before classifying it), so both apply. */
-export const SHELL_ADVICES: readonly Advice[] = [OUTPUT_CAPTURE, PATCH_REMINDER];
+ *  shell (the gate returns before classifying it), so all of them apply. Order
+ *  decides which reason wins when two blocking advices fire on one call, so the
+ *  more structural instruction (run it in the foreground) comes first. */
+export const SHELL_ADVICES: readonly Advice[] = [BACKGROUNDING, OUTPUT_CAPTURE, PATCH_REMINDER];
 
 export function adviceByName(name: string): Advice | undefined {
   return SHELL_ADVICES.find((advice) => advice.name === name);
@@ -151,6 +194,15 @@ export function adviceInterception(
     if (adviceFires(advice, scores[advice.name])) return { block: true, reason: advice.text };
   }
   return null;
+}
+
+/**
+ * Whether a tool result is an advisory block: the blocking advice's own text,
+ * from its start. A block whose reason carries facts appended after it still
+ * counts; a note the gate appended to a call that ran does not.
+ */
+export function isAdvisoryBlock(text: string): boolean {
+  return SHELL_ADVICES.some((advice) => advice.action === "block" && text.startsWith(advice.text));
 }
 
 /** The notes for note-action advices that fired, ready to append to a result. */

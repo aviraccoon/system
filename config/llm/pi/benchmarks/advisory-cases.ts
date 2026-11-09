@@ -1,9 +1,10 @@
 /**
- * Advisory benchmark cases for the two shell noul questions: output-capture
- * (block/allow) and the patch reminder (note/allow). Expected values are the
- * decision at each question's threshold — the advice's own action when it
- * fires, `allow` when it does not — not a risk verdict. Shapes follow the
- * recorded session-sweep evidence; all names, paths and domains are synthetic.
+ * Advisory benchmark cases for the shell noul questions: output-capture
+ * (block/allow), backgrounding (block/allow) and the patch reminder
+ * (note/allow). Expected values are the decision at each question's threshold:
+ * the advice's own action when it fires, `allow` when it does not, not a risk
+ * verdict. Shapes follow the recorded session-sweep evidence; all names, paths
+ * and domains are synthetic.
  */
 
 import type { AdviceAction } from "../extensions/shared/advisory";
@@ -15,6 +16,7 @@ export type AdviceOutcome = AdviceAction | "allow";
 
 const ADVISORY_GROUP = "output-capture";
 const PATCH_GROUP = "patch-reminder";
+const BACKGROUND_GROUP = "background";
 
 function group(name: string, cases: TestCase<AdviceOutcome>[]): TestCase<AdviceOutcome>[] {
   return cases.map((testCase) => ({ ...testCase, group: name }));
@@ -82,6 +84,68 @@ export function buildAdvisoryTests(F: Fixture): TestCase<AdviceOutcome>[] {
 }
 
 /**
+ * Backgrounding cases: verification work started behind the call, so its result
+ * reaches the reader only through a log (block), against the shapes that must
+ * stay quiet: a command that waits for what it started, a service, and an `&`
+ * that is text rather than an operator. Expected values are the advice's action
+ * at its threshold, `allow` when it does not fire.
+ */
+export function buildBackgroundTests(F: Fixture): TestCase<AdviceOutcome>[] {
+  const cases: TestCase<AdviceOutcome>[] = [
+    // BLOCK: a suite, build or check started and left running
+    {
+      input: `bash command: (timeout 900 docker exec -w /workspaces/acme acme-dev-1 node node_modules/vitest/vitest.mjs run --project=app > ${F.tmpDir}/full.log 2>&1; echo "EXIT=$?" >> ${F.tmpDir}/full.log) & sleep 1; echo "suite started"`,
+      expected: "block",
+    },
+    { input: `bash command: pnpm test > ${F.tmpDir}/test.log 2>&1 & echo started`, expected: "block" },
+    { input: `bash command: nohup nix build .#acme > ${F.tmpDir}/build.log 2>&1 & echo started`, expected: "block" },
+    { input: `bash command: setsid cargo test > ${F.tmpDir}/test.log 2>&1`, expected: "block" },
+    { input: `bash command: mise run acme-check > ${F.tmpDir}/check.log 2>&1 &`, expected: "block" },
+    {
+      input: `bash command: pnpm build > ${F.tmpDir}/build.log 2>&1 & pnpm typecheck > ${F.tmpDir}/tc.log 2>&1 &`,
+      expected: "block",
+    },
+
+    // BLOCK: the same shape handed to another shell, where a scanner sees only a string
+    {
+      input: `bash command: docker exec -w /workspaces/acme acme-dev-1 bash -c 'pnpm typecheck > ${F.tmpDir}/tc.log 2>&1 &'`,
+      expected: "block",
+    },
+    { input: `bash command: ssh acme-host 'bun test > ${F.tmpDir}/test.log 2>&1 &'`, expected: "block" },
+
+    // ALLOW: the command waits for what it started
+    { input: `bash command: pnpm test > ${F.tmpDir}/test.log 2>&1; tail -20 ${F.tmpDir}/test.log`, expected: "allow" },
+    { input: "bash command: mise run acme-check", expected: "allow" },
+    { input: "bash command: npx playwright test", expected: "allow" },
+    {
+      input: `bash command: for i in $(seq 1 5); do (curl -s http://127.0.0.1:8080/ping > ${F.tmpDir}/p$i.out 2>&1) & done; wait; ls ${F.tmpDir}/p*.out`,
+      expected: "allow",
+    },
+    {
+      input: `bash command: (pnpm test > ${F.tmpDir}/test.log 2>&1) & pid=$!; for i in $(seq 1 60); do kill -0 $pid 2>/dev/null || break; sleep 1; done; tail -5 ${F.tmpDir}/test.log`,
+      expected: "allow",
+    },
+
+    // ALLOW: a service the caller drives in later calls
+    { input: "bash command: docker compose up -d && sleep 5 && curl -s localhost:3000", expected: "allow" },
+    { input: "bash command: docker run -d --name acme-db postgres:16", expected: "allow" },
+    {
+      input: `bash command: pnpm dev > ${F.tmpDir}/dev.log 2>&1 & sleep 5; curl -s localhost:5173 | head -3`,
+      expected: "allow",
+    },
+
+    // ALLOW: the & is text, not an operator
+    {
+      input: `bash command: git commit -m "tests & docs" -m "$(cat <<'EOF'\nJournal & notes: rename the check task\nEOF\n)"`,
+      expected: "allow",
+    },
+    { input: "bash command: rg -n 'a & b' src/", expected: "allow" },
+    { input: `bash command: echo "a & b" >> ${F.tmpDir}/notes.txt`, expected: "allow" },
+  ];
+  return group(BACKGROUND_GROUP, cases);
+}
+
+/**
  * Patch-reminder cases: shell rewrites of a real file the edit tools can reach
  * (note) against the shapes that must stay quiet — a container or remote file,
  * a new file, scratch and generated output. Expected values are the reminder
@@ -130,3 +194,14 @@ export function buildPatchReminderTests(F: Fixture): TestCase<AdviceOutcome>[] {
   ];
   return group(PATCH_GROUP, cases);
 }
+
+/**
+ * Case builders keyed by advice name, so `BENCH_QUESTION=<name>` selects both
+ * the question and its cases: a new advice adds one row here and nothing in the
+ * runner changes.
+ */
+export const ADVISORY_CASES: Record<string, (fixture: Fixture) => TestCase<AdviceOutcome>[]> = {
+  advice: buildAdvisoryTests,
+  background: buildBackgroundTests,
+  patch: buildPatchReminderTests,
+};

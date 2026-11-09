@@ -7,14 +7,17 @@ import {
   adviceNoteText,
   adviceQuestions,
   adviceScores,
+  BACKGROUND_QUESTION,
+  isAdvisoryBlock,
   PATCH_REMINDER_QUESTION,
   SHELL_ADVICES,
   withAdviceScores,
 } from "./advisory";
 
 const capture = adviceByName("advice");
+const background = adviceByName("background");
 const patch = adviceByName("patch");
-if (!capture || !patch) throw new Error("the advisory registry is missing an entry");
+if (!capture || !background || !patch) throw new Error("the advisory registry is missing an entry");
 
 describe("advisory questions", () => {
   test("every advisory is a noul with criteria on both sides", () => {
@@ -38,7 +41,20 @@ describe("advisory questions", () => {
   });
 
   test("questions are keyed by the advisory's own name", () => {
-    expect(adviceQuestions(SHELL_ADVICES)).toEqual({ advice: ADVICE_QUESTION, patch: PATCH_REMINDER_QUESTION });
+    expect(adviceQuestions(SHELL_ADVICES)).toEqual({
+      advice: ADVICE_QUESTION,
+      background: BACKGROUND_QUESTION,
+      patch: PATCH_REMINDER_QUESTION,
+    });
+  });
+
+  test("the background question's false side names the escapes a scanner cannot tell apart", () => {
+    if (BACKGROUND_QUESTION.type !== "noul" || !BACKGROUND_QUESTION.criteria) throw new Error("unexpected shape");
+    const no = BACKGROUND_QUESTION.criteria.false ?? "";
+    // The three shapes that look like backgrounding but are not the harm.
+    for (const escapeCase of ["wait", "dev server", "commit message"]) {
+      expect(no).toContain(escapeCase);
+    }
   });
 });
 
@@ -51,12 +67,39 @@ describe("advisory policy", () => {
     expect(adviceFires(capture, undefined)).toBe(false);
   });
 
-  test("only the blocking advisory intercepts, and only on an auto-allow", () => {
+  test("only the blocking advices intercept, and only on an auto-allow", () => {
     expect(adviceInterception({ advice: 0.95, patch: 0.95 }, "allow")).toMatchObject({ block: true });
-    expect(adviceInterception({ advice: 0.5, patch: 0.95 }, "allow")).toBeNull();
+    expect(adviceInterception({ background: 0.95 }, "allow")).toMatchObject({ block: true });
+    expect(adviceInterception({ advice: 0.5, background: 0.5, patch: 0.95 }, "allow")).toBeNull();
     expect(adviceInterception({ advice: 0.95 }, "confirm")).toBeNull();
     expect(adviceInterception({ advice: 0.95 }, "block")).toBeNull();
     expect(adviceInterception(undefined, "allow")).toBeNull();
+  });
+
+  test("the background block reason names the lost completion and the foreground rewrite", () => {
+    const reason = adviceInterception({ background: 0.95 }, "allow")?.reason ?? "";
+    expect(reason).toContain("background");
+    expect(reason).toContain("did not run");
+    expect(reason).toContain("foreground");
+    expect(reason).toContain("becomes a job");
+  });
+
+  test("the more structural instruction wins when two blocking advices fire", () => {
+    // Order in SHELL_ADVICES decides the reason a filtered-and-backgrounded call gets. That is a
+    // decision, not an accident: the foreground rewrite is what the other advice builds on.
+    const reason = adviceInterception({ background: 0.95, advice: 0.95 }, "allow")?.reason ?? "";
+    expect(reason.startsWith("background:")).toBe(true);
+  });
+
+  test("a block is recognized from the advice's own text, notes and plain errors are not", () => {
+    expect(isAdvisoryBlock(background?.text ?? "")).toBe(true);
+    expect(isAdvisoryBlock(`${capture?.text ?? ""}\n\n[tirith] facts`)).toBe(true);
+    // The block text has to be the result's start: a command that printed the same text is not a
+    // block, and counting it would inflate the report's advisory column.
+    expect(isAdvisoryBlock(`command output\n\n${background?.text ?? ""}`)).toBe(false);
+    expect(isAdvisoryBlock(patch?.text ?? "")).toBe(false);
+    expect(isAdvisoryBlock("Command killed")).toBe(false);
+    expect(isAdvisoryBlock("")).toBe(false);
   });
 
   test("the block reason says the call did not run and names the capture", () => {

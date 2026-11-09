@@ -62,12 +62,18 @@ answers a battery of independent yes/no risk factors and the verdict comes from
 thresholds in code — the factors and policy live in `shared/risk-factors.ts`,
 shared with the benchmarks that measure them. A severity `score` rides the same
 request: a call scored above 2.5 (past serious harm) is dangerous even when no
-dangerous factor fired. Shell calls answer two more questions on the same
-request: output-capture and the patch reminder. The output-capture advisory blocks
-a long diagnostic (tests, build, typecheck gate) whose output is only filtered or
-discarded, with a capture rewrite, when it would have been auto-allowed. The
-patch reminder appends a note to the tool result when the call rewrote an
-existing file through the shell instead of the `patch` tool — an inline
+dangerous factor fired. Shell calls answer three more questions on the same
+request: output-capture, backgrounding and the patch reminder. The output-capture
+advisory blocks a long diagnostic (tests, build, typecheck gate) whose output is
+only filtered or discarded, with a capture rewrite, when it would have been
+auto-allowed. The backgrounding advisory blocks the same verification work
+started behind the call (a shell `&`, `nohup`, `setsid`, a detach flag, or that
+shape inside a `bash -c`, `ssh` or `docker exec` payload), with a foreground
+rewrite: the job system never sees that work, so no completion arrives and the
+outcome is a log to grep, when the command wrote one at all. A command that waits
+for what it started, or that starts a service the caller drives in later calls,
+is not this. The patch reminder appends a note to the tool result when the call
+rewrote an existing file through the shell instead of the `patch` tool — an inline
 interpreter script, `tee`, a redirect over the file — unless the file is out of
 the edit tools' reach (`docker exec`, `ssh`, `kubectl exec`), or the call created
 a new file (a heredoc-written script included), ran a formatter or other bulk

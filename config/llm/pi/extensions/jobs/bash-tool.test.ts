@@ -81,6 +81,20 @@ describe("the bash tool", () => {
     expect(guideline).toContain("never sleep to wait");
     expect(guideline).toContain("it is fine to end your turn");
     expect(guideline).toContain("starts a new turn when yours has ended");
+    // A shell `&` hides the work from the job system, so the guideline names the operator and the
+    // consequence rather than leaving it to the model to infer from "promoted". The parenthetical
+    // is what a model copies from, so each form is asserted on its own.
+    expect(guideline).toContain("no completion arrives");
+    for (const operator of ["`&`", "nohup", "setsid"]) {
+      expect(guideline).toContain(operator);
+    }
+    // The rule is about verification the call walks away from, not about every backgrounded
+    // process: work the command waits for, and a service the agent drives in later calls, stay
+    // allowed, which is the shape the gate's question also exempts.
+    expect(guideline).toContain("poll loop");
+    expect(guideline).toContain("`wait`");
+    expect(guideline).toContain("dev server");
+    expect(guideline).toContain("docker compose up -d");
   });
 
   test("a command that finishes in the window returns its output and its exit code", async () => {

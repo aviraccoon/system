@@ -21,6 +21,7 @@ import { createReadStream, readdirSync, type Stats, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { createInterface } from "node:readline";
+import { isAdvisoryBlock } from "../../config/llm/pi/extensions/shared/advisory";
 import { type CliSpec, scriptCli } from "../../config/shared/cli";
 
 interface Month {
@@ -162,7 +163,7 @@ for (const root of roots) {
           bucket.tools++;
           if (EDIT_FAIL.test(text)) bucket.editFail++;
           if (text.startsWith("BLOCKED by user")) bucket.blocked++;
-          if (text.startsWith("output-capture")) bucket.advisories++;
+          if (isAdvisoryBlock(text)) bucket.advisories++;
           if (message.isError) {
             const signature = signatureOf(text);
             if (signature) toolErrors.set(signature, (toolErrors.get(signature) ?? 0) + 1);
