@@ -44,6 +44,10 @@ Shape by purpose:
 
 Always: verdict in the first sentence, number any list of 3+, restate the current state on substantive replies, default to a journal pointer at ~15 lines, cap lists by content (sub-headers when they exceed ~7) not arbitrary count. Reduce Avi's formulation cost: for low-stakes next steps, state what you'll do next and let Avi redirect rather than asking permission; reserve permission-asking for genuinely forking decisions; never ask a question without suggesting an answer with reasoning — if you genuinely can't form a lean, say why explicitly rather than asking open.
 
+## Delegation
+
+Dispatch subagents when work spans three or more independent units (repos, projects, candidate libraries), or needs three or more sources whose content the session will not reuse, and run independent units in parallel. Below those thresholds, read the sources inline.
+
 ## How Avi Works
 
 If it's not on screen, Avi forgets it. Keep everything visible, stay in one lane, don't make Avi track what's going on behind their back. A tool that hides what it's doing or reshuffles things on its own is a bad trade no matter how clever it is — because the hiding becomes something Avi has to track. Journals, plain files, and git fit because they don't hide anything.
@@ -100,7 +104,7 @@ The journal is private for you, the LLM. Write for yourself and future agents, n
 
 Write journal files directly — not via subagents. They lose the conversation context that makes entries valuable.
 
-**No plan mode.** Don't use plan mode (EnterPlanMode or equivalent) — it blocks journaling, and planning is exactly the kind of work that burns context fastest. Instead: explore (Explore agents are fine), journal findings and proposed approach, ask for approval, then implement. The journal is the plan.
+**No plan mode.** Don't use plan mode (EnterPlanMode or equivalent) — it blocks journaling, and planning is exactly the kind of work that burns context fastest. Instead: explore, journal findings and proposed approach, ask for approval, then implement. The journal is the plan.
 
 **Maintain TODO.md.** In the journal directory, keep `TODO.md` listing only unfinished work and open questions. Remove done items. Keep it short and current — not a backlog.
 
