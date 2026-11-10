@@ -16,6 +16,7 @@ import { execSync } from "node:child_process";
 import { readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
+import { EGRESS_FACTOR, firedFactors } from "../shared/risk-factors";
 import { DEFAULT_DIALOG_TIMEOUT_SECONDS } from "./dialog-timeout";
 
 // ── Types ──
@@ -56,12 +57,16 @@ export interface GateState {
 }
 
 /** Classifier verdict plus the explanation lines, as cached and shown.
- *  `advices` carries the advice nouls asked alongside the battery. */
+ *  `advices` carries the advice nouls asked alongside the battery; `factors` the
+ *  battery's own probabilities. The scoped band reads egress from them: no path
+ *  scope can tell whether content leaves the machine, and a risky verdict with no
+ *  scores cannot rule it out. */
 export interface ExplanationResult {
   verdict: RiskVerdict;
   short: string;
   detail: string;
   advices?: Record<string, number>;
+  factors?: Record<string, number>;
 }
 
 export interface GateDecision {
@@ -550,18 +555,20 @@ export function shouldAutoAllow(verdict: RiskVerdict, mode: Mode): boolean {
 /**
  * How the gate resolves confirmations for the current run.
  *
- * `supervised` is the normal session: the user is present, so anything the
- * policy does not auto-allow becomes a dialog. `unattended` is an autonomous
- * run: nobody is there to answer, so anything the policy does not auto-allow is
- * denied with a reason the model can act on.
+ * A band says who resolves a confirmation, where `Mode` says which calls reach one
+ * at all. `supervised` hands it to the user, so anything the mode does not
+ * auto-allow becomes a dialog. `unattended` is a run with no UI to show one in:
+ * the classifier's verdict alone decides, so anything it does not allow is denied
+ * with a reason the model can act on. `scoped` is the same no-dialog stance
+ * inside a session that has one, taking the scope table `autoResolve` documents.
  */
-export type RunMode = "supervised" | "unattended";
+export type Band = "supervised" | "unattended" | "scoped";
 
-/** A classifier verdict plus the factor line that produced it, for audit text. */
-export interface ClassifiedCall {
-  verdict: RiskVerdict;
-  short: string;
-}
+/**
+ * The parts of a classification a band resolves on: the verdict, its factor line
+ * for audit text, and the factor scores (see `ExplanationResult.factors`).
+ */
+export type ClassifiedCall = Pick<ExplanationResult, "verdict" | "short" | "factors">;
 
 export type AutoResolution =
   | { action: "allow"; reason: string }
@@ -590,8 +597,60 @@ export function isClassifierFloor(decision: GateDecision): boolean {
 const ALLOW_REASON = "allowed by mode or session rule";
 const BLOCK_REASON = "blocked by the permission gate";
 
-const UNATTENDED_STOP =
+const DENIAL_STOP =
   "Do not retry this call or work around it. Continue with a materially safer approach, or stop and report what is blocked.";
+
+/**
+ * The resolution a confirmation gets when no dialog can be shown: the classifier's
+ * verdict alone, except that the `scoped` band also weighs the caller's scope fact.
+ */
+function noDialog(
+  decision: GateDecision,
+  classified: ClassifiedCall | null,
+  band: Exclude<Band, "supervised">,
+  confined: boolean,
+): AutoResolution {
+  if (isClassifierFloor(decision)) {
+    return {
+      action: "block",
+      reason: `permission-gate denied this call: it targets a credential or secret path (${decision.displayPath ?? "unknown"}), which is never resolved by the classifier. ${DENIAL_STOP}`,
+    };
+  }
+  if (!classified) {
+    return {
+      action: "block",
+      reason: `permission-gate denied this call: no risk classification was available (classifier disabled, timed out, or returned an incomplete answer). ${DENIAL_STOP}`,
+    };
+  }
+  if (classified.verdict === "dangerous") {
+    return {
+      action: "block",
+      reason: `permission-gate denied this call: the risk classifier judged it dangerous (${classified.short}). This is a policy decision, not a tool failure. ${DENIAL_STOP}`,
+    };
+  }
+  if (classified.verdict === "safe") return { action: "allow", reason: classified.verdict };
+  // RISKY from here on.
+  if (band === "unattended") return { action: "allow", reason: classified.verdict };
+  if (classified.factors === undefined) {
+    return {
+      action: "block",
+      reason: `permission-gate denied this call: its verdict is risky and the factor scores are missing, so the gate cannot tell whether content leaves the machine. ${DENIAL_STOP}`,
+    };
+  }
+  if (firedFactors(classified.factors).includes(EGRESS_FACTOR)) {
+    return {
+      action: "block",
+      reason: `permission-gate denied this call: it sends content off the machine (${classified.short}), and no run scope bounds that. ${DENIAL_STOP}`,
+    };
+  }
+  // The deterministic decision already read a target outside the project; a
+  // caller's scope fact cannot pull it back in.
+  if (confined && decision.confirmType !== "outside-project") return { action: "allow", reason: classified.verdict };
+  return {
+    action: "block",
+    reason: `permission-gate denied this call: its risk is not confined to the run's scope (${classified.short}). ${DENIAL_STOP}`,
+  };
+}
 
 /**
  * Resolve a gated call without asking the user.
@@ -601,56 +660,45 @@ const UNATTENDED_STOP =
  *      session rule, allow-all mode) needs no verdict; a `block` is final.
  *   2. A floor confirmation is never resolved by the classifier.
  *   3. Otherwise the classifier resolves the confirmation, within the band the
- *      run mode leaves open. It never widens a floor, and it never turns a
+ *      run leaves open. It never widens a floor, and it never turns a
  *      confirmation into a block while a human is present.
  *
  * `supervised` keeps the historical bands (careful: SAFE only; trust-project:
  * SAFE + RISKY). `unattended` allows SAFE and RISKY, denies DANGEROUS, and
  * denies when no verdict is available at all — fail closed, because a run with
  * nobody watching cannot convert "unknown" into "ask".
+ *
+ * `scoped` is the scope table, and `confined` is the caller's scope fact: true
+ * only when everything the call can affect stays inside the run's scope.
+ *   - SAFE allows: a read has no scope to leave.
+ *   - DANGEROUS denies, and so does a floor or a missing verdict, as unattended.
+ *   - RISKY allows inside the scope and denies outside it.
+ *   - A call whose factors include `sends_data_off_machine` denies either way:
+ *     a write scope bounds files, not what leaves the machine. A risky verdict
+ *     with no factor scores denies too, because that cannot be ruled out
+ *     without them.
+ * A caller that cannot prove confinement passes `false` (the default), which
+ * denies.
  */
 export function autoResolve(
   decision: GateDecision,
   classified: ClassifiedCall | null,
   mode: Mode,
-  runMode: RunMode,
+  band: Band,
+  confined = false,
 ): AutoResolution {
   if (decision.action === "allow") return { action: "allow", reason: ALLOW_REASON };
   if (decision.action === "block") {
     return { action: "block", reason: decision.reason ?? BLOCK_REASON };
   }
 
+  if (band !== "supervised") return noDialog(decision, classified, band, confined);
+
   if (isClassifierFloor(decision)) {
-    if (runMode === "unattended") {
-      return {
-        action: "block",
-        reason: `permission-gate denied this call: it targets a credential or secret path (${decision.displayPath ?? "unknown"}), which is never resolved by the classifier. ${UNATTENDED_STOP}`,
-      };
-    }
     return { action: "confirm", reason: `sensitive path: ${decision.displayPath ?? "unknown"}` };
   }
-
-  if (!classified) {
-    if (runMode === "unattended") {
-      return {
-        action: "block",
-        reason: `permission-gate denied this call: no risk classification was available (classifier disabled, timed out, or returned an incomplete answer). ${UNATTENDED_STOP}`,
-      };
-    }
-    return { action: "confirm", reason: "no classification available" };
-  }
-
-  if (classified.verdict === "dangerous") {
-    if (runMode === "unattended") {
-      return {
-        action: "block",
-        reason: `permission-gate denied this call: the risk classifier judged it dangerous (${classified.short}). This is a policy decision, not a tool failure. ${UNATTENDED_STOP}`,
-      };
-    }
-    return { action: "confirm", reason: classified.verdict };
-  }
-
-  if (runMode === "unattended") return { action: "allow", reason: classified.verdict };
+  if (!classified) return { action: "confirm", reason: "no classification available" };
+  if (classified.verdict === "dangerous") return { action: "confirm", reason: classified.verdict };
   return shouldAutoAllow(classified.verdict, mode)
     ? { action: "allow", reason: classified.verdict }
     : { action: "confirm", reason: classified.verdict };

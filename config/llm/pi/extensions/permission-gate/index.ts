@@ -69,6 +69,7 @@ import {
 import { collectFacts, hasContainerFacts } from "./facts";
 import {
   autoResolve,
+  type Band,
   createInitialState,
   decide,
   findGitRoot,
@@ -279,11 +280,21 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
    * against real dialogs later. The user's own choice is not stored here: it is
    * already in the session as the tool result that follows (a block says so).
    */
-  function recordClassification(toolName: string, toolCallId: string, result: ExplanationResult | null): void {
+  function recordClassification(
+    toolName: string,
+    toolCallId: string,
+    result: ExplanationResult | null,
+    band: Band,
+  ): void {
     if (!result) return;
     const note = adviceNoteText(result);
     if (note) addResultNote(toolCallId, note);
-    pi.appendEntry("permission_gate", classificationEntry(toolName, toolCallId, result));
+    pi.appendEntry("permission_gate", classificationEntry(toolName, toolCallId, result, state.mode, band));
+  }
+
+  /** The band a call is resolved under: a bound UI means a dialog can be asked. */
+  function bandFor(ctx: ExtensionContext): Band {
+    return ctx.hasUI ? "supervised" : "unattended";
   }
 
   /** Ask the explain role for the human sentence. Null on failure or timeout. */
@@ -833,7 +844,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
   ): Promise<{ block: true; reason: string } | undefined> {
     pi.appendEntry("permission_gate", { event: "pending_confirmation", toolCallId: event.toolCallId });
     explanation?.promise
-      .then((result) => recordClassification(event.toolName, event.toolCallId, result))
+      .then((result) => recordClassification(event.toolName, event.toolCallId, result, bandFor(ctx)))
       .catch(() => {});
     // The notes are computed from this promise; a fast answer can run the tool
     // before it settles, so hand it to the tool_result consumer instead of
@@ -1106,17 +1117,17 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
       if (classified) {
         const advised = adviceInterception(classified.advices, resolution.action);
         if (advised) {
-          recordClassification(event.toolName, event.toolCallId, classified);
+          recordClassification(event.toolName, event.toolCallId, classified, bandFor(ctx));
           return { block: true, reason: withTirithFacts(advised.reason) };
         }
       }
 
       if (resolution.action === "allow") {
-        recordClassification(event.toolName, event.toolCallId, classified);
+        recordClassification(event.toolName, event.toolCallId, classified, bandFor(ctx));
         if (tirithFacts) addResultNote(event.toolCallId, tirithFacts);
         return undefined;
       }
-      if (classified) recordClassification(event.toolName, event.toolCallId, classified);
+      if (classified) recordClassification(event.toolName, event.toolCallId, classified, bandFor(ctx));
       return { block: true, reason: withTirithFacts(resolution.reason) };
     }
 
@@ -1143,9 +1154,14 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
       );
       const cached = state.classifyCache.get(key);
       const resolve = (result: ExplanationResult) =>
-        autoResolve(decision, { verdict: result.verdict, short: result.short }, state.mode, "supervised");
+        autoResolve(
+          decision,
+          { verdict: result.verdict, short: result.short, factors: result.factors },
+          state.mode,
+          bandFor(ctx),
+        );
       const autoAllow = (result: ExplanationResult, tag: string) => {
-        recordClassification(event.toolName, event.toolCallId, result);
+        recordClassification(event.toolName, event.toolCallId, result, bandFor(ctx));
         state.autoAllowLog.push({
           toolName: event.toolName,
           description,
@@ -1162,7 +1178,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         const resolution = resolve(cached);
         const advised = adviceInterception(cached.advices, resolution.action);
         if (advised) {
-          recordClassification(event.toolName, event.toolCallId, cached);
+          recordClassification(event.toolName, event.toolCallId, cached, bandFor(ctx));
           return { block: true, reason: advised.reason };
         }
         if (resolution.action === "allow") {
@@ -1190,7 +1206,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         const resolution = resolve(explResult);
         const advised = adviceInterception(explResult.advices, resolution.action);
         if (advised) {
-          recordClassification(event.toolName, event.toolCallId, explResult);
+          recordClassification(event.toolName, event.toolCallId, explResult, bandFor(ctx));
           return { block: true, reason: advised.reason };
         }
         if (resolution.action === "allow") {

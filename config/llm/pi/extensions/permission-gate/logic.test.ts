@@ -6,6 +6,7 @@ import {
   autoResolve,
   BREAKER_CONSECUTIVE_DENIALS,
   BREAKER_TOTAL_DENIALS,
+  type ClassifiedCall,
   cacheKey,
   collectTargetPaths,
   createDenialTracker,
@@ -1138,6 +1139,79 @@ describe("autoResolve", () => {
       "supervised",
     );
     expect(r.action).toBe("allow");
+  });
+});
+
+describe("autoResolve: the scoped band", () => {
+  const risky = (factors?: Record<string, number>) => ({
+    verdict: "risky" as const,
+    short: "jev: mutates_state 0.90",
+    factors,
+  });
+  const safe = { verdict: "safe" as const, short: "jev: nothing fired", factors: {} };
+  const resolve = (decision: GateDecision, classified: ClassifiedCall | null, confined = false) =>
+    autoResolve(decision, classified, "careful", "scoped", confined);
+
+  test("safe allows without a scope proof", () => {
+    expect(resolve(confirm("bash"), safe).action).toBe("allow");
+  });
+
+  test("dangerous denies even inside the scope", () => {
+    const r = resolve(confirm("bash"), { verdict: "dangerous", short: "history_rewrite 0.90", factors: {} }, true);
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("history_rewrite 0.90");
+  });
+
+  test("risky allows inside the scope and denies outside it", () => {
+    expect(resolve(confirm("write"), risky({ mutates_state: 0.9 }), true).action).toBe("allow");
+    const outside = resolve(confirm("write"), risky({ mutates_state: 0.9 }));
+    expect(outside.action).toBe("block");
+    expect(outside.reason).toContain("not confined to the run's scope");
+  });
+
+  test("egress denies inside the scope too, since no scope bounds it", () => {
+    const r = resolve(confirm("write"), risky({ sends_data_off_machine: 0.91 }), true);
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("sends content off the machine");
+  });
+
+  test("egress below the battery's threshold does not deny", () => {
+    const r = resolve(confirm("write"), risky({ sends_data_off_machine: 0.4, mutates_state: 0.9 }), true);
+    expect(r.action).toBe("allow");
+  });
+
+  test("egress denies beside another risky factor, since no scope bounds it either", () => {
+    const r = resolve(confirm("bash"), risky({ sends_data_off_machine: 0.91, mutates_state: 0.8 }), true);
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("sends content off the machine");
+  });
+
+  test("a risky verdict with no factor scores denies, since egress cannot be ruled out", () => {
+    const r = resolve(confirm("write"), risky(), true);
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("factor scores are missing");
+  });
+
+  test("an outside-project confirmation stays outside whatever the caller proves", () => {
+    const r = resolve(confirm("outside-project"), risky({ mutates_state: 0.9 }), true);
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("not confined to the run's scope");
+  });
+
+  test("a sensitive path and a missing verdict deny as they do unattended", () => {
+    expect(resolve(confirm("sensitive"), safe, true).reason).toContain("credential");
+    expect(resolve(confirm("bash"), null).reason).toContain("no risk classification");
+  });
+
+  test("a deterministic allow needs no scope and a deterministic block is final", () => {
+    expect(resolve({ action: "allow" }, null).action).toBe("allow");
+    expect(resolve({ action: "block", reason: "tirith" }, null).reason).toBe("tirith");
+  });
+
+  test("the same risky call that unattended allows needs a scope here", () => {
+    const call = risky({ mutates_state: 0.9 });
+    expect(autoResolve(confirm("write"), call, "careful", "unattended").action).toBe("allow");
+    expect(resolve(confirm("write"), call).action).toBe("block");
   });
 });
 

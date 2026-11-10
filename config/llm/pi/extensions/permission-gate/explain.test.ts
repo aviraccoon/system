@@ -23,12 +23,18 @@ import {
 
 describe("factorsToExplanation", () => {
   test("puts the fired factors and their scores on the short line", () => {
-    const decision = verdictFromFactors({ mutates_state: 0.9, touches_credentials: 0.6, runs_remote_code: 0.1 });
+    const decision = verdictFromFactors({
+      mutates_state: 0.9,
+      touches_credentials: 0.6,
+      runs_remote_code: 0.1,
+      obfuscated_execution: 0.4,
+    });
     const explanation = factorsToExplanation(decision);
     expect(explanation.verdict).toBe("risky");
     expect(explanation.short).toBe("jev: mutates_state 0.90, touches_credentials 0.60");
     expect(explanation.detail).toContain("thresholds: risky >= 0.50, dangerous >= 0.70");
     expect(explanation.detail).toContain("* mutates_state 0.90");
+    expect(explanation.detail).toContain("  obfuscated_execution 0.40");
     expect(explanation.detail).not.toContain("runs_remote_code 0.10");
   });
 
@@ -41,6 +47,11 @@ describe("factorsToExplanation", () => {
 
   test("carries the backend label", () => {
     expect(factorsToExplanation(verdictFromFactors({}), "chat").short).toBe("chat: nothing fired");
+  });
+
+  test("carries the battery's probabilities for the bands that read them", () => {
+    const explanation = factorsToExplanation(verdictFromFactors({ sends_data_off_machine: 0.91, mutates_state: 0.6 }));
+    expect(explanation.factors).toEqual({ sends_data_off_machine: 0.91, mutates_state: 0.6 });
   });
 
   test("a severity-driven verdict names the score", () => {
@@ -63,6 +74,14 @@ describe("mergeExplanations", () => {
     expect(merged.detail).toContain("The command removes the output folder.");
   });
 
+  test("carries the factor scores, so a later cache read still has them", () => {
+    const merged = mergeExplanations(
+      { verdict: "risky", short: "jev", detail: "d", factors: { sends_data_off_machine: 0.88 } },
+      { verdict: "risky", short: "prose", detail: "p" },
+    );
+    expect(merged.factors).toEqual({ sends_data_off_machine: 0.88 });
+  });
+
   test("carries the advisory scores, so a later cache read still has them", () => {
     const merged = mergeExplanations(
       { verdict: "risky", short: "jev", detail: "d", advices: { advice: 0.72, patch: 0.81 } },
@@ -73,12 +92,18 @@ describe("mergeExplanations", () => {
 });
 
 describe("classificationEntry", () => {
-  test("carries the verdict, the scores line and the detail", () => {
-    const entry = classificationEntry("bash", "call_1", {
-      verdict: "risky",
-      short: "jev: mutates_state 0.95",
-      detail: "thresholds: risky >= 0.50",
-    });
+  test("carries the verdict, the scores line, the detail and the policy that decided", () => {
+    const entry = classificationEntry(
+      "bash",
+      "call_1",
+      {
+        verdict: "risky",
+        short: "jev: mutates_state 0.95",
+        detail: "thresholds: risky >= 0.50",
+      },
+      "trust-project",
+      "scoped",
+    );
     expect(entry).toEqual({
       event: "classified",
       toolCallId: "call_1",
@@ -86,6 +111,8 @@ describe("classificationEntry", () => {
       verdict: "risky",
       short: "jev: mutates_state 0.95",
       detail: "thresholds: risky >= 0.50",
+      mode: "trust-project",
+      band: "scoped",
     });
   });
 });

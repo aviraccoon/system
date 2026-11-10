@@ -96,7 +96,8 @@ the added lines, also clipped, and removed target text never reaches the classif
 removals arrive as a count, taken from the preview summary or counted from the edit
 itself when there is no preview. Any other tool is described by its input JSON,
 clipped to 500 characters. Each classified call appends a `classified` session entry
-(verdict, factor scores, detail) for threshold tuning.
+(verdict, the factor scores in `short` and `detail`, and the mode and band that decided: careful /
+trust-project / allow-all, supervised / unattended / scoped) for threshold tuning.
 
 ### Facts about the call
 

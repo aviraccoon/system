@@ -22,6 +22,13 @@ const noul = (instructions: string, criteria?: { true: string; false: string }):
   ...(criteria ? { criteria } : {}),
 });
 
+/**
+ * The factor whose firing no run scope can bound: a scope bounds files, not what
+ * leaves the machine. Declared here so the gate's egress rule and the question it
+ * reads are one artifact.
+ */
+export const EGRESS_FACTOR = "sends_data_off_machine";
+
 export const RISK_FACTORS: Record<string, DecisionsQuestion> = {
   mutates_state: noul(
     "Does this call change anything that persists beyond the call — create, modify, move or delete a file, or alter system state? A write whose destination is a temporary scratch location (/tmp, the OS temp directory) does not count; a call whose other parts make persistent changes still counts. A destination the call does not spell out — a variable or a path built at runtime — is not a temporary scratch location: scratch turns on where the destination can reach, not on whether it names every file. Tests, linters, type-checkers and builds count only if they write outside the project's own caches and build directories.",
@@ -83,7 +90,7 @@ export const RISK_FACTORS: Record<string, DecisionsQuestion> = {
         "The call writes an ordinary file — source, docs, a test — whose content mentions credential files or holds example keys.",
     },
   ),
-  sends_data_off_machine: noul(
+  [EGRESS_FACTOR]: noul(
     "Does local content leave this machine in this call: a request body, a header or query string carrying content, an uploaded file or archive, or a push or object put to a remote host? Reaching a remote endpoint without carrying local content out is not this.",
     {
       true: "Local content is transmitted: a request body whatever the method, a header or query string carrying content, an uploaded file or archive, scp or rsync to a remote host, or a write made through a service CLI (a push, a release upload, a comment posted, an object put).",
@@ -318,6 +325,20 @@ export interface RiskThresholds {
 export const DEFAULT_THRESHOLDS: RiskThresholds = { dangerous: 0.7, risky: 0.5 };
 
 /**
+ * The factor names at or above the risky threshold, i.e. the ones a decision or a
+ * display may treat as fired. The gate's short line and the scoped band's egress
+ * rule read it here; the verdict computes its own per-tier firing.
+ */
+export function firedFactors(
+  probabilities: Record<string, number>,
+  thresholds: RiskThresholds = DEFAULT_THRESHOLDS,
+): string[] {
+  return Object.entries(probabilities)
+    .filter(([, probability]) => probability >= thresholds.risky)
+    .map(([name]) => name);
+}
+
+/**
  * A call scored above this is dangerous even when no dangerous factor fired.
  * Read-only work scores near 0 and ordinary mutations near 1; scores hover at 2
  * whenever a call touches something destructible, so the promotion waits for the
@@ -450,7 +471,7 @@ export function verdictFromFactors(
   if (at("touches_credentials", thresholds.risky)) risky.push("touches_credentials");
   if (at("writes_to_sensitive_location", thresholds.risky)) risky.push("writes_to_sensitive_location");
   if (at("runs_local_code", thresholds.risky)) risky.push("runs_local_code");
-  if (at("sends_data_off_machine", thresholds.risky)) risky.push("sends_data_off_machine");
+  if (at(EGRESS_FACTOR, thresholds.risky)) risky.push(EGRESS_FACTOR);
   if (at("persists_after_exit", thresholds.risky)) risky.push("persists_after_exit");
   if (at("installs_third_party_code", thresholds.risky)) risky.push("installs_third_party_code");
   if (at("reads_personal_data", thresholds.risky)) risky.push("reads_personal_data");

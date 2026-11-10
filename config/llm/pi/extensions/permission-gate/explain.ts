@@ -5,10 +5,10 @@
 
 import { randomBytes } from "node:crypto";
 import { pluralLines, splitLines } from "../shared/diff";
-import { type FactorDecision, SEVERITY_DANGEROUS } from "../shared/risk-factors";
+import { type FactorDecision, firedFactors, SEVERITY_DANGEROUS } from "../shared/risk-factors";
 import type { ExplanationVerdict } from "./confirm-ui";
 import { AWAY_AFTER_TIMEOUTS, formatDuration } from "./dialog-timeout";
-import { cacheKey, type ExplanationResult } from "./logic";
+import { type Band, cacheKey, type ExplanationResult, type Mode } from "./logic";
 
 // ── Tool call description ──
 
@@ -289,7 +289,8 @@ export function notesMessage(notes: string[]): string {
  */
 export function factorsToExplanation(decision: FactorDecision, source = "jev"): ExplanationResult {
   const scored = Object.entries(decision.probabilities).sort((a, b) => b[1] - a[1]);
-  const fired = scored.filter(([, probability]) => probability >= 0.5).slice(0, 3);
+  const firedNames = firedFactors(decision.probabilities);
+  const fired = scored.filter(([name]) => firedNames.includes(name)).slice(0, 3);
   const severityReason = decision.reasons.find((reason) => reason.startsWith("severity "));
   const short =
     fired.length > 0
@@ -299,7 +300,7 @@ export function factorsToExplanation(decision: FactorDecision, source = "jev"): 
       : `${source}: ${severityReason ?? "nothing fired"}`;
   const lines = scored
     .filter(([, probability]) => probability >= 0.3)
-    .map(([name, probability]) => `${probability >= 0.5 ? "*" : " "} ${name} ${probability.toFixed(2)}`);
+    .map(([name, probability]) => `${firedNames.includes(name) ? "*" : " "} ${name} ${probability.toFixed(2)}`);
   const read = decision.severity == null ? "" : ` (read ${decision.severity.toFixed(2)})`;
   return {
     verdict: decision.verdict,
@@ -308,6 +309,7 @@ export function factorsToExplanation(decision: FactorDecision, source = "jev"): 
       `thresholds: risky >= 0.50, dangerous >= 0.70, severity > ${SEVERITY_DANGEROUS.toFixed(1)}${read}`,
       ...lines,
     ].join("\n"),
+    factors: decision.probabilities,
   };
 }
 
@@ -320,6 +322,7 @@ export function mergeExplanations(factors: ExplanationResult, prose: Explanation
     verdict: factors.verdict,
     short: `${prose.short} · ${factors.short}`,
     detail: [factors.detail, prose.detail].filter(Boolean).join("\n\n"),
+    ...(factors.factors === undefined ? {} : { factors: factors.factors }),
     ...(factors.advices === undefined ? {} : { advices: factors.advices }),
   };
 }
@@ -327,9 +330,17 @@ export function mergeExplanations(factors: ExplanationResult, prose: Explanation
 /**
  * Session entry recording what a classifier decided, for later threshold tuning.
  * One entry per classified call; the user's own choice is not duplicated here
- * because the tool result that follows already records it.
+ * because the tool result that follows already records it. `mode` and `band`
+ * name the policy that produced the outcome: comparing verdicts across policies
+ * is the point of the two, and neither is recoverable from the verdict alone.
  */
-export function classificationEntry(toolName: string, toolCallId: string, result: ExplanationResult) {
+export function classificationEntry(
+  toolName: string,
+  toolCallId: string,
+  result: ExplanationResult,
+  mode: Mode,
+  band: Band,
+) {
   return {
     event: "classified" as const,
     toolCallId,
@@ -337,6 +348,8 @@ export function classificationEntry(toolName: string, toolCallId: string, result
     verdict: result.verdict,
     short: result.short,
     detail: result.detail,
+    mode,
+    band,
   };
 }
 

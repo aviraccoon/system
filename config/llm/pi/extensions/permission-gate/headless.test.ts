@@ -1,6 +1,6 @@
 /**
- * The tool_call handler with no UI: a call that would confirm reaches the
- * classifier, and the unattended bands decide it.
+ * The tool_call handler driven through the real extension: with no UI the
+ * unattended band decides a confirmation, with a UI the supervised one does.
  *
  * A real session and a real handler come from the harness. Most cases inject the
  * classifier, because the real one needs a decisions model and a provider key;
@@ -14,7 +14,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Harness, ScriptedResponse } from "../shared/testing/session-harness";
-import type { ExplanationResult } from "./logic";
+import type { ExplanationResult, Mode } from "./logic";
 
 // The suite runs against this machine's `roles.json`; each case sets its own
 // `PI_JEV`, provider keys and `PATH` (see isolateEnvironment) and restores them.
@@ -32,12 +32,16 @@ interface Run {
 interface HeadlessOptions {
   verdict: ExplanationResult | null;
   autoClassify?: "on" | "off";
+  /** The saved gate mode; default `careful`. */
+  mode?: Mode;
   /** A directory to put first on PATH, for a fake `tirith`. */
   pathPrefix?: string;
   /** Tools to allow in the session; default `["bash"]`. */
   tools?: string[];
   /** Register the gate with no classifier seam, so it must find a backend itself. */
   noSeam?: boolean;
+  /** Bind a UI context, so the supervised paths decide instead of the unattended ones. */
+  ui?: boolean;
   responses?: Array<ScriptedResponse | string>;
 }
 
@@ -97,13 +101,16 @@ function isolateEnvironment(dir: string, pathPrefix?: string): () => void {
 async function headless(options: HeadlessOptions, body: (run: Run) => void): Promise<void> {
   const dir = mkdtempSync(join(tmpdir(), "permission-gate-headless-"));
   const settingsPath = join(dir, "permission-gate.json");
-  writeFileSync(settingsPath, JSON.stringify({ mode: "careful", autoClassify: options.autoClassify ?? "on" }));
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({ mode: options.mode ?? "careful", autoClassify: options.autoClassify ?? "on" }),
+  );
   const classifierCalls: string[] = [];
   const restoreEnvironment = isolateEnvironment(dir, options.pathPrefix);
   let harness: Harness | undefined;
   try {
     harness = await createHarness({
-      ui: false,
+      ui: options.ui ? {} : false,
       tools: options.tools ?? ["bash"],
       extensions: [
         (pi) =>
@@ -135,6 +142,15 @@ function resultText(harness: Harness): string {
   return JSON.stringify(first?.result);
 }
 
+/** The `classified` entries the gate appended, in order. */
+function classifiedEntries(harness: Harness): Array<Record<string, unknown>> {
+  return harness.session.sessionManager.getEntries().flatMap((entry) => {
+    const custom = entry as { type?: string; customType?: string; data?: Record<string, unknown> };
+    if (custom.type !== "custom" || custom.customType !== "permission_gate") return [];
+    return custom.data?.event === "classified" ? [custom.data] : [];
+  });
+}
+
 describe("a call with no dialog", () => {
   test("a safe verdict runs the call", async () => {
     await headless({ verdict: SAFE }, ({ harness, classifierCalls }) => {
@@ -150,11 +166,19 @@ describe("a call with no dialog", () => {
       expect(harness.toolResults()[0]?.isError).toBe(true);
       expect(resultText(harness)).toContain("history_rewrite 0.9");
       // A blocked call leaves nothing else: the entry is the record of what the
-      // classifier said about it.
-      const recorded = harness.session.sessionManager
-        .getEntries()
-        .some((entry) => entry.type === "custom" && entry.customType === "permission_gate");
-      expect(recorded).toBe(true);
+      // classifier said about it, including which policy gave the answer.
+      expect(classifiedEntries(harness)).toEqual([
+        expect.objectContaining({ verdict: "dangerous", mode: "careful", band: "unattended" }),
+      ]);
+    });
+  });
+
+  test("with a UI bound, the entry records the supervised band and the session mode", async () => {
+    await headless({ verdict: SAFE, ui: true, mode: "trust-project" }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(true);
+      expect(classifiedEntries(harness)).toEqual([
+        expect.objectContaining({ verdict: "safe", mode: "trust-project", band: "supervised" }),
+      ]);
     });
   });
 
