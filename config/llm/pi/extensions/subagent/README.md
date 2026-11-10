@@ -1,211 +1,128 @@
-# Subagent Extension
+# Subagent
 
-Delegate tasks to specialized agents with isolated context windows. Spawns a separate `pi --mode rpc` process for each invocation, communicating via bidirectional JSONL.
+Runs a task in a separate `pi` process with its own context window, and returns the answer through
+one tool result. The child reads, searches and runs tools on its own, and its permission gate never
+opens a dialog.
 
-## What it does
+## What you need
 
-1. **`subagent` tool** — the LLM can delegate research, code investigation, or other tasks to agents defined across the user, repo, and project-notes roots (see Discovery)
-2. **Three modes** — single (`agent` + `task`), parallel (`tasks` array, up to 8 tasks, 4 concurrent), and chain (`chain` array with `{previous}` placeholder for sequential handoffs). A one-item `tasks` batch runs as single (a blank agent or task keeps it parallel).
-3. **Streaming output** — in single mode, text, thinking, and tool calls appear live in the TUI during execution in exact arrival order. Chain/parallel show completion status only (see Known limitations)
-4. **Agent discovery** — `.md` files with YAML frontmatter define agent name, description, tools, role, extensions, and system prompt
-5. **Model roles** — an agent's `model` or `role` frontmatter resolves to a model (and thinking level); with neither, the `subagent` role from `roles.json` applies (see Model resolution)
-6. **Per-agent extensions** — each subagent loads a fixed pair plus whatever its `extensions` frontmatter declares (see Subagent environment)
-7. **Session storage** — each run writes a JSONL session to `~/.pi/agent/subagent-sessions/`, cleaned up after 7 days
-8. **Turn budget** — `maxTurns` (default 30) is stated in the task; three turns before the cap the child is steered once to write its report; the run is aborted at the cap
-9. **Retries** — a provider failure gets up to 3 attempts across the agent's model chain
-10. **Repo agent gating** — an untrusted project disables both repo dirs (`/trust`, applied after restart); a trusted one confirms once per repository per session when run interactively. Private notes agents are user-owned and ungated
-11. **Journal context** — `journal: "<path>"` prepends a read-the-journal line to every task: a journal dir (TODO.md plus the newest entries) or a specific entry file, any project under the notes tree. `journal: "none"` marks a deliberately blind dispatch; omit it to link the journal path in each task yourself (edit-guard enforces one of the three)
+- pi with this extension loaded. `pi.nix` symlinks every extension directory into
+  `~/.pi/agent/extensions/`, and `/reload` applies an edit.
+- Provider credentials the child can use. A dispatch resolves the `subagent` role from `roles.json`
+  unless its agent pins a model or names a role; with no `subagent` role either, the child runs pi's
+  own default model.
+- An agent definition, or an inline `spec` for a one-off worker.
 
-## Commands
+## Agents
 
-- `/subagent-toggle` or `Ctrl+Shift+S` — enable/disable the `subagent` tool
-- `/subagent-status` — list available agent definitions, their tools and effective model target, and configured model roles
-- `/subagent-steer` or `Ctrl+Shift+T` — send a steering message to a running subagent (see Steering below)
-
-## Agent definitions
-
-Agents are `.md` files with YAML frontmatter:
+An agent is a `.md` file: YAML frontmatter and a system prompt body.
 
 ```markdown
 ---
-name: researcher
-description: Investigate codebases, read files, search patterns, return structured findings
-model: openrouter/deepseek/deepseek-v4.1-flash
-thinking: high
-tools: read,grep,find,ls,web_search,web_fetch
+name: log-auditor
+description: Read a service's logs and report each error with its timestamp
+tools: read,grep,find,ls
 extensions: web-search
 ---
-System prompt body goes here...
+Read the logs under the directory you are given and report every error with its timestamp and
+source line.
 ```
 
-### Frontmatter fields
+`name` and `description` are required. `tools` and `extensions` are comma-separated lists, `model`
+pins a `provider/model-id`, `role` names a chain in `roles.json`, and `thinking` sets a level
+(`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`).
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | yes | Agent identifier used in `agent`/`tasks`/`chain` params |
-| `description` | yes | One-line summary shown in tool description and status |
-| `tools` | no | Comma-separated tool allowlist. Defaults to built-in tools if omitted |
-| `model` | no | Pinned `provider/model-id`; wins over `role` and needs no `roles.json`. Must resolve to a model the configured provider serves |
-| `role` | no | Resolves to a model chain from `roles.json` (default: the `subagent` role) |
-| `thinking` | no | Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`) for every attempt. An unknown level is an error, not a silent fallback |
-| `extensions` | no | Comma-separated extension names to load. Resolved from `~/.pi/agent/extensions/<name>/` |
+Definitions load from these roots, lowest precedence first:
 
-### Model resolution
+1. `~/.pi/agent/agents/`
+2. `<repo>/.agents/agents/` and `<repo>/.pi/agents/`
+3. `<notes>/<project>/.agents/agents/` and `<notes>/<project>/.pi/agents/`
 
-Highest precedence first:
+A file in a later root overrides an earlier one with the same name, and `.pi/agents` overrides
+`.agents/agents` at the same root. Repo roots load only for a dispatch that passes
+`agentScope: "both"` (or `"project"`) in a trusted project, and in an interactive session only
+after a once-per-repository confirmation. A run with no UI loads them without asking. Notes agents
+load always.
 
-1. `model:` — a pinned ref with `thinking:` as its level. Self-contained: a project agent committed
-   to another repository cannot rely on a `roles.json` on one machine, so this is the only override
-   that travels with it. Without `thinking:`, the child runs pi's default level.
-2. `role:` — a fallback chain from `roles.json`. Each attempt runs its own entry's thinking level;
-   `thinking:` in the frontmatter overrides that for every attempt.
-3. Neither — the `subagent` role, which `/sidecar-models` edits like any other role.
-4. No `subagent` role configured — the child runs pi's default model and level, as a run with no
-   `--model`/`--thinking` does.
+## First dispatch
 
-An explicitly named `role` that resolves to no available model is an error, as is a pinned `model`
-the catalog or its provider's credentials cannot resolve. The default role is optional: without it the
-child runs pi's defaults.
+Save the agent as `~/.pi/agent/agents/log-auditor.md`, then dispatch a task with a journal you have:
 
-### Discovery
+```json
+{
+  "agent": "log-auditor",
+  "task": "List every error in logs/ and the file each one came from.",
+  "journal": "~/notes/llm/acme"
+}
+```
 
-Roots, lowest to highest precedence:
+`journal` takes a journal directory or one entry file, and the child's task starts with a line
+telling it to read that record. `journal: "none"` dispatches blind, for a review that must not read
+the journal; leaving it out makes edit-guard refuse the call unless each task names the journal path
+itself.
 
-1. `~/.pi/agent/agents/*.md` — user, always available (deployed by Nix via symlink from `config/llm/pi/agents/`)
-2. `<repo>/.agents/agents/*.md` and `<repo>/.pi/agents/*.md` — repo, from the nearest level with agent files in either dir, walking up from cwd and stopping at the home directory (or the filesystem root, for a cwd outside home); requires `agentScope: "both"` or `"project"`, a trusted project (`/trust`, applied after restart), and (interactive sessions) a once-per-session confirmation
-3. `<notes>/<project>/.agents/agents/*.md` and `<notes>/<project>/.pi/agents/*.md` — private, for the project owning the cwd (`<project>` is the journal dir name); always available, no confirmation
+The result carries the child's final answer, its usage counters, and the path to its session file
+under `~/.pi/agent/subagent-sessions/`.
 
-A file in a later root overrides an earlier root's file with the same name, and `.pi/agents` overrides `.agents/agents` at the same root. `.agents/agents` fits harness-agnostic definitions (`name`, `description`, body); `.pi/agents` carries pi-specific frontmatter (`role`, `extensions`, tool allowlist). `/subagent-status` lists every file and marks the shadowed ones.
+## One-off worker
 
-The notes project resolves by the cwd's worktree-aware basename, the same rule the journal gate uses, so start pi in the repo root for the notes dir to match the repo.
+A dispatch that needs no agent file carries the child's instructions instead:
 
-## How it works
+```json
+{
+  "spec": {
+    "instructions": "Check a change against its task and report only the gaps, quoting the code.",
+    "bash": "sandboxed"
+  },
+  "task": "Check src/parser.ts for tests that cannot fail.",
+  "journal": "~/notes/llm/acme"
+}
+```
 
-### RPC execution
+`spec` takes two fields and refuses anything else by name: a worker may not name a model, a role, a
+tool allowlist or an extra extension. `bash` is the one capability the dispatch chooses, and it can
+only add the sandbox.
 
-Each subagent invocation:
+- `instructions` is the worker's system prompt.
+- `bash` picks the shell. `"sandboxed"` (default) runs the kernel-confined shell: reads almost
+  anywhere (most dot-entries under `$HOME` and credential paths are denied), writes only to the
+  temp directory, no network. `"normal"` keeps the built-in shell; the gate decides what runs, and
+  under its default mode that is nothing.
 
-1. Resolves the agent's model target from `model`/`role` frontmatter, or from the `subagent` role, and passes it to the child as `--model` and `--thinking`
-2. Writes the agent's system prompt to a temp file
-3. Spawns `pi --mode rpc --no-extensions --session-dir <dir> --append-system-prompt <file>`
-4. Sets `PI_SUBAGENT=1` to suppress journal injection and other interactive features
-5. Sends a `prompt` RPC command with the task and its turn budget
-6. Processes streaming events (`message_update`, `tool_execution_start/end`, `agent_end`)
-7. Shuts down by closing stdin after an `abort` (pi has no `shutdown` RPC command), which makes the child exit 0 cleanly; SIGTERM/SIGKILL only as a 3s escalation fallback
+A worker is single mode only: pass `task` and no `agent`, `tasks` or `chain`. Its model comes from
+the `subagent` role; with no such role, pi's default. It loads the gate and `agents-loader` like
+every child, and it gets the built-in tool set, so, unlike an agent file, it cannot narrow them.
 
-### Turn budget
+## Limits
 
-Each attempt runs with a turn cap (`maxTurns` on the tool schema, default 30). The
-task message states the cap and what happens at it, so the child can budget its turns
-instead of discovering the limit when the nudge arrives. Three turns before the cap
-the child is steered once: stop investigating, write the report from what it has. At
-the cap it is aborted. The nudge is recorded like a user steer, so the live feed and
-the result both show why the child wrapped up early.
+- A call the gate would ask about is refused instead, and a sandboxed shell is bounded by its
+  kernel profile rather than judged. [`../permission-gate/README.md`](../permission-gate/README.md)
+  says what it refuses.
+- Only `confirm`, `select` and `input` dialogs from another extension reach you; `custom()` is
+  unavailable and `editor()` is cancelled.
+- Parallel runs report `N/M done` while they work; only single mode streams the child's live output.
+  A one-item `tasks` batch runs as single; a blank agent or task keeps it parallel.
+- Parallel runs take up to 8 tasks, 4 at a time.
+- A sandboxed shell cannot write in the child's worktree, so a child that must create files there
+  uses its file tools. Where the profile fails to load, the built-in shell stays and the gate judges
+  it.
+- A provider failure gets up to three attempts across the agent's model chain, but only when the
+  attempt produced no answer; a delivered answer is kept, and a retry repeats the whole task.
+- A run aborts at `maxTurns` (default 30). With room before the cap, one steering message three turns
+  ahead asks the child to write its report.
+- A `cwd` that does not exist fails the dispatch instead of falling back to the parent's.
+- Session files under `~/.pi/agent/subagent-sessions/` are deleted after 7 days.
 
-### Retries
+## Commands
 
-A provider-side failure is retried **only when the attempt carries no answer**:
-`stopReason: "error"` with an empty final message, or a child that exited non-zero
-without producing a message. The plan is the first model twice, then the next entry
-in the agent's role chain, up to 3 attempts. When the chain is short, the plan repeats
-the last candidate (a retry can land on a different upstream even for the same model).
-A dispatch without a role has no chain and gets one attempt. User aborts and turn-budget
-stops are not retried.
+- `/subagent-toggle` or `Ctrl+Shift+S` disables the tool for the session.
+- `/subagent-status` lists every definition with its tools and resolved model target.
+- `/subagent-steer` or `Ctrl+Shift+T` sends a message to a running child.
 
-A retry is a new child process repeating the whole task, so it is taken only when
-there is nothing to deliver. An attempt that wrote its answer and then lost the
-stream keeps the answer, and the result names the stream error beside it. In a
-chain the warning travels with the handoff to the next step, and the result names
-every step whose stream ended early.
+## Where to go next
 
-The child gets pi's own in-place retry first: pi emits `agent_end` with
-`willRetry: true`, omits the failed turn from context, and continues the same
-session. The extension waits for that and finalizes on any `agent_end` whose
-`willRetry` is not `true`.
-
-A retried failure line names the attempt count. A user abort returns the partial
-result (stopReason `aborted`) with whatever stderr, exit code and session path the
-run collected, instead of discarding them. Every attempt logs spawn, close and spawn
-errors to `/tmp/pi-subagent-debug/debug-<pid>.log` (the log file is per pi process,
-cleared at the start of each dispatch; files stay until /tmp is cleaned).
-
-### Streaming
-
-Text deltas, thinking blocks, and tool calls from the subagent are interleaved in the TUI output in their exact arrival order (an ordered event log rebuilt on each update). Thinking renders in italic with the theme's `thinkingText` color, distinct from output text. The full content array is rebuilt on each update (not incremental — the TUI replaces, not accumulates).
-
-Footer status shows live counters during execution (`[events:N updates:N] <preview>`) in single mode.
-The live view's first line names what is running — agent, source, model ref, thinking level — and the
-result header repeats it for a completed run.
-
-### Result display
-
-Assistant messages are grouped into turns (one per assistant message). Commands from the known tools (bash/read/write/edit/patch/ls/find/grep) are always shown in full — no truncation. Unknown tools show a 50-char JSON args preview.
-
-- **Collapsed** (default, single mode): the last 3 turns' commands, a preview of the final output, usage, and a `(Ctrl+O to expand)` hint whenever anything is hidden (earlier turns, longer output, thinking, intermediate text).
-- **Expanded** (`Ctrl+O`): every turn — thinking, text, and commands — plus the task and usage. The task in the call view is also only shown in full when expanded.
-- **Streaming** (live, single mode): `Ctrl+O` works mid-run too. Collapsed live view caps thinking to its last line and text to the last few lines (commands stay full); expanded shows the whole feed.
-
-Steering messages sent via `/subagent-steer` appear immediately in the live feed and in the result display as bold `steering: …` lines at the turn boundary they arrived at.
-
-`Ctrl+O` is pi's global `app.tools.expand` toggle; it applies to the last tool output.
-
-Results end with the child's transcript path (`[subagent session: …]`) when one
-exists, so a capped or failed run can be read afterwards.
-
-### Steering
-
-Send mid-run messages to running subagents via `/subagent-steer` or `Ctrl+Shift+T`:
-
-- **0 active** — notifies "No running subagents"
-- **1 active** — opens input dialog directly
-- **N active** — picker shows `[#id] agent: task preview...`, then input dialog
-
-The message is delivered via pi's `steer` RPC command, which interrupts the current generation. Uses pi's `steeringMode` setting (default: queues after current tool batch).
-
-### Handle registry
-
-Running subagents are tracked in a module-level `Map<number, HandleEntry>`. Each `runSingleAgent` call registers a handle on spawn and unregisters on completion/abort/error. This works across all modes — single, parallel, and chain each register handles independently.
-
-## Subagent environment
-
-Subagents run with:
-
-- `PI_SUBAGENT=1` — suppresses journal extension, reduces instructions to essentials
-- `--no-extensions` — no auto-discovered extensions; loads `agents-loader` + `permission-gate` plus agent-declared ones
-- `--session-dir ~/.pi/agent/subagent-sessions/` — isolated session storage
-- Tool allowlist from agent frontmatter `tools` field
-- **Gate dialogs**: the child's `permission-gate` starts fresh (Careful mode, no grants inherited from the parent), so any gated call blocks in the parent TUI. `bash` confirms unless the agent opts into `sandbox-bash`, which the gate trusts because the OS confines it. The `subagent` tool itself always confirms — that prompt is the delegation veto.
-- Same working directory as the parent (or `cwd` param)
-
-### RPC UI behavior
-
-| Method | Works in subagents? | Behavior |
-|--------|---------------------|----------|
-| `confirm()` | Yes (relayed) | Emitted to parent TUI via relay, response sent back on stdin |
-| `select()` | Yes (relayed) | Same as confirm |
-| `input()` | Yes (relayed) | Same as confirm |
-| `custom()` | No (returns undefined) | No-op in RPC mode — crashes callers that expect a result |
-| `notify()` | Yes | Fire-and-forget RPC event |
-| `setStatus()` | Yes | Fire-and-forget RPC event |
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `index.ts` | Extension wiring: tool registration, execute dispatch (single/parallel/chain), toggle and status commands |
-| `agents.ts` | Agent discovery, frontmatter parsing, directory scanning. Pure fs/path, no pi deps |
-| `rpc.ts` | RPC process management, streaming state machine, event loop, `SubagentHandle`, model resolution |
-| `render.ts` | TUI rendering: `renderCall`/`renderResult` for tool call display and streaming output |
-| `retry.ts` | Retry policy: which failures retry, attempt plan across the role chain |
-| `turn-budget.ts` | Task budget message, nudge threshold and one-shot latch |
-| `mode.ts` | Mode resolution: a one-item `tasks` batch collapses to single; `chain` dispatch stays in `index.ts` |
-| `mode.test.ts` / `retry.test.ts` / `turn-budget.test.ts` | Tests for mode resolution, the retry policy, and turn-budget decisions |
-| `agents.test.ts` | Tests for frontmatter parsing, discovery, project directory resolution |
-| `render.test.ts` | Tests for formatting and render output |
-
-## Known limitations
-
-- **RPC shutdown**: stdin is closed after an `abort` (see step 7 above). User abort escalates on a 5s timeout instead of 3s.
-- **`custom()` in subagents**: the RPC UI table above has the behavior; the consequence is that `permission-gate` must use the relayed `confirm()`/`select()`/`input()` instead.
-- **Parallel/chain modes**: implemented but not heavily tested beyond basic scenarios.
-- **No live streaming in chain/parallel**: `onUpdate` forwarding is swallowed while a step is running, so chain/parallel only show completion status (`Parallel: X/Y done…`), not the interleaved live feed. `Ctrl+O` mid-run works in parallel (completed agents render full turns, running ones show `(running...)`), but the collapsed live-view caps don't apply — there's no live view to cap.
+- [`../permission-gate/README.md`](../permission-gate/README.md): the `scoped` band, sensitive
+  paths, and what a refused child gets back.
+- [`../sandbox-bash/README.md`](../sandbox-bash/README.md): the profile's writable roots and the
+  load-time boundary check.
+- [`../../README.md`](../../README.md): every extension in this tree.

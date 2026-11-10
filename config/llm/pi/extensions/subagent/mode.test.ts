@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveMode } from "./mode";
+import { resolveMode, specDispatchError } from "./mode";
 
 describe("resolveMode", () => {
   test("a one-item tasks batch resolves to single", () => {
@@ -56,6 +56,26 @@ describe("resolveMode", () => {
     const { parallelTasks, singleAgent } = resolveMode({ tasks: [] });
     expect(parallelTasks).toEqual([]);
     expect(singleAgent).toBeUndefined();
+  });
+
+  test("a spec dispatch with a task is valid", () => {
+    expect(specDispatchError({ task: "check the diff" })).toBeNull();
+    expect(specDispatchError({ task: "check the diff", tasks: [], chain: [], agent: "" })).toBeNull();
+  });
+
+  test("a spec dispatch refuses every field that names an agent", () => {
+    expect(specDispatchError({ task: "t", agent: "reviewer" })).toContain("no agent");
+    expect(specDispatchError({ task: "t", tasks: [{ agent: "a", task: "x" }] })).toContain("no tasks");
+    expect(specDispatchError({ task: "t", chain: [{ agent: "a", task: "x" }] })).toContain("no chain");
+    expect(specDispatchError({ task: "t", agent: "a", chain: [{ agent: "b", task: "y" }] })).toBe(
+      "spec runs one ad-hoc worker, so it takes task and no agent, chain.",
+    );
+  });
+
+  test("a spec dispatch needs a non-empty task", () => {
+    expect(specDispatchError({})).toContain("spec needs a task");
+    expect(specDispatchError({ task: "   " })).toContain("spec needs a task");
+    expect(specDispatchError({ task: 42 })).toContain("spec needs a task");
   });
 
   test("an item with an empty agent or task is not collapsed", () => {

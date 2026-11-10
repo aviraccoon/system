@@ -29,10 +29,9 @@ import {
   markShadowed,
   respectProjectTrust,
 } from "./agents";
+import { planDispatch } from "./dispatch";
 import { journalPath, taskForChild } from "./journal-task";
-import { resolveMode } from "./mode";
 import { renderCall as renderCallFn, renderResult as renderResultFn, withSessionPaths } from "./render";
-import { repoGate } from "./repo-gate";
 import {
   getAvailableRoles,
   getFinalOutput,
@@ -96,9 +95,32 @@ const AgentScopeSchema = stringEnum(["user", "project", "both"] as const, {
   default: "user",
 });
 
+const WorkerSpecSchema = Type.Object(
+  {
+    instructions: Type.String({
+      description: "The worker's system prompt: what it is, what to do, and what to report back.",
+    }),
+    bash: Type.Optional(
+      stringEnum(["sandboxed", "normal"] as const, {
+        description:
+          'How bounded the worker\'s shell is. "sandboxed" (default) loads the kernel-confined bash: reads almost anywhere (most dot-entries under the home directory and credential paths are denied), writes only to scratch space, no network. "normal" leaves the built-in shell, where the permission gate\'s mode and score decide what runs.',
+        default: "sandboxed",
+      }),
+    ),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "A one-off worker instead of a named agent: instructions plus how bounded its shell is. Takes no model, role, tools or extensions, which come from agent definitions.",
+  },
+);
+
 const SubagentParams = Type.Object({
-  agent: Type.Optional(Type.String({ description: "Name of the agent to invoke (for single mode)" })),
-  task: Type.Optional(Type.String({ description: "Task to delegate (for single mode)" })),
+  agent: Type.Optional(
+    Type.String({ description: "Name of the agent to invoke (for single mode; omit when passing spec)" }),
+  ),
+  task: Type.Optional(Type.String({ description: "Task to delegate (for single mode; with spec, the work)" })),
+  spec: Type.Optional(WorkerSpecSchema),
   tasks: Type.Optional(
     Type.Array(TaskItem, {
       description:
@@ -171,19 +193,6 @@ export default function subagentExtension(pi: ExtensionAPI) {
         const discovery = discoverAgents(ctx.cwd, agentScope, journalNotesDir());
         const agents = respectProjectTrust(discovery.agents, trusted);
 
-        // resolveMode collapses a one-item `tasks` batch to single; see mode.ts.
-        const { parallelTasks, singleAgent, singleTask, singleCwd } = resolveMode(params);
-
-        const requestedAgentNames = new Set<string>();
-        if (params.chain) for (const step of params.chain) requestedAgentNames.add(step.agent);
-        if (parallelTasks) for (const t of parallelTasks) requestedAgentNames.add(t.agent);
-        if (singleAgent) requestedAgentNames.add(singleAgent);
-
-        const hasChain = (params.chain?.length ?? 0) > 0;
-        const hasTasks = (parallelTasks?.length ?? 0) > 0;
-        const hasSingle = Boolean(singleAgent && singleTask);
-        const modeCount = Number(hasChain) + Number(hasTasks) + Number(hasSingle);
-
         const makeDetails =
           (mode: "single" | "parallel" | "chain") =>
           (results: SingleResult[]): SubagentDetails => ({
@@ -192,61 +201,44 @@ export default function subagentExtension(pi: ExtensionAPI) {
             results,
           });
 
-        if (modeCount !== 1) {
-          const available = agents.map((a) => `${a.name} (${a.source})`).join(", ") || "none";
-          return {
-            content: [
-              { type: "text", text: `Invalid parameters. Provide exactly one mode.\nAvailable agents: ${available}` },
-            ],
-            details: makeDetails("single")([]),
-          };
-        }
-
-        const mode = hasChain ? "chain" : hasTasks ? "parallel" : ("single" as const);
-        const gate = repoGate({
+        const plan = planDispatch(params, {
           discovered: discovery.agents,
-          requestedNames: requestedAgentNames,
+          agents,
           agentScope,
           trusted,
           hasUI: ctx.hasUI,
           accepted: (root) => acceptedRoots.has(root),
           projectDirs: discovery.projectDirs,
+          cwd: ctx.cwd,
         });
-
-        // Repo agents are repo-controlled; pi's project trust is the floor.
-        if (gate.kind === "block") {
+        if (plan.kind === "refuse") {
           return {
-            content: [
-              {
-                type: "text",
-                text: `Repo agents are disabled: project trust is not granted for ${ctx.cwd}. Blocked: ${gate.names.join(", ")}. Grant trust with /trust, then restart pi and re-dispatch.`,
-              },
-            ],
-            details: makeDetails(mode)([]),
+            content: [{ type: "text", text: plan.text }],
+            details: makeDetails(plan.mode ?? "single")([]),
           };
         }
 
         // Confirm repo agents once per repository per session.
-        if (gate.kind === "confirm") {
-          const dir = gate.dirs.join(", ") || "(unknown)";
+        if (plan.confirm) {
+          const dir = plan.confirm.dirs.join(", ") || "(unknown)";
           const ok = await ctx.ui.confirm(
             "Run project-local agents?",
-            `Agents: ${gate.names.join(", ")}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
+            `Agents: ${plan.confirm.names.join(", ")}\nSource: ${dir}\n\nProject agents are repo-controlled. Only continue for trusted repositories.`,
           );
           if (!ok) {
             return {
               content: [{ type: "text", text: "Canceled: project-local agents not approved." }],
-              details: makeDetails(mode)([]),
+              details: makeDetails(plan.mode)([]),
             };
           }
-          if (gate.root !== null) {
-            acceptedRoots.add(gate.root);
-            pi.appendEntry(PROJECT_TRUST_ENTRY, { root: gate.root });
+          if (plan.confirm.root !== null) {
+            acceptedRoots.add(plan.confirm.root);
+            pi.appendEntry(PROJECT_TRUST_ENTRY, { root: plan.confirm.root });
           }
         }
 
         // Chain mode
-        if (params.chain && params.chain.length > 0) {
+        if (plan.mode === "chain" && params.chain) {
           const results: SingleResult[] = [];
           let previousOutput = "";
 
@@ -273,7 +265,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
             let handleId = 0;
             const result = await runSingleAgent(
               ctx.cwd,
-              agents,
+              plan.runAgents,
               step.agent,
               childTask,
               step.cwd,
@@ -332,7 +324,8 @@ export default function subagentExtension(pi: ExtensionAPI) {
         }
 
         // Parallel mode
-        if (parallelTasks && parallelTasks.length > 0) {
+        if (plan.mode === "parallel" && plan.parallelTasks) {
+          const parallelTasks = plan.parallelTasks;
           if (parallelTasks.length > MAX_PARALLEL_TASKS)
             return {
               content: [
@@ -378,7 +371,7 @@ export default function subagentExtension(pi: ExtensionAPI) {
               const childTask = taskForChild(t.task, journal);
               const result = await runSingleAgent(
                 ctx.cwd,
-                agents,
+                plan.runAgents,
                 t.agent,
                 childTask,
                 t.cwd,
@@ -426,12 +419,13 @@ export default function subagentExtension(pi: ExtensionAPI) {
         }
 
         // Single mode
-        if (singleAgent && singleTask) {
+        const { singleAgent, singleTask, singleCwd } = plan;
+        if (plan.mode === "single" && singleAgent && singleTask) {
           let handleId = 0;
           const childTask = taskForChild(singleTask, journal);
           const result = await runSingleAgent(
             ctx.cwd,
-            agents,
+            plan.runAgents,
             singleAgent,
             childTask,
             singleCwd,

@@ -6,6 +6,7 @@
 import { randomBytes } from "node:crypto";
 import { pluralLines, splitLines } from "../shared/diff";
 import { type FactorDecision, firedFactors, SEVERITY_DANGEROUS } from "../shared/risk-factors";
+import { workerSpecFields } from "../shared/worker-spec";
 import type { ExplanationVerdict } from "./confirm-ui";
 import { AWAY_AFTER_TIMEOUTS, formatDuration } from "./dialog-timeout";
 import { type Band, cacheKey, type DenialTracker, type ExplanationResult, type Mode } from "./logic";
@@ -179,8 +180,16 @@ function describeToolText(toolName: string, input: Record<string, unknown>, opti
         .join("\n");
       return `subagent:\n${clipExcerpt(lines, budget)}`;
     }
-    const agent = typeof input.agent === "string" ? input.agent : "unknown";
+    // An ad-hoc worker names no agent file: the dialog says which shell it gets and
+    // what it was told to be, since that instruction is the delegation decision.
+    const spec = typeof input.spec === "object" && input.spec !== null ? (input.spec as Record<string, unknown>) : null;
     const task = typeof input.task === "string" ? input.task : JSON.stringify(input);
+    if (spec) {
+      const { instructions, bash } = workerSpecFields(spec);
+      const body = instructions ? `${task}\n\ninstructions:\n${instructions}` : task;
+      return `subagent worker (${bash} shell):\n${clipExcerpt(body, budget)}`;
+    }
+    const agent = typeof input.agent === "string" ? input.agent : "unknown";
     return `subagent ${agent}:\n${clipExcerpt(task, budget)}`;
   }
   return `${toolName}: ${JSON.stringify(input).slice(0, 500)}`;
@@ -197,7 +206,7 @@ const RENDERED_FIELDS: Record<string, string[]> = {
   write: ["path", "content"],
   edit: ["path", "edits", "oldText", "newText"],
   patch: ["path", "edits", "oldText", "newText"],
-  subagent: ["agent", "task", "tasks", "chain"],
+  subagent: ["agent", "task", "tasks", "chain", "spec"],
 };
 
 /** The state a classifier and the dialog read for a tool call; see `describeToolText`. */

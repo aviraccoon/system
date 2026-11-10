@@ -232,6 +232,33 @@ describe("renderCall", () => {
     expect(text).toContain("find all TODOs");
   });
 
+  test("renders a worker with its shell and the task it was given", () => {
+    const result = renderCall(
+      { spec: { instructions: "Check the staged diff for flaky assertions." }, task: "review the diff" },
+      theme,
+      {},
+    );
+    const text = result.render(80).join("\n");
+    expect(text).toContain("worker");
+    expect(text).toContain("sandboxed shell");
+    expect(text).toContain("review the diff");
+    expect(text).not.toContain("Check the staged diff");
+  });
+
+  test("expanded without instructions adds no empty label", () => {
+    const result = renderCall({ spec: { bash: "sandboxed" }, task: "review" }, theme, { expanded: true });
+    expect(result.render(80).join("\n")).not.toContain("instructions:");
+  });
+
+  test("expanded shows the worker's instructions", () => {
+    const result = renderCall(
+      { spec: { instructions: "Check the staged diff for flaky assertions." }, task: "review" },
+      theme,
+      { expanded: true },
+    );
+    expect(result.render(80).join("\n")).toContain("Check the staged diff");
+  });
+
   test("renders parallel mode with task count", () => {
     const result = renderCall(
       {

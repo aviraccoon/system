@@ -9,6 +9,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { createDebugLogger } from "../shared/debug";
+import { workerSpecFields } from "../shared/worker-spec";
 import { resolveMode } from "./mode";
 import {
   type DisplayItem,
@@ -46,10 +47,21 @@ export function renderCall(args: Record<string, unknown>, theme: Theme, context:
     for (let i = 0; i < Math.min(chain.length, showFull ? chain.length : 3); i++) {
       const step = chain[i];
       const cleanTask = (step.task as string).replace(/\{previous\}/g, "").trim();
-      const preview = showFull ? cleanTask : cleanTask.length > 40 ? `${cleanTask.slice(0, 40)}...` : cleanTask;
-      text += `\n  ${theme.fg("muted", `${i + 1}.`)} ${theme.fg("accent", step.agent)}${theme.fg("dim", ` ${preview}`)}`;
+      text += `\n  ${theme.fg("muted", `${i + 1}.`)} ${theme.fg("accent", step.agent)}${theme.fg("dim", ` ${preview(cleanTask, showFull, 40)}`)}`;
     }
     if (!showFull && chain.length > 3) text += `\n  ${theme.fg("muted", `... +${chain.length - 3} more`)}`;
+    return new Text(text, 0, 0);
+  }
+  // A spec dispatch names no agent file: it runs one ad-hoc worker.
+  if (typeof args.spec === "object" && args.spec !== null) {
+    const { instructions, bash: shell } = workerSpecFields(args.spec);
+    let text =
+      theme.fg("toolTitle", theme.bold("subagent ")) +
+      theme.fg("accent", "worker") +
+      theme.fg("muted", ` (${shell} shell)`);
+    text += `\n  ${theme.fg("dim", preview(typeof args.task === "string" ? args.task : "", showFull, 60))}`;
+    if (showFull && instructions) text += `\n  ${theme.fg("muted", `instructions: ${instructions}`)}`;
+
     return new Text(text, 0, 0);
   }
   const resolved = resolveMode(args);
@@ -60,26 +72,26 @@ export function renderCall(args: Record<string, unknown>, theme: Theme, context:
       theme.fg("accent", `parallel (${tasks.length} tasks)`) +
       theme.fg("muted", ` [${scope}]`);
     for (const t of tasks.slice(0, showFull ? tasks.length : 3)) {
-      const preview = showFull
-        ? (t.task as string)
-        : (t.task as string).length > 40
-          ? `${(t.task as string).slice(0, 40)}...`
-          : (t.task as string);
-      text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+      text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview(t.task, showFull, 40)}`)}`;
     }
     if (!showFull && tasks.length > 3) text += `\n  ${theme.fg("muted", `... +${tasks.length - 3} more`)}`;
     return new Text(text, 0, 0);
   }
   const agentName = resolved.singleAgent ?? "...";
   const taskStr = resolved.singleTask ?? "";
-  const preview = showFull ? taskStr : taskStr.length > 60 ? `${taskStr.slice(0, 60)}...` : taskStr;
   let text =
     theme.fg("toolTitle", theme.bold("subagent ")) + theme.fg("accent", agentName) + theme.fg("muted", ` [${scope}]`);
-  text += `\n  ${theme.fg("dim", preview)}`;
+  text += `\n  ${theme.fg("dim", preview(taskStr, showFull, 60))}`;
   return new Text(text, 0, 0);
 }
 
 // ── helpers ──
+
+/** Truncate to `width` characters unless expanded. */
+function preview(text: string, showFull: boolean, width: number): string {
+  if (showFull || text.length <= width) return text;
+  return `${text.slice(0, width)}...`;
+}
 
 function styleThinking(theme: Theme, text: string): string {
   return theme.italic(theme.fg("thinkingText", text));

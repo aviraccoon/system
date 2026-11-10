@@ -31,8 +31,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { journalDirFor } from "../shared/journal-context";
+import { DEFAULT_WORKER_SHELL, isWorkerShell } from "../shared/worker-spec";
 
-export type AgentSource = "user" | "project" | "notes";
+export type AgentSource = "user" | "project" | "notes" | "ad-hoc";
 
 export interface AgentConfig {
   name: string;
@@ -49,7 +50,8 @@ export interface AgentConfig {
   extensions?: string[];
   systemPrompt: string;
   source: AgentSource;
-  filePath: string;
+  /** Absent for an ad-hoc worker: its definition came from the dispatch, not a file. */
+  filePath?: string;
 }
 
 /** One root's pair of agent dirs: neutral shared (`.agents/agents`) and
@@ -307,6 +309,48 @@ export function respectProjectTrust(agents: AgentConfig[], trusted: boolean): Ag
   return trusted ? agents : agents.filter((a) => a.source !== "project");
 }
 
+const WORKER_KEYS = new Set(["instructions", "bash"]);
+
+/**
+ * Build the agent an inline `spec` describes. A worker owns its instructions and
+ * how bounded its shell is, and a field outside them is refused by name rather
+ * than ignored: a spec may not name a model, a role, a tool allowlist or an extra
+ * extension. `bash` is the one capability it chooses, and it can only add the
+ * sandbox.
+ */
+export function workerAgent(spec: unknown): { agent: AgentConfig } | { error: string } {
+  if (typeof spec !== "object" || spec === null || Array.isArray(spec)) {
+    return { error: "spec must be an object: { instructions, bash? }." };
+  }
+
+  const record = spec as Record<string, unknown>;
+  const unsupported = Object.keys(record).find((key) => !WORKER_KEYS.has(key));
+  if (unsupported) {
+    return {
+      error: `spec.${unsupported} is not supported. A worker takes instructions and bash only; model, role, tools and extensions come from agent definitions.`,
+    };
+  }
+
+  if (typeof record.instructions !== "string" || record.instructions.trim() === "") {
+    return { error: "spec.instructions must be a non-empty string." };
+  }
+
+  const bash = record.bash ?? DEFAULT_WORKER_SHELL;
+  if (!isWorkerShell(bash)) {
+    return { error: 'spec.bash must be "sandboxed" or "normal".' };
+  }
+
+  return {
+    agent: {
+      name: "worker",
+      description: "Ad-hoc worker",
+      systemPrompt: record.instructions,
+      extensions: bash === "sandboxed" ? ["sandbox-bash"] : undefined,
+      source: "ad-hoc",
+    },
+  };
+}
+
 /**
  * For each section, mark the agents that a later section (or a later dir in the
  * same section) overrides on a name collision. Sections are in precedence
@@ -328,6 +372,7 @@ export function buildToolDescription(agents: AgentConfig[]): string {
   const lines = [
     "Delegate tasks to specialized subagents with isolated context windows.",
     "Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
+    'Ad-hoc worker: pass spec: { instructions, bash? } with task instead of agent (single mode only, and no agent/tasks/chain). bash is "sandboxed" (default) or "normal".',
     'Default agent scope is "user": ~/.pi/agent/agents plus this project\'s private notes agents.',
     'Repo agents (.agents/agents, .pi/agents) need agentScope: "both" (or "project"), project trust, and (interactive sessions) a once-per-session confirmation.',
   ];

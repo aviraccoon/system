@@ -256,7 +256,7 @@ export async function judgePolicy(
   threshold: number = DEFAULT_POLICY_THRESHOLD,
 ): Promise<PolicyVerdict | null> {
   const verdict = policyFromAnswers(await ask({ [POLICY_QUESTION]: policyQuestion(policy) }, state), policy, threshold);
-  if (!verdict || !verdict.violation) return verdict;
+  if (!verdict?.violation) return verdict;
   try {
     const cited = await ask({ [CLAUSE_QUESTION]: clauseQuestion(policy, { violation: true }) }, state);
     return withClauseCitation(verdict, cited, policy);

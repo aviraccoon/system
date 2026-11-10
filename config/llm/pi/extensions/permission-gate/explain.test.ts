@@ -202,6 +202,34 @@ describe("describeToolCall", () => {
     expect(result).toContain("rm -rf /tmp/data");
   });
 
+  test("an ad-hoc worker is named with its shell and its instructions", () => {
+    const result = describeToolCall("subagent", {
+      spec: { instructions: "Check the diff for gaps.", bash: "sandboxed" },
+      task: "Review the diff",
+    });
+    expect(result).toBe(
+      "subagent worker (sandboxed shell):\nReview the diff\n\ninstructions:\nCheck the diff for gaps.",
+    );
+  });
+
+  test("a worker with no instructions shows only the task", () => {
+    const result = describeToolCall("subagent", { spec: { bash: "normal" }, task: "y" });
+    expect(result).toBe("subagent worker (normal shell):\ny");
+    expect(result).not.toContain("instructions:");
+  });
+
+  test("a worker's instructions are not repeated in the options line", () => {
+    const result = describeToolCall("subagent", {
+      spec: { instructions: "x", bash: "normal" },
+      task: "y",
+      maxTurns: 5,
+    });
+    expect(result).toContain("subagent worker (normal shell):");
+    expect(result).toContain('options: {"maxTurns":5}');
+    expect(result).toContain("instructions:\nx");
+    expect(result).not.toContain('"spec"');
+  });
+
   test("a journal path stays visible and precedes the task", () => {
     const result = describeToolCall("subagent", {
       agent: "researcher",

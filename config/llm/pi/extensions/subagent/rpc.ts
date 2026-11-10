@@ -14,7 +14,7 @@ import { type ExtensionContext, type ThemeColor, withFileMutationQueue } from "@
 import { createDebugLogger } from "../shared/debug";
 import { loadConfig, parseRef, resolveRoleChain, type ThinkingLevel } from "../shared/model-roles";
 import { BASH_SANDBOX_ENV, SANDBOX_COMMAND_ENV } from "../shared/sandbox";
-import type { AgentConfig } from "./agents";
+import type { AgentConfig, AgentSource } from "./agents";
 import { type AttemptOutcome, attemptPlan, isRetryable, MAX_ATTEMPTS } from "./retry";
 import { type AgentTargets, type AttemptTarget, DEFAULT_SUBAGENT_ROLE, planAgentTargets, targetArgs } from "./target";
 import { type NudgeState, steerNudge, taskWithBudget } from "./turn-budget";
@@ -97,7 +97,7 @@ export interface UserInput {
 
 export interface SingleResult {
   agent: string;
-  agentSource: "user" | "project" | "notes" | "unknown";
+  agentSource: AgentSource | "unknown";
   task: string;
   exitCode: number;
   messages: Message[];

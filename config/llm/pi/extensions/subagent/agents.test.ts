@@ -12,6 +12,7 @@ import {
   markShadowed,
   projectRootOf,
   respectProjectTrust,
+  workerAgent,
 } from "./agents";
 
 const TEST_DIR = join(tmpdir(), `subagent-agents-test-${process.pid}`);
@@ -594,6 +595,60 @@ describe("deployed @rules directives", () => {
       .map((name) => `rules/${name}`)
       .sort();
     expect(named).toEqual(files);
+  });
+});
+
+// ── workerAgent ──
+
+describe("workerAgent", () => {
+  const build = (spec: unknown) => {
+    const result = workerAgent(spec);
+    if ("error" in result) throw new Error(`expected an agent, got: ${result.error}`);
+    return result.agent;
+  };
+  const errorOf = (spec: unknown) => {
+    const result = workerAgent(spec);
+    if ("agent" in result) throw new Error("expected an error, got an agent");
+    return result.error;
+  };
+
+  test("builds a worker from instructions alone", () => {
+    const agent = build({ instructions: "You check a change against its task." });
+    expect(agent.name).toBe("worker");
+    expect(agent.source).toBe("ad-hoc");
+    expect(agent.systemPrompt).toBe("You check a change against its task.");
+    expect(agent.filePath).toBeUndefined();
+  });
+
+  test("sandboxes the shell by default", () => {
+    expect(build({ instructions: "x" }).extensions).toEqual(["sandbox-bash"]);
+    expect(build({ instructions: "x", bash: "sandboxed" }).extensions).toEqual(["sandbox-bash"]);
+  });
+
+  test("a normal shell adds no extension", () => {
+    expect(build({ instructions: "x", bash: "normal" }).extensions).toBeUndefined();
+  });
+
+  test("refuses a field the spec does not own", () => {
+    const error = errorOf({ instructions: "x", model: "acme/model-1" });
+    expect(error).toContain("spec.model");
+    expect(error).toContain("instructions and bash only");
+  });
+
+  test("refuses empty instructions", () => {
+    expect(errorOf({ instructions: "   " })).toContain("non-empty string");
+    expect(errorOf({})).toContain("non-empty string");
+    expect(errorOf({ instructions: 42 })).toContain("non-empty string");
+  });
+
+  test("refuses an unknown shell value", () => {
+    expect(errorOf({ instructions: "x", bash: "readonly" })).toBe('spec.bash must be "sandboxed" or "normal".');
+  });
+
+  test("refuses a spec that is not an object", () => {
+    for (const spec of [null, "instructions", ["x"]]) {
+      expect(errorOf(spec)).toContain("spec must be an object");
+    }
   });
 });
 
