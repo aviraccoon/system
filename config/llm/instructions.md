@@ -83,7 +83,7 @@ The journal is private for you, the LLM. Write for yourself and future agents, n
 - **After each completed step**: Implementation, exploration, design decisions
 - **When stuck or surprised**: What happened? What did you try?
 - **When something clicks**: Mid-task realizations, things that worked
-- **Session end**: What changed, what's unfinished, what to tell the next agent. Don't just summarize verbally — the journal is what persists.
+- **Session end**: In each unit's entry, record what changed, what's unfinished, and what the next agent needs for that unit. Don't just summarize verbally — the journal is what persists.
 
 **Check the date:** run `date +%Y-%m-%d` before writing a journal entry or anything dated. Never infer the current date from context.
 
@@ -93,11 +93,11 @@ The journal is private for you, the LLM. Write for yourself and future agents, n
 
 **Say what you checked, and when.** A dated finding ("checked 2026-10-17: the exclusion is still in the config") is what lets a later session tell stale from current; an undated claim reads as unchecked, and the session that trusts it inherits the error.
 
-**Update existing notes when relevant.** If today's work directly continues a recent note (same type of work, same context), append to it instead of creating a new file. Split only when the work is meaningfully different.
+**One entry per unit of work.** A unit is one decision, one measurement, one change from proposal to commit, or one question whose answer a later session needs; a question the entry itself answers belongs to the unit that answered it. If today's work is the same unit as a recent note (the same decision still open, the same measurement run again, the same change still uncommitted, the same question still open), append to it instead of creating a new file; a session covering several units gets one entry each, named for what it covers. An entry holding more than one unit gets split into one entry per unit, each named for what it covers, leaving the original with the unit it started as. Growth is only how you notice: the count is what splits it.
 
-**Rename files if needed.** If the conversation evolves and the original topic no longer fits, rename the file to reflect what it actually covers.
+**Rename files if needed.** If an entry holds one unit and its topic no longer fits the file name, rename it to reflect what it covers.
 
-**Cross-reference only when topically related.** If today's entry genuinely continues a prior thread (same problem, same investigation, same decision being revisited), link it at the top: "Continues from `YYYY-MM-DD-NN-topic.md`". Don't link just because an entry was recent or in the same project — irrelevant back-references are noise. Most entries need no cross-reference.
+**Cross-reference only when topically related.** If a different unit continues a prior thread (same problem, same investigation, same decision being revisited), link it at the top: "Continues from `YYYY-MM-DD-NN-topic.md`". Don't link just because an entry was recent or in the same project — irrelevant back-references are noise. Most entries need no cross-reference.
 
 **Voice example** — aim for this, not a dry changelog:
 > The fix works but feels hacky. Hiding the button entirely - is that right? Maybe a disabled state with clearer visual feedback would be better UX. Not sure.
