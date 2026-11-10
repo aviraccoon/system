@@ -334,6 +334,25 @@ describe("a subagent", () => {
     );
   });
 
+  test("a risky shell carrying an in-scope path is still refused", async () => {
+    // A shell borrows nothing from a `path` field: what bounds it is the sandbox.
+    await headless(
+      {
+        verdicts: [{ verdict: "risky", short: "runs_local_code 0.90", detail: "", factors: { runs_local_code: 0.9 } }],
+        ...child,
+        responses: [
+          { toolCalls: [{ name: "bash", arguments: { command: "touch out.txt", path: "out.txt" } }] },
+          "done",
+        ],
+      },
+      ({ harness }) => {
+        expect(existsSync(join(harness.cwd, "out.txt"))).toBe(false);
+        expect(resultText(harness)).toContain("not confined to the run's scope");
+        expect(harness.ui?.dialogs).toEqual([]);
+      },
+    );
+  });
+
   test("a path target outside the scope is refused whatever the verdict says", async () => {
     // A write is an effect even when the classifier calls it safe, so the scope fact is
     // read before the safe allow.

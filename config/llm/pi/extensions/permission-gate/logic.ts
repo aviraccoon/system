@@ -488,18 +488,14 @@ function resolvedLocation(raw: string, base: string): string {
   return resolved;
 }
 
-/** The scope fact the `scoped` band reads: is every path this call names inside `root`?
- *
- * Deterministic, and therefore the one part of the scope rule a model does not judge.
- *  Raw paths are walked component by component, so `link/../x` lands where the kernel
- *  would put it and a `~` is not read as a directory under the root. A call that names no
- *  path at all cannot be proven inside, so it counts as outside. A shell is the important
- *  case: it starts in the run's directory but is not bounded to it (`cd`, a redirect or a
- *  `cp` leave it), and this gate refuses to parse shell text, so what bounds a shell is the
- *  sandbox it runs under, not this check. The confined tool never reaches here at all; the
- *  gate short-circuits it on `isConfinedBash`.
+/** True only for an edit-like call whose every target is inside `root`.
+ *  `collectToolPaths` reads `path` for any tool, but a `path` does not bound what a shell or a
+ *  `subagent` call does, so only an edit-like call can be proven inside; one that names no path
+ *  cannot be proven inside at all. Paths resolve through links as the kernel does, and through the
+ *  tools' own `@`, `~` and `file://` expansion.
  */
 export function insideScope(toolName: string, input: Record<string, unknown>, root: string): boolean {
+  if (!EDIT_LIKE_TOOLS.includes(toolName)) return false;
   const raw = collectToolPaths(toolName, input);
   if (raw.length === 0) return false;
   const realRoot = resolvedLocation(root, root);

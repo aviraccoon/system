@@ -1335,9 +1335,15 @@ describe("insideScope", () => {
   });
 
   test("a call that names no path cannot be proven inside", () => {
-    // What bounds a shell is the sandbox it runs under, not this check.
     expect(insideScope("bash", { command: "bun test" }, root)).toBe(false);
     expect(insideScope("some-tool", {}, root)).toBe(false);
+    expect(insideScope("write", {}, root)).toBe(false);
+  });
+
+  test("only an edit-like call is inside", () => {
+    expect(insideScope("bash", { command: "rm -rf src", path: join(root, "src") }, root)).toBe(false);
+    expect(insideScope("bash_readonly", { command: "cat src/a.ts", path: "src/a.ts" }, root)).toBe(false);
+    expect(insideScope("subagent", { agent: "a", task: "t", path: join(root, "src") }, root)).toBe(false);
   });
 });
 
