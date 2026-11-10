@@ -75,6 +75,26 @@ policy, so it neither counts toward the stop nor is written as a denial, and it 
 reset the row either: only a call that runs does. The tool result still says they refused.
 A `patch` dry run writes nothing but is still a judged call, so a stopped run refuses it.
 
+### Inside a subagent
+
+A subagent inherits none of your dialogs: the parent would have to answer them, and a relayed
+dialog is still a dialog. So a child resolves under `scoped`, with the directory it was
+started in as the scope, and nothing it does can reach a dialog, including when auto-classify
+is off, which refuses instead of asking. Two classes return before the band, so they escape
+this scope: a call the mode allows outright (a trust-project write inside the git root, most
+calls in allow-all), and a tool the gate auto-allows (`review` writes a tree object and its own
+ledger). A sandboxed shell is bounded by its profile instead, whose writable roots are the temp
+directory. Reads reach anywhere outside the credential paths.
+
+What that allows: an edit, write or patch whose every target path is inside that directory, run
+when the classifier backs it (no fired egress, and factor scores present for a risky verdict),
+and reads, except the credential paths below. What it refuses: a target outside that directory
+whatever the verdict, a credential or secret path, a dangerous call, a call that sends content
+off the machine, and a risky shell command, because a shell's reach cannot be proven from its
+arguments. A safe shell runs: it changes nothing, so there is no effect to confine. A child that
+needs risky shell work runs it under a sandbox (`sandbox-bash`), which the gate already treats as
+confined.
+
 ### Classifier
 
 The confirm dialog and auto-classify share one classifier. A decisions model
@@ -224,8 +244,8 @@ expired rather than claiming a refusal, carries the classification the dialog wa
 unanswered dialogs in a row tell the model the user appears to be away and to stop and report.
 
 `PI_GATE_DIALOG_TIMEOUT_SECONDS` sets the deadline (`0` waits forever); `/permissions` cycles the saved
-value. A relayed dialog (a subagent's non-tui session) passes pi's own timeout, which counts down from
-open and cannot see keystrokes.
+value. A dialog in a mode without a TUI counts down from open and cannot see keystrokes; a
+subagent's band is `scoped`, so it never gets one.
 
 ## Session rules
 
@@ -254,9 +274,9 @@ The last one is the two gates' own state: this gate's settings, the review gate'
 switch, exemptions, hook trust and ledger. A write there changes what a gate does,
 which is why the classifier never resolves it.
 
-For a subagent, `read` and `grep` on those paths confirm too — they run in the agent
-process, where the confined shell's profile does not reach. `.env` is exempt: the shell
-allows it, so a prompt would buy nothing. The main session's reads are not gated.
+For a subagent, `read` and `grep` on those paths are refused instead: they run in the agent
+process, where the confined shell's profile does not reach. `.env` is exempt, since the shell
+allows it. The main session's reads are not gated.
 
 ## tirith integration (optional, bash only)
 

@@ -77,6 +77,7 @@ import {
   findGitRoot,
   type GateState,
   hasShellEscalation,
+  insideScope,
   isClassifierFloor,
   MODE_CYCLE,
   MODE_DESCRIPTIONS,
@@ -296,8 +297,14 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
     pi.appendEntry("permission_gate", classificationEntry(toolName, toolCallId, result, state.mode, band));
   }
 
-  /** The band a call is resolved under: a bound UI means a dialog can be asked. */
+  /**
+   * The band a call is resolved under. A subagent never gets a dialog, whatever UI the
+   * parent relays: it runs `scoped`, so its scope bound comes from `insideScope` and
+   * `noDialog` can return nothing but allow or block. A UI means the user can be asked;
+   * no UI means nobody is there.
+   */
   function bandFor(ctx: ExtensionContext): Band {
+    if (process.env.PI_SUBAGENT === "1") return "scoped";
     return ctx.hasUI ? "supervised" : "unattended";
   }
 
@@ -475,8 +482,8 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
   }
 
   /**
-   * The dialog in a mode without a TUI: pi's own confirm, relayed to the parent terminal by
-   * the subagent extension. It has no touch hook, so it counts down from open.
+   * The dialog in a mode without a TUI: pi's own confirm. A subagent never reaches it, since
+   * its band is `scoped`. It has no touch hook, so it counts down from open.
    */
   async function confirmOverRpc(
     ctx: ExtensionContext,
@@ -521,15 +528,11 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
     toolName?: string,
     toolCallId?: string,
   ): Promise<ConfirmResult> {
-    // In non-TUI modes (rpc/print/json), ctx.ui.custom() returns undefined — no
-    // TUI to render the multi-option dialog. Fall back to ctx.ui.confirm(), which
-    // works over RPC (relayed to the parent TUI by the subagent extension) and
-    // returns a boolean. Can't show diff/explanation or multi-option choices here.
-    //
-    // Guard on ctx.mode, NOT ctx.hasUI: hasUI is true in RPC mode by design
-    // (confirm/select/input work there), but custom() does not. Guarding on
-    // !ctx.hasUI skipped this branch in subagents, so confirm() fell through to
-    // custom() → undefined → crash in handleDialogAutoToggle (toggledAutoClassify).
+    // In non-TUI modes (rpc/print/json), ctx.ui.custom() returns undefined — no TUI
+    // to render the multi-option dialog. Fall back to ctx.ui.confirm(), which works
+    // over RPC and returns a boolean. Can't show diff/explanation or multi-option
+    // choices here. Guard on ctx.mode, not ctx.hasUI: hasUI is true in RPC mode by
+    // design (confirm/select/input work there), but custom() does not.
     const timeoutSeconds = dialogTimeoutSeconds();
     let result: ConfirmResult;
     if (ctx.mode !== "tui") {
@@ -1036,9 +1039,8 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
     // `read` and `grep` run in the agent process, where the seatbelt profile cannot
     // reach: a delegated agent could pull a credential into its context — and from
     // there to the model provider — with no prompt at all. Subagents only; in the
-    // main session the user is present and reading those files is deliberate. The
-    // child's confirm is relayed to the parent TUI, so this is a prompt, not a
-    // silent allow.
+    // main session the user is present and reading those files is deliberate. A
+    // child's band is `scoped`, so this confirm is refused rather than asked.
     if (process.env.PI_SUBAGENT === "1") {
       const sensitiveRead = sensitiveReadDecision(
         event.toolName,
@@ -1089,21 +1091,25 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
       return undefined;
     }
 
+    // The band decides the path, not `hasUI`: a subagent has a UI bound (its parent
+    // relays dialogs) and must still never open one, so it resolves like a run with
+    // nobody there, inside its own scope.
+    const band = bandFor(ctx);
+
     // A tripped breaker ends the run's confirm-reaching work. Reads and session rules
     // returned above, so this only catches a call that would have been judged.
     if (state.stopped) {
       const stopped = "permission-gate did not classify this call: the run is stopped.";
-      return deny(ctx, event, tirithFacts ? `${stopped}\n${tirithFacts}` : stopped, bandFor(ctx), false);
+      return deny(ctx, event, tirithFacts ? `${stopped}\n${tirithFacts}` : stopped, band, false);
     }
 
     if (decision.action === "block") {
-      return deny(ctx, event, decision.reason ?? "Blocked by permission gate", bandFor(ctx));
+      return deny(ctx, event, decision.reason ?? "Blocked by permission gate", band);
     }
 
     // action === "confirm"
-    // RPC mode subagents use ctx.ui.confirm()/select()/input() which emit
-    // extension_ui_request events. The subagent extension relays these to the
-    // parent's TUI and sends back extension_ui_response on stdin.
+    // What follows is the supervised path only: a subagent's band is `scoped`, which already
+    // returned above, so a gate dialog can never be relayed to the parent's TUI.
     const input = event.input as Record<string, unknown>;
 
     // Compute diff/preview early -- used by the patch bypass, auto-classify,
@@ -1127,7 +1133,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
 
     // patch: skip only dry runs + doomed edits (no write happens). If preview
     // was unavailable, fall through to confirm without a diff — never allow.
-    // Runs before the hasUI check so dryRun/doomed skip works in -p mode.
+    // Runs before the no-dialog branch so dryRun/doomed skip works in -p mode.
     if (event.toolName === "patch") {
       const isDryRun = (input as Record<string, unknown>).dryRun === true;
       if (isDryRun) return undefined;
@@ -1137,7 +1143,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
       }
     }
 
-    if (!ctx.hasUI) {
+    if (band !== "supervised") {
       const blockReason = nonInteractiveBlockReason(event.toolName);
       // A floor still owes the model the reason it was stopped.
       const withTirithFacts = (reason: string) => (tirithFacts ? `${reason}\n${tirithFacts}` : reason);
@@ -1165,22 +1171,24 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         );
         classified = await classifyOnce(ctx, event.toolName, description, key, containerFacts);
       }
-      const resolution = nonInteractiveResolution(decision, classified, state.mode, policy);
+      // The scope fact the `scoped` band reads; `unattended` does not ask for one.
+      const confined = band === "scoped" ? insideScope(event.toolName, input, ctx.cwd) : false;
+      const resolution = nonInteractiveResolution(decision, classified, state.mode, band, confined, policy);
       if (classified) {
         const advised = adviceInterception(classified.advices, resolution.action);
         if (advised) {
-          recordClassification(event.toolName, event.toolCallId, classified, bandFor(ctx));
-          return deny(ctx, event, withTirithFacts(advised.reason), bandFor(ctx));
+          recordClassification(event.toolName, event.toolCallId, classified, band);
+          return deny(ctx, event, withTirithFacts(advised.reason), band);
         }
       }
 
       if (resolution.action === "allow") {
-        recordClassification(event.toolName, event.toolCallId, classified, bandFor(ctx));
+        recordClassification(event.toolName, event.toolCallId, classified, band);
         if (tirithFacts) addResultNote(event.toolCallId, tirithFacts);
         return undefined;
       }
-      if (classified) recordClassification(event.toolName, event.toolCallId, classified, bandFor(ctx));
-      return deny(ctx, event, withTirithFacts(resolution.reason), bandFor(ctx));
+      if (classified) recordClassification(event.toolName, event.toolCallId, classified, band);
+      return deny(ctx, event, withTirithFacts(resolution.reason), band);
     }
 
     // Facts about the world the call reaches, appended to the classifier's state.
@@ -1193,7 +1201,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
     // Auto-classify: call sidecar before showing dialog. Resolution composes the
     // deterministic decision with the verdict (autoResolve), so a floor the gate
     // set is not the classifier's to resolve. The no-dialog path above uses the
-    // same classifier with the unattended bands.
+    // same classifier with the band this run resolves under.
     if (state.autoClassify === "on" && classifierConfigured() && !tirithHoldsDecision) {
       const { description, key } = classifierInput(
         event.toolName,
@@ -1210,10 +1218,10 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
           decision,
           { verdict: result.verdict, short: result.short, factors: result.factors },
           state.mode,
-          bandFor(ctx),
+          band,
         );
       const autoAllow = (result: ExplanationResult, tag: string) => {
-        recordClassification(event.toolName, event.toolCallId, result, bandFor(ctx));
+        recordClassification(event.toolName, event.toolCallId, result, band);
         state.autoAllowLog.push({
           toolName: event.toolName,
           description,
@@ -1230,14 +1238,14 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         const resolution = resolve(cached);
         const advised = adviceInterception(cached.advices, resolution.action);
         if (advised) {
-          recordClassification(event.toolName, event.toolCallId, cached, bandFor(ctx));
-          return deny(ctx, event, advised.reason, bandFor(ctx));
+          recordClassification(event.toolName, event.toolCallId, cached, band);
+          return deny(ctx, event, advised.reason, band);
         }
         if (resolution.action === "allow") {
           autoAllow(cached, " (cached)");
           return undefined;
         }
-        if (resolution.action === "block") return deny(ctx, event, resolution.reason, bandFor(ctx));
+        if (resolution.action === "block") return deny(ctx, event, resolution.reason, band);
         return await showConfirmDialog(
           ctx,
           event,
@@ -1258,14 +1266,14 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         const resolution = resolve(explResult);
         const advised = adviceInterception(explResult.advices, resolution.action);
         if (advised) {
-          recordClassification(event.toolName, event.toolCallId, explResult, bandFor(ctx));
-          return deny(ctx, event, advised.reason, bandFor(ctx));
+          recordClassification(event.toolName, event.toolCallId, explResult, band);
+          return deny(ctx, event, advised.reason, band);
         }
         if (resolution.action === "allow") {
           autoAllow(explResult, "");
           return undefined;
         }
-        if (resolution.action === "block") return deny(ctx, event, resolution.reason, bandFor(ctx));
+        if (resolution.action === "block") return deny(ctx, event, resolution.reason, band);
         // Not auto-allowed -- fall through to dialog with pre-loaded explanation
         return await showConfirmDialog(
           ctx,

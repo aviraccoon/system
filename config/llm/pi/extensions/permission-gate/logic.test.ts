@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   autoResolve,
@@ -16,6 +16,7 @@ import {
   type GateDecision,
   type GateState,
   hasShellEscalation,
+  insideScope,
   isBashAllowed,
   isClassifierFloor,
   isInsideDir,
@@ -509,6 +510,11 @@ describe("resolveFilePath", () => {
 
   test("keeps absolute path", () => {
     expect(resolveFilePath("/tmp/file.txt", "/project")).toBe("/tmp/file.txt");
+  });
+
+  test("expands ~ and file:// the way the write tools do", () => {
+    expect(resolveFilePath("~/notes/x.md", "/project")).toBe(`${homedir()}/notes/x.md`);
+    expect(resolveFilePath("file:///etc/hosts", "/project")).toBe("/etc/hosts");
   });
 });
 
@@ -1167,7 +1173,8 @@ describe("autoResolve: the scoped band", () => {
     expect(resolve(confirm("write"), risky({ mutates_state: 0.9 }), true).action).toBe("allow");
     const outside = resolve(confirm("write"), risky({ mutates_state: 0.9 }));
     expect(outside.action).toBe("block");
-    expect(outside.reason).toContain("not confined to the run's scope");
+    // A path target outside the scope is refused by its own branch, before any verdict rule.
+    expect(outside.reason).toContain("outside the run's scope");
   });
 
   test("egress denies inside the scope too, since no scope bounds it", () => {
@@ -1220,49 +1227,117 @@ describe("nonInteractiveResolution", () => {
   const policy = { classifier: true, floor: false, blockReason: "blocked in non-interactive mode" };
   const safe = { verdict: "safe" as const, short: "nothing fired" };
   const dangerous = { verdict: "dangerous" as const, short: "history_rewrite 0.9" };
+  /** The headless band and an unproven scope; the child cases pass their own. */
+  const resolve = (
+    decision: GateDecision,
+    classified: { verdict: "safe" | "risky" | "dangerous"; short: string } | null,
+    mode: "careful" | "trust-project" | "allow-all",
+    answers = policy,
+    band: "unattended" | "scoped" = "unattended",
+    confined = false,
+  ) => nonInteractiveResolution(decision, classified, mode, band, confined, answers);
 
   test("a safe verdict runs the call", () => {
-    expect(nonInteractiveResolution(confirm("bash"), safe, "careful", policy).action).toBe("allow");
+    expect(resolve(confirm("bash"), safe, "careful").action).toBe("allow");
   });
 
   test("a dangerous verdict blocks with the factor line", () => {
-    const r = nonInteractiveResolution(confirm("bash"), dangerous, "careful", policy);
+    const r = resolve(confirm("bash"), dangerous, "careful");
     expect(r.action).toBe("block");
     expect(r.reason).toContain("history_rewrite 0.9");
   });
 
   test("with auto-classify off the blanket block stands, even for a safe verdict", () => {
-    const r = nonInteractiveResolution(confirm("bash"), safe, "careful", { ...policy, classifier: false });
+    const r = resolve(confirm("bash"), safe, "careful", { ...policy, classifier: false });
     expect(r).toEqual({ action: "block", reason: policy.blockReason });
   });
 
   test("a tirith floor blocks a safe verdict too", () => {
-    const r = nonInteractiveResolution(confirm("bash"), safe, "careful", { ...policy, floor: true });
+    const r = resolve(confirm("bash"), safe, "careful", { ...policy, floor: true });
     expect(r).toEqual({ action: "block", reason: policy.blockReason });
   });
 
   test("no verdict blocks with the headless sentence in front of the shared denial", () => {
-    const r = nonInteractiveResolution(confirm("bash"), null, "careful", policy);
+    const r = resolve(confirm("bash"), null, "careful");
     expect(r.action).toBe("block");
     const shared = autoResolve(confirm("bash"), null, "careful", "unattended").reason;
     expect(r.reason).toBe(`${policy.blockReason} ${shared}`);
   });
 
   test("the sensitive floor blocks even when the verdict is safe, with the floor's reason", () => {
-    const r = nonInteractiveResolution(confirm("sensitive"), safe, "trust-project", policy);
+    const r = resolve(confirm("sensitive"), safe, "trust-project");
     expect(r.action).toBe("block");
     expect(r.reason).toContain("credential");
     // The floor's reason, not "no verdict", even when nothing was classified.
-    expect(nonInteractiveResolution(confirm("sensitive"), null, "trust-project", policy).reason).toContain(
-      "credential",
-    );
+    expect(resolve(confirm("sensitive"), null, "trust-project").reason).toContain("credential");
   });
 
   test("a deterministic allow or block needs no classifier", () => {
     const off = { ...policy, classifier: false };
-    expect(nonInteractiveResolution({ action: "allow" }, null, "careful", off).action).toBe("allow");
-    const blocked = nonInteractiveResolution({ action: "block", reason: "tirith" }, null, "careful", off);
+    expect(resolve({ action: "allow" }, null, "careful", off).action).toBe("allow");
+    const blocked = resolve({ action: "block", reason: "tirith" }, null, "careful", off);
     expect(blocked.reason).toBe("tirith");
+  });
+
+  test("a safe verdict on a path target outside the scope is refused", () => {
+    // The band's promise cannot depend on the edit floor: a safe verdict reaching a path
+    // confirmation is still an effect, and the scope fact is read before the safe allow.
+    const r = resolve(confirm("write"), safe, "careful", undefined, "scoped", false);
+    expect(r.action).toBe("block");
+    expect(r.reason).toContain("outside the run's scope");
+  });
+
+  test("a child's scoped band confines a risky call the unattended band would run", () => {
+    const risky = { verdict: "risky" as const, short: "mutates_state 0.9", factors: { mutates_state: 0.9 } };
+    expect(resolve(confirm("write"), risky, "careful").action).toBe("allow");
+    expect(resolve(confirm("write"), risky, "careful", policy, "scoped", false).action).toBe("block");
+    expect(resolve(confirm("write"), risky, "careful", policy, "scoped", true).action).toBe("allow");
+  });
+});
+
+describe("insideScope", () => {
+  const root = "/project";
+
+  test("every target path inside the root is inside", () => {
+    expect(insideScope("write", { path: "src/app.ts" }, root)).toBe(true);
+    expect(insideScope("write", { path: "@src/app.ts" }, root)).toBe(true);
+    expect(insideScope("patch", { edits: [{ path: "a.ts" }, { path: "b.ts" }] }, root)).toBe(true);
+  });
+
+  test("one path outside makes the whole call outside", () => {
+    expect(insideScope("write", { path: "../elsewhere/x.ts" }, root)).toBe(false);
+    // Mixed: one inside, one outside. `every` denies; `some` would allow it.
+    expect(insideScope("patch", { edits: [{ path: "a.ts" }, { path: "/etc/hosts" }] }, root)).toBe(false);
+  });
+
+  test("a link inside the root that points outside it is outside", () => {
+    const base = mkdtempSync(join(tmpdir(), "scope-"));
+    try {
+      const project = join(base, "project");
+      mkdirSync(project);
+      mkdirSync(join(base, "outside"));
+      symlinkSync(join(base, "outside"), join(project, "link"));
+      expect(insideScope("write", { path: join(project, "link", "x.ts") }, project)).toBe(false);
+      // `..` applies to the link target, not to the string: the kernel lands this outside.
+      expect(insideScope("write", { path: `${project}/link/../escaped.txt` }, project)).toBe(false);
+      // A URL target is a path, not a filename starting with "file:".
+      expect(insideScope("write", { path: `file://${project}/x.ts` }, project)).toBe(true);
+      expect(insideScope("write", { path: "file:///etc/hosts" }, project)).toBe(false);
+      expect(insideScope("write", { path: join(project, "x.ts") }, project)).toBe(true);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test("a ~ path is not a directory under the root", () => {
+    // The write tools expand `~`, so reading it as a relative name would call home inside.
+    expect(insideScope("write", { path: "~/notes/x.md" }, root)).toBe(false);
+  });
+
+  test("a call that names no path cannot be proven inside", () => {
+    // What bounds a shell is the sandbox it runs under, not this check.
+    expect(insideScope("bash", { command: "bun test" }, root)).toBe(false);
+    expect(insideScope("some-tool", {}, root)).toBe(false);
   });
 });
 

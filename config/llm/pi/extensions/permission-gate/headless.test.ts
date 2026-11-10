@@ -1,6 +1,7 @@
 /**
- * The tool_call handler driven through the real extension: with no UI the
- * unattended band decides a confirmation, with a UI the supervised one does.
+ * The tool_call handler driven through the real extension, one band at a time: with no UI
+ * the unattended band decides a confirmation, with a UI the supervised one does, and with
+ * `subagent` set the scoped one does and no dialog may open.
  *
  * A real session and a real handler come from the harness. Most cases inject the
  * classifier, because the real one needs a decisions model and a provider key;
@@ -45,9 +46,11 @@ type HeadlessOptions = VerdictOption & {
   tools?: string[];
   /** Register the gate with no classifier seam, so it must find a backend itself. */
   noSeam?: boolean;
-  /** Bind a UI context, so the supervised paths decide instead of the unattended ones. An
-   *  answer set also answers the gate's dialogs. */
+  /** Bind a UI context, so a UI-bound run takes the supervised path, unless `subagent`
+   *  makes it `scoped`. An answer set also answers the gate's dialogs. */
   ui?: boolean | HarnessAnswers;
+  /** Run the gate as a spawned child sees it: `PI_SUBAGENT=1`, band `scoped`. */
+  subagent?: boolean;
   /** Files to create in the session cwd before the run. */
   files?: Record<string, string>;
   responses?: Array<ScriptedResponse | string>;
@@ -83,7 +86,7 @@ const PROVIDER_KEYS = ["OPENROUTER_API_KEY", "ZAI_API_KEY", "OPENAI_API_KEY", "A
  * gone, and a failing `tirith` first on PATH so an installed one cannot grade a
  * call. The roles file is this machine's; no case may depend on what it names.
  */
-function isolateEnvironment(dir: string, pathPrefix?: string): () => void {
+function isolateEnvironment(dir: string, pathPrefix?: string, subagent = false): () => void {
   const bin = join(dir, "bin");
   mkdirSync(bin);
   // A tirith that fails detection, so an installed one cannot grade a call.
@@ -92,9 +95,11 @@ function isolateEnvironment(dir: string, pathPrefix?: string): () => void {
   chmodSync(stub, 0o755);
   const savedPath = process.env.PATH;
   const saved: Record<string, string | undefined> = {};
-  for (const key of [...PROVIDER_KEYS, "PI_JEV"]) saved[key] = process.env[key];
+  for (const key of [...PROVIDER_KEYS, "PI_JEV", "PI_SUBAGENT"]) saved[key] = process.env[key];
   process.env.PATH = [pathPrefix, bin, savedPath].filter(Boolean).join(":");
   process.env.PI_JEV = "on";
+  if (subagent) process.env.PI_SUBAGENT = "1";
+  else delete process.env.PI_SUBAGENT;
   for (const key of PROVIDER_KEYS) delete process.env[key];
   return () => {
     process.env.PATH = savedPath;
@@ -115,7 +120,7 @@ async function headless(options: HeadlessOptions, body: (run: Run) => void): Pro
   );
   const classifierCalls: string[] = [];
   const queued = "verdicts" in options && options.verdicts ? [...options.verdicts] : null;
-  const restoreEnvironment = isolateEnvironment(dir, options.pathPrefix);
+  const restoreEnvironment = isolateEnvironment(dir, options.pathPrefix, options.subagent === true);
   let harness: Harness | undefined;
   try {
     harness = await createHarness({
@@ -284,6 +289,82 @@ describe("the denial breaker", () => {
       expect(deniedEntries(harness).map((entry) => entry.consecutive)).toEqual([1, 2, 3, 3]);
       const warnings = (harness.ui?.notifications ?? []).filter((note) => note.message.includes("stopped this run"));
       expect(warnings).toHaveLength(1);
+    });
+  });
+});
+
+describe("a subagent", () => {
+  const write = (path: string) => ({
+    toolCalls: [{ name: "write", arguments: { path, content: "x\n" } }],
+  });
+  const risky = [
+    { verdict: "risky" as const, short: "mutates_state 0.90", detail: "", factors: { mutates_state: 0.9 } },
+  ];
+  const child = { subagent: true, ui: {}, tools: ["bash", "write"] };
+
+  test("a write inside its cwd runs under the scoped band, with no dialog", async () => {
+    await headless({ verdicts: risky, ...child, responses: [write("in.txt"), "done"] }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "in.txt"))).toBe(true);
+      expect(harness.ui?.dialogs).toEqual([]);
+      expect(classifiedEntries(harness).map((entry) => entry.band)).toEqual(["scoped"]);
+    });
+  });
+
+  test("a write outside its cwd is refused with the scope reason, and still no dialog", async () => {
+    await headless({ verdicts: risky, ...child, responses: [write("../outside.txt"), "done"] }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "..", "outside.txt"))).toBe(false);
+      expect(resultText(harness)).toContain("outside the run's scope");
+      expect(harness.ui?.dialogs).toEqual([]);
+      expect(deniedEntries(harness).map((entry) => entry.band)).toEqual(["scoped"]);
+    });
+  });
+
+  test("a risky shell call is refused, since no path check can bound a shell", async () => {
+    await headless(
+      {
+        verdicts: [{ verdict: "risky", short: "runs_local_code 0.90", detail: "", factors: { runs_local_code: 0.9 } }],
+        ...child,
+        responses: ONE_CALL,
+      },
+      ({ harness }) => {
+        expect(existsSync(join(harness.cwd, "out.txt"))).toBe(false);
+        expect(resultText(harness)).toContain("not confined to the run's scope");
+        expect(harness.ui?.dialogs).toEqual([]);
+      },
+    );
+  });
+
+  test("a path target outside the scope is refused whatever the verdict says", async () => {
+    // A write is an effect even when the classifier calls it safe, so the scope fact is
+    // read before the safe allow.
+    await headless(
+      {
+        verdicts: [{ verdict: "safe", short: "nothing fired", detail: "" }],
+        ...child,
+        responses: [write("../outside.txt"), "done"],
+      },
+      ({ harness }) => {
+        expect(existsSync(join(harness.cwd, "..", "outside.txt"))).toBe(false);
+        expect(resultText(harness)).toContain("outside the run's scope");
+        expect(harness.ui?.dialogs).toEqual([]);
+      },
+    );
+  });
+
+  test("a safe shell call runs, since a safe verdict has no effect to confine", async () => {
+    // Scope bounds what a call *changes*; a safe shell changes nothing. The sandbox, not
+    // this band, is what bounds a shell that does.
+    await headless({ verdict: SAFE, ...child, responses: ONE_CALL }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(true);
+      expect(harness.ui?.dialogs).toEqual([]);
+    });
+  });
+
+  test("with no classifier it refuses instead of asking", async () => {
+    await headless({ verdict: SAFE, ...child, autoClassify: "off", responses: ONE_CALL }, ({ harness }) => {
+      expect(existsSync(join(harness.cwd, "out.txt"))).toBe(false);
+      expect(resultText(harness)).toContain("non-interactive mode");
+      expect(harness.ui?.dialogs).toEqual([]);
     });
   });
 });

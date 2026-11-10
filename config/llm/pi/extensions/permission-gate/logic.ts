@@ -14,7 +14,9 @@
 
 import { execSync } from "node:child_process";
 import { readlinkSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { EGRESS_FACTOR, firedFactors } from "../shared/risk-factors";
 import { DEFAULT_DIALOG_TIMEOUT_SECONDS } from "./dialog-timeout";
@@ -424,9 +426,29 @@ export function hasShellEscalation(command: string): boolean {
   return false;
 }
 
-/** Resolve a file path, stripping leading @ that some models add. */
+/**
+ * Expand the path forms the tools accept before anything resolves them: a leading `@`, a
+ * `~` home prefix, and a `file://` URL. The write and edit tools accept all three, so a
+ * check that skips one reads a path that lands elsewhere as a name under the root.
+ */
+function expandPath(path: string): string {
+  let expanded = path.startsWith("@") ? path.slice(1) : path;
+  if (expanded === "~" || expanded.startsWith("~/")) expanded = join(homedir(), expanded.slice(1));
+  if (/^file:\/\//.test(expanded)) {
+    try {
+      expanded = fileURLToPath(expanded);
+    } catch {
+      // The tools throw on the same string, so no write happens with it either way.
+    }
+  }
+  return expanded;
+}
+
+/** Resolve a tool path to an absolute one without following links: the sensitive-path
+ * checks want the name the call wrote, and `insideScope` has its own component walker.
+ * A relative path resolves against `cwd`, never the process cwd. */
 export function resolveFilePath(path: string, cwd: string): string {
-  const cleaned = path.startsWith("@") ? path.slice(1) : path;
+  const cleaned = expandPath(path);
   return isAbsolute(cleaned) ? cleaned : resolve(cwd, cleaned);
 }
 
@@ -434,6 +456,54 @@ export function resolveFilePath(path: string, cwd: string): string {
  * may carry per-edit paths (multi-file) overriding the top-level path. */
 export function collectTargetPaths(toolName: string, input: Record<string, unknown>, cwd: string): string[] {
   return collectToolPaths(toolName, input).map((p) => resolveFilePath(p, cwd));
+}
+
+/**
+ * Where a raw tool path lands, one component at a time: a link is expanded before the
+ * next `..` is applied, which is how the kernel reads `link/../x` and where a lexical
+ * `resolve()` gets it wrong. A leading `@` is stripped as the tools do, and `~` expands
+ * to the home directory, since the write tools expand it too.
+ */
+function resolvedLocation(raw: string, base: string): string {
+  const expanded = expandPath(raw);
+  let resolved: string;
+  try {
+    resolved = isAbsolute(expanded) ? "/" : realpathSync(base);
+  } catch {
+    resolved = isAbsolute(expanded) ? "/" : resolve(base);
+  }
+  for (const part of expanded.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      resolved = dirname(resolved);
+      continue;
+    }
+    const next = join(resolved, part);
+    try {
+      resolved = realpathSync(next);
+    } catch {
+      resolved = next;
+    }
+  }
+  return resolved;
+}
+
+/** The scope fact the `scoped` band reads: is every path this call names inside `root`?
+ *
+ * Deterministic, and therefore the one part of the scope rule a model does not judge.
+ *  Raw paths are walked component by component, so `link/../x` lands where the kernel
+ *  would put it and a `~` is not read as a directory under the root. A call that names no
+ *  path at all cannot be proven inside, so it counts as outside. A shell is the important
+ *  case: it starts in the run's directory but is not bounded to it (`cd`, a redirect or a
+ *  `cp` leave it), and this gate refuses to parse shell text, so what bounds a shell is the
+ *  sandbox it runs under, not this check. The confined tool never reaches here at all; the
+ *  gate short-circuits it on `isConfinedBash`.
+ */
+export function insideScope(toolName: string, input: Record<string, unknown>, root: string): boolean {
+  const raw = collectToolPaths(toolName, input);
+  if (raw.length === 0) return false;
+  const realRoot = resolvedLocation(root, root);
+  return raw.every((path) => isInsideDir(resolvedLocation(path, root), realRoot));
 }
 
 /** Match a path against a glob pattern. Supports * and **. */
@@ -637,6 +707,19 @@ function noDialog(
       reason: `permission-gate denied this call: the risk classifier judged it dangerous (${classified.short}). This is a policy decision, not a tool failure. ${DENIAL_STOP}`,
     };
   }
+  // A path-targeting confirmation is an effect whatever the verdict says, and only the
+  // caller's scope fact bounds it. Read before the safe allow, or the band's promise sits in
+  // the classifier's hands instead.
+  if (
+    band === "scoped" &&
+    (decision.confirmType === "write" || decision.confirmType === "outside-project") &&
+    !confined
+  ) {
+    return {
+      action: "block",
+      reason: `permission-gate denied this call: it targets a path outside the run's scope (${classified.short}). ${DENIAL_STOP}`,
+    };
+  }
   if (classified.verdict === "safe") return { action: "allow", reason: classified.verdict };
   // RISKY from here on.
   if (band === "unattended") return { action: "allow", reason: classified.verdict };
@@ -723,31 +806,37 @@ export interface NonInteractivePolicy {
 }
 
 /**
- * A call with no dialog to answer: the classifier decides under the unattended
- * bands, and the blanket block stands whenever it cannot (turned off, no
- * backend, or a tirith floor that needs a human). A credential floor keeps the
- * reason `autoResolve` gives it. `autoResolve` owns the bands; this owns when
- * there is a verdict to apply at all.
+ * A call with no dialog to answer: the classifier decides under the band it is
+ * given, and the blanket block stands whenever it cannot (turned off, no backend,
+ * or a tirith floor that needs a human). A credential floor keeps the reason
+ * `autoResolve` gives it. `autoResolve` owns the bands; this owns when there is a
+ * verdict to apply at all.
+ *
+ * `scoped` is the band a subagent runs under, `unattended` the one a session with
+ * no UI binds; both must never reach a dialog, which is why the caller chooses
+ * this path from the band rather than from `hasUI`.
  */
 export function nonInteractiveResolution(
   decision: GateDecision,
   classified: ClassifiedCall | null,
   mode: Mode,
+  band: Exclude<Band, "supervised">,
+  confined: boolean,
   policy: NonInteractivePolicy,
 ): AutoResolution {
   // Anything already decided keeps the shared resolver's wording.
-  if (decision.action !== "confirm") return autoResolve(decision, classified, mode, "unattended");
+  if (decision.action !== "confirm") return autoResolve(decision, classified, mode, band, confined);
   if (policy.floor || !policy.classifier) return { action: "block", reason: policy.blockReason };
   // A credential or secret path is refused whatever the verdict says, so the
   // reason must be the floor's, not "no verdict".
-  if (isClassifierFloor(decision)) return autoResolve(decision, null, mode, "unattended");
+  if (isClassifierFloor(decision)) return autoResolve(decision, null, mode, band, confined);
   if (classified === null) {
-    // The shared unattended denial already says why and what not to do; name the
-    // headless path in front of it so the model knows a dialog was never an option.
-    const denied = autoResolve(decision, null, mode, "unattended");
+    // The shared denial already says why and what not to do; name the no-dialog
+    // path in front of it so the model knows a dialog was never an option.
+    const denied = autoResolve(decision, null, mode, band, confined);
     return { action: "block", reason: `${policy.blockReason} ${denied.reason}` };
   }
-  return autoResolve(decision, classified, mode, "unattended");
+  return autoResolve(decision, classified, mode, band, confined);
 }
 
 // ── Denial circuit breaker ──
