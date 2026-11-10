@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { listJobs, readJob } from "../shared/job-store";
 import { createJobBashTool, type JobResultDetails, type SessionContext, sessionEnv } from "./bash-tool";
-import { listJobs, readJob } from "./paths";
 import { isAlive, killJob } from "./runner";
 
 function tempDir(): string {

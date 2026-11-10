@@ -14,8 +14,8 @@
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { isSettled, newJobId, readJob, removeJob } from "../shared/job-store";
 import { abortOutcome, commandLabel, formatElapsed, tailWithNotice, timeoutNotice } from "./format";
-import { isSettled, newJobId, readJob, removeJob } from "./paths";
 import { foregroundWaitMs, killJob, readLog, type StartedJob, startJob, waitForExit } from "./runner";
 
 export const MAX_TIMEOUT_SECONDS = 3600;

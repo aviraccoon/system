@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { jobPaths, parseStatus, readJob } from "./paths";
+import { jobPaths, parseStatus, readJob } from "../shared/job-store";
 import { buildScript, foregroundWaitMs, isAlive, killJob, readLog, startJob, waitForExit } from "./runner";
 
 function tempDir(): string {

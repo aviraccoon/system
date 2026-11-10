@@ -3,7 +3,7 @@
  * log. Pure functions, so the CLI text and the overlay agree and both are testable without pi.
  */
 
-import { isSettled, type JobStatus } from "./paths";
+import { isSettled, type JobStatus } from "../shared/job-store";
 
 export interface JobView {
   id: string;

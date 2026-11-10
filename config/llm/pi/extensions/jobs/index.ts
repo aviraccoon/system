@@ -27,10 +27,24 @@ import * as fs from "node:fs";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { matchesKey, type TuiMouseEvent, type TuiMouseEventResult, truncateToWidth } from "@earendil-works/pi-tui";
 import { copyText, openFolder } from "../shared/host-actions";
+import {
+  appendStatus,
+  ensureJobsDir,
+  type JobRecord,
+  jobPaths,
+  jobsDir,
+  listJobs,
+  needsFinishStamp,
+  readJob,
+  removeJob,
+  shouldPrune,
+  stampMarker,
+} from "../shared/job-store";
 import { markPending } from "../shared/pending-work";
 import { isConfinedBash } from "../shared/sandbox";
 import { ScrollableText } from "../shared/scrollable-text";
 import { shortcutLabel } from "../shared/shortcuts";
+import { WakeLedger } from "../shared/wake-ledger";
 import { createJobBashTool, type JobResultDetails, type KillKind } from "./bash-tool";
 import {
   type BudgetLevel,
@@ -51,23 +65,9 @@ import {
   wakeSlices,
 } from "./format";
 import { DIALOG_RULE_ROWS, listBodyHeight, panelHeight, splitOutput, windowRows } from "./layout";
-import {
-  appendStatus,
-  ensureJobsDir,
-  type JobRecord,
-  jobPaths,
-  jobsDir,
-  listJobs,
-  needsFinishStamp,
-  readJob,
-  removeJob,
-  shouldPrune,
-  stampMarker,
-} from "./paths";
 import { isAlive, killJob, LOG_READ_LIMIT, readLog } from "./runner";
 import { cycleScope, hiddenFinished, type JobScope, scopeLabel, startedHere, visibleJobs } from "./scope";
 import { JOB_SHORTCUTS } from "./shortcuts";
-import { WakeLedger } from "./wakes";
 
 const FOOTER_KEY = "jobs";
 

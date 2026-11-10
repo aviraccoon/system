@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { WakeLedger } from "./wakes";
+import { WakeLedger } from "./wake-ledger";
 
 interface Wake {
   jobId: string;

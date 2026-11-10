@@ -13,7 +13,7 @@ import {
   removeJob,
   shouldPrune,
   stampMarker,
-} from "./paths";
+} from "./job-store";
 
 describe("jobsDir", () => {
   test("PI_JOBS_DIR wins", () => {

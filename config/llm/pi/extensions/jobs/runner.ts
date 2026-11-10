@@ -19,7 +19,7 @@ import {
   jobsDir,
   parseStatus,
   stampMarker,
-} from "./paths";
+} from "../shared/job-store";
 
 /** How long a call may stay in the foreground before it becomes a job. */
 export function foregroundWaitMs(env: NodeJS.ProcessEnv = process.env): number {
