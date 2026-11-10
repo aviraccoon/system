@@ -44,13 +44,12 @@ import { markPending } from "../shared/pending-work";
 import { isConfinedBash } from "../shared/sandbox";
 import { ScrollableText } from "../shared/scrollable-text";
 import { shortcutLabel } from "../shared/shortcuts";
-import { WakeLedger } from "../shared/wake-ledger";
+import { WakeDelivery } from "../shared/wake-delivery";
 import { createJobBashTool, type JobResultDetails, type KillKind } from "./bash-tool";
 import {
   type BudgetLevel,
   budgetView,
   commandBlock,
-  commandLabel,
   completionMessage,
   elapsedSeconds,
   formatBytes,
@@ -62,6 +61,7 @@ import {
   recordCount,
   statusLine,
   tailText,
+  viewTitle,
   wakeSlices,
 } from "./format";
 import { DIALOG_RULE_ROWS, listBodyHeight, panelHeight, splitOutput, windowRows } from "./layout";
@@ -123,6 +123,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
     return {
       id: record.id,
       command: record.command,
+      kind: record.kind,
       status: record.status,
       alive: isAlive(record.status.pid),
       logBytes: record.logBytes,
@@ -208,49 +209,22 @@ export default function jobsExtension(pi: ExtensionAPI): void {
     }, 50);
   }
 
-  const owed = new WakeLedger<Wake>((value) => value.jobId);
+  const delivery = new WakeDelivery(pi);
 
-  /**
-   * Send a completion and remember it. `sendMessage` has no receipt, so delivery is only known when
-   * the session shows the message; the loss that matters is an abort clearing the queue it waits in.
-   */
+  /** Send a completion, remembered until the session shows it. */
   function sendWake(wake: Wake): void {
-    owed.owe(wake);
-    try {
-      pi.sendMessage(
-        {
-          customType: "job-completion",
-          content: wake.message,
-          display: true,
-          details: {
-            jobId: wake.jobId,
-            exitCode: wake.exitCode,
-            ...(wake.timedOut ? { timedOut: true } : {}),
-            ...(wake.killed ? { killed: true } : {}),
-          } satisfies Partial<JobResultDetails>,
-        },
-        { triggerTurn: true, deliverAs: "steer" },
-      );
-    } catch {
-      /* the session is closing; the status file is the record either way */
-    }
+    delivery.send({
+      key: wake.jobId,
+      customType: "job-completion",
+      content: wake.message,
+      details: {
+        jobId: wake.jobId,
+        exitCode: wake.exitCode,
+        ...(wake.timedOut ? { timedOut: true } : {}),
+        ...(wake.killed ? { killed: true } : {}),
+      } satisfies Partial<JobResultDetails>,
+    });
   }
-
-  // A queued message is shown as it starts, which is the only delivery receipt a custom message has.
-  pi.on("message_start", (event) => {
-    const message = event.message;
-    if (message.role !== "custom" || message.customType !== "job-completion") return;
-    const jobId = (message.details as { jobId?: string } | undefined)?.jobId;
-    if (jobId !== undefined) owed.delivered(jobId);
-  });
-
-  // Escape aborts the run and clears the queue the wake is waiting in, without showing it anywhere.
-  // Re-send once at the first settle after an abort, which is also the moment that queue was emptied.
-  // A normal settle needs no retry: pi starts another run for a steer still in the queue.
-  pi.on("agent_settled", (event) => {
-    if (!event.aborted) return;
-    for (const wake of owed.takeForRetry()) sendWake(wake);
-  });
 
   /**
    * Say a kill is coming before asking for it. The wrapper cannot report a killed job, and the exit
@@ -309,7 +283,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
     return views.map((v) => {
       const state = jobState(v.status, v.alive);
       const elapsed = formatElapsed(elapsedSeconds(v, now));
-      return `${v.id}  ${state.label.padEnd(9)}  ${elapsed.padStart(6)}  ${commandLabel(v.command, 60)}`;
+      return `${v.id}  ${state.label.padEnd(9)}  ${elapsed.padStart(6)}  ${viewTitle(v, 60)}`;
     });
   }
 
@@ -631,7 +605,7 @@ export default function jobsExtension(pi: ExtensionAPI): void {
           // be noticeable at a glance, and `3m50s/4m` inside an accent row says nothing.
           const pressure = pressureColor(budget?.level);
           const clockText = pressure === undefined ? paint(elapsed) : theme.fg(pressure, elapsed);
-          const head = `${paint(`${selected ? ">" : " "} ${v.id}  ${state.label.padEnd(9)}`)} ${clockText}  ${paint(commandLabel(v.command, room))}`;
+          const head = `${paint(`${selected ? ">" : " "} ${v.id}  ${state.label.padEnd(9)}`)} ${clockText}  ${paint(viewTitle(v, room))}`;
           return `${head}${tail ? paint(tail) : ""}`;
         }
 

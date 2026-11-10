@@ -1,8 +1,8 @@
 # Subagent
 
 Runs a task in a separate `pi` process with its own context window, and returns the answer through
-one tool result. The child reads, searches and runs tools on its own, and its permission gate never
-opens a dialog.
+one tool result, or with `background` a run id whose answer arrives later. The child reads, searches
+and runs tools on its own, and its permission gate never opens a dialog.
 
 ## What you need
 
@@ -92,6 +92,18 @@ only add the sandbox.
 A worker is single mode only: pass `task` and no `agent`, `tasks` or `chain`. Its model comes from
 the `subagent` role; with no such role, pi's default. It loads the gate and `agents-loader` like
 every child, and it gets the built-in tool set, so, unlike an agent file, it cannot narrow them.
+
+## Background runs
+
+`background: true` on a single-mode dispatch returns a run id instead of the answer. The completion
+arrives as a message; `subagent_wait` collects it early (ids or none, default 30s, and a timeout
+returns the current state rather than an error), and `subagent_close` stops a run. The run's record
+and output sit in `/jobs` beside shell jobs.
+
+A background run is not killed when your turn is interrupted; it ends with the session or a
+`/reload`, or when `subagent_close` names it. Five at once is refused.
+
+Run ids start with `s-`; shell job ids start with `j-`.
 
 ## Limits
 

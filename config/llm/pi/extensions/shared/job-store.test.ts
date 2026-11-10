@@ -8,12 +8,24 @@ import {
   listJobs,
   needsFinishStamp,
   newJobId,
+  newRunId,
   parseStatus,
   readJob,
   removeJob,
   shouldPrune,
   stampMarker,
 } from "./job-store";
+
+describe("the record kind", () => {
+  test("a status file's kind is kept, and an older record reads as a job", () => {
+    expect(parseStatus("kind=subagent\nstarted=5\n").kind).toBe("subagent");
+    expect(parseStatus("started=5\n").kind).toBeUndefined();
+  });
+
+  test("a run's transcript path is kept", () => {
+    expect(parseStatus("kind=subagent\nsession_file=/tmp/abc.jsonl\n").sessionFile).toBe("/tmp/abc.jsonl");
+  });
+});
 
 describe("jobsDir", () => {
   test("PI_JOBS_DIR wins", () => {
@@ -29,6 +41,10 @@ describe("newJobId", () => {
   test("is time-ordered and suffixed", () => {
     expect(newJobId(1_700_000_000_000, () => 0.5)).toMatch(/^j-[0-9a-z]+-[0-9a-f]{4}$/);
     expect(newJobId(1_700_000_000_000, () => 0)).not.toBe(newJobId(1_700_000_000_000, () => 0.9));
+  });
+
+  test("a run id has its own prefix", () => {
+    expect(newRunId(1_700_000_000_000, () => 0.5)).toMatch(/^s-[0-9a-z]+-[0-9a-f]{4}$/);
   });
 });
 

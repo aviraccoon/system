@@ -373,6 +373,7 @@ export function buildToolDescription(agents: AgentConfig[]): string {
     "Delegate tasks to specialized subagents with isolated context windows.",
     "Modes: single (agent + task), parallel (tasks array), chain (sequential with {previous} placeholder).",
     'Ad-hoc worker: pass spec: { instructions, bash? } with task instead of agent (single mode only, and no agent/tasks/chain). bash is "sandboxed" (default) or "normal".',
+    "Background: pass background: true with a single-mode dispatch to get a run id at once; subagent_wait collects it, subagent_close stops it, and the completion also arrives as a message.",
     'Default agent scope is "user": ~/.pi/agent/agents plus this project\'s private notes agents.',
     'Repo agents (.agents/agents, .pi/agents) need agentScope: "both" (or "project"), project trust, and (interactive sessions) a once-per-session confirmation.',
   ];

@@ -14,16 +14,22 @@ import * as os from "node:os";
 import * as path from "node:path";
 
 export interface JobStatus {
+  /** A background subagent run writes `subagent`; a shell job leaves it unset. */
+  kind?: string;
   startedAt?: number;
   pid?: number;
   exit?: number;
   finishedAt?: number;
   killed?: boolean;
   timedOut?: boolean;
-  /** The directory the command ran in; what scopes a job to a project in the footer and /jobs. */
+  /** Set when the run settled as a failure, including a child that exited 0 (a turn cap). */
+  failed?: boolean;
+  /** The directory the run belongs to; the panel's scope cycle filters by it. */
   cwd?: string;
   /** The pi session that started it. Lets /jobs say `@other` and keeps bulk actions local. */
   session?: string;
+  /** A subagent run's transcript, under `~/.pi/agent/subagent-sessions/`. */
+  sessionFile?: string;
   /** The budget the caller declared, in seconds. /jobs shows how much of it is spent. */
   budgetSeconds?: number;
 }
@@ -41,6 +47,8 @@ export interface JobRecord {
   id: string;
   paths: JobPaths;
   status: JobStatus;
+  /** `status.kind`, or `job` when the writer left it unset (every shell job does). */
+  kind: string;
   logBytes: number;
   /** The command as the caller wrote it; `(unknown)` for a record from before this file existed. */
   command: string;
@@ -64,6 +72,11 @@ export function newJobId(now: number = Date.now(), random: () => number = Math.r
     .toString(16)
     .padStart(4, "0");
   return `j-${now.toString(36)}-${suffix}`;
+}
+
+/** A subagent run's id: the job shape under its own prefix, so an id says which kind it names. */
+export function newRunId(now: number = Date.now(), random: () => number = Math.random): string {
+  return newJobId(now, random).replace(/^j-/, "s-");
 }
 
 export function jobPaths(dir: string, id: string): JobPaths {
@@ -104,6 +117,10 @@ export function parseStatus(text: string): JobStatus {
     if (eq <= 0) continue;
     const key = line.slice(0, eq).trim();
     const value = line.slice(eq + 1).trim();
+    if (key === "kind") {
+      if (value) status.kind = value;
+      continue;
+    }
     if (key === "cwd") {
       if (value) status.cwd = value;
       continue;
@@ -112,10 +129,15 @@ export function parseStatus(text: string): JobStatus {
       if (value) status.session = value;
       continue;
     }
-    if (key === "killed" || key === "timed_out") {
+    if (key === "session_file") {
+      if (value) status.sessionFile = value;
+      continue;
+    }
+    if (key === "killed" || key === "timed_out" || key === "failed") {
       if (value === "1") {
         if (key === "killed") status.killed = true;
-        else status.timedOut = true;
+        else if (key === "timed_out") status.timedOut = true;
+        else status.failed = true;
       }
       continue;
     }
@@ -152,7 +174,8 @@ export function readJob(dir: string, id: string): JobRecord | undefined {
   } catch {
     /* the record survives a command file that does not */
   }
-  return { id, paths, status: parseStatus(text), logBytes: sizeOf(paths.log), command };
+  const status = parseStatus(text);
+  return { id, paths, status, kind: status.kind ?? "job", logBytes: sizeOf(paths.log), command };
 }
 
 /** Finished records age out after three days; a record whose death nothing observed ages out an hour

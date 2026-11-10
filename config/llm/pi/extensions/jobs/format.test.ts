@@ -16,6 +16,7 @@ import {
   statusLine,
   tailText,
   timeoutNotice,
+  viewTitle,
   wakeSlices,
 } from "./format";
 
@@ -23,12 +24,28 @@ function view(overrides: Partial<JobView> = {}): JobView {
   return {
     id: "j-1",
     command: "make build",
+    kind: "job",
     status: { startedAt: 1_000 },
     alive: true,
     logBytes: 0,
     ...overrides,
   };
 }
+
+describe("viewTitle", () => {
+  test("labels a subagent run and leaves a shell job bare", () => {
+    expect(viewTitle(view())).toBe("make build");
+    expect(viewTitle(view({ kind: "subagent", command: "check the diff" }))).toBe("subagent  check the diff");
+  });
+
+  test("never outgrows the width it was given", () => {
+    expect(viewTitle(view({ kind: "subagent", command: "x".repeat(200) }), 40)).toHaveLength(40);
+    expect(viewTitle(view({ command: "x".repeat(200) }), 40)).toHaveLength(40);
+    // At the narrowest rows the label is dropped rather than leaving no task to read.
+    expect(viewTitle(view({ kind: "subagent", command: "x".repeat(200) }), 10)).toHaveLength(10);
+    expect(viewTitle(view({ kind: "subagent", command: "check the diff" }), 13)).toBe("check the di…");
+  });
+});
 
 describe("formatElapsed", () => {
   test("seconds under a minute carry no zero padding", () => {
@@ -67,6 +84,20 @@ describe("jobState", () => {
 
   test("a record stamped finished without an exit is finished, not lost", () => {
     expect(jobState({ startedAt: 1_000, finishedAt: 1_010 }, false)).toEqual({ kind: "finished", label: "finished" });
+  });
+
+  test("a settled failure is a failure to the shell-job reader too", () => {
+    expect(jobFailed({ exit: 0, failed: true })).toBe(true);
+    expect(jobFailed({ exit: 0 })).toBe(false);
+  });
+
+  test("the footer labels a subagent run as one", () => {
+    const running = view({ id: "a", kind: "subagent", command: "check the diff", status: { startedAt: 1_000 } });
+    expect(statusLine([running], 1_010)).toBe("jobs 1 · subagent  check the diff 10s");
+  });
+
+  test("a settled failure outranks its exit code", () => {
+    expect(jobState({ exit: 0, finishedAt: 5, failed: true }, false)).toEqual({ kind: "failed", label: "failed" });
   });
 
   test("an exit code decides success", () => {

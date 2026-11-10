@@ -29,6 +29,7 @@ import {
   markShadowed,
   respectProjectTrust,
 } from "./agents";
+import { BackgroundRuns, clampWaitMs, singleRun } from "./background";
 import { planDispatch } from "./dispatch";
 import { journalPath, taskForChild } from "./journal-task";
 import { renderCall as renderCallFn, renderResult as renderResultFn, withSessionPaths } from "./render";
@@ -142,6 +143,12 @@ const SubagentParams = Type.Object({
       default: DEFAULT_MAX_TURNS,
     }),
   ),
+  background: Type.Optional(
+    Type.Boolean({
+      description:
+        "Return a run id at once instead of the answer (single mode only). The completion arrives as a message; subagent_wait collects it early, subagent_close stops it.",
+    }),
+  ),
   journal: Type.Optional(
     Type.String({
       description:
@@ -157,6 +164,7 @@ let toolEnabled = true;
 export default function subagentExtension(pi: ExtensionAPI) {
   // Repo roots whose confirmation was accepted this session.
   const acceptedRoots = new AcceptedRoots();
+  const backgroundRuns = new BackgroundRuns(pi);
 
   pi.on("session_start", async (_event, ctx) => {
     // A reload or resume re-instantiates the extension with the same session
@@ -235,6 +243,35 @@ export default function subagentExtension(pi: ExtensionAPI) {
             acceptedRoots.add(plan.confirm.root);
             pi.appendEntry(PROJECT_TRUST_ENTRY, { root: plan.confirm.root });
           }
+        }
+
+        // Background: a handle now, one wake later. Single mode only, because a chain or a batch
+        // would need a handle per run and a rule for what one wake means.
+        if (params.background) {
+          const once = singleRun(plan);
+          if ("error" in once) {
+            return { content: [{ type: "text", text: once.error }], details: makeDetails("single")([]) };
+          }
+          const started = backgroundRuns.start(ctx, {
+            agents: plan.runAgents,
+            agent: once.agent,
+            task: taskForChild(once.task, journal),
+            cwd: plan.singleCwd,
+            maxTurns: params.maxTurns ?? DEFAULT_MAX_TURNS,
+          });
+          if ("error" in started) {
+            return { content: [{ type: "text", text: started.error }], details: makeDetails("single")([]) };
+          }
+          const run = started.run;
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Background subagent ${run.id} started [${run.agent}]. You will be told when it finishes; do not poll or sleep. /jobs shows it.`,
+              },
+            ],
+            details: makeDetails("single")([]),
+          };
         }
 
         // Chain mode
@@ -485,6 +522,38 @@ export default function subagentExtension(pi: ExtensionAPI) {
 
       renderResult(result, { expanded, isPartial }, theme, _context) {
         return renderResultFn(result, { expanded, isPartial }, theme, _context);
+      },
+    });
+
+    pi.registerTool({
+      name: "subagent_wait",
+      label: "Wait for subagent",
+      description:
+        "Wait for background subagent runs. A timeout returns their current state, never an error; a finished run returns at once.",
+      parameters: Type.Object({
+        ids: Type.Optional(
+          Type.Array(Type.String(), {
+            description: "Run ids or unique prefixes. Omit for every run this session started.",
+          }),
+        ),
+        timeoutMs: Type.Optional(
+          Type.Integer({ minimum: 1000, maximum: 600000, description: "How long to wait. Default 30000." }),
+        ),
+      }),
+      async execute(_toolCallId, params) {
+        const { text } = await backgroundRuns.wait(params.ids, clampWaitMs(params.timeoutMs));
+        return { content: [{ type: "text", text }], details: undefined };
+      },
+    });
+
+    pi.registerTool({
+      name: "subagent_close",
+      label: "Close subagent run",
+      description: "Stop a background subagent run, or acknowledge one that finished. The run's record stays in /jobs.",
+      parameters: Type.Object({ id: Type.String({ description: "Run id or unique prefix." }) }),
+      async execute(_toolCallId, params) {
+        const { text } = backgroundRuns.close(params.id);
+        return { content: [{ type: "text", text }], details: undefined };
       },
     });
   }

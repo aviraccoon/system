@@ -8,6 +8,8 @@ import { isSettled, type JobStatus } from "../shared/job-store";
 export interface JobView {
   id: string;
   command: string;
+  /** `subagent` for a background dispatch, `job` for a shell command. */
+  kind: string;
   status: JobStatus;
   alive: boolean;
   logBytes: number;
@@ -22,6 +24,16 @@ export type JobStateKind = "running" | "ok" | "failed" | "killed" | "timedOut" |
 export interface JobState {
   kind: JobStateKind;
   label: string;
+}
+
+const SUBAGENT_PREFIX = "subagent  ";
+
+/** The list's subject: a subagent run is labelled, since its "command" is a task. The prefix is
+ *  charged to `width`, and dropped when it cannot fit, so the title never outgrows the row. */
+export function viewTitle(view: Pick<JobView, "kind" | "command">, width = 60): string {
+  // The label needs a few characters of task to say anything, or the row reads `subagent  …`.
+  const prefix = view.kind === "subagent" && SUBAGENT_PREFIX.length + 4 <= width ? SUBAGENT_PREFIX : "";
+  return prefix + commandLabel(view.command, Math.max(1, width - prefix.length));
 }
 
 /** `8s`, `3m12s`, `1h04m`, `2d3h`: the shape a person reads at a glance, never negative. */
@@ -49,6 +61,7 @@ export function formatElapsed(seconds: number): string {
  * alone: a status file left by a killed pi has no exit line.
  */
 export function jobState(status: JobStatus, alive: boolean): JobState {
+  if (status.failed) return { kind: "failed", label: "failed" };
   if (status.timedOut) return { kind: "timedOut", label: "timed out" };
   if (status.killed) return { kind: "killed", label: "killed" };
   if (status.exit === undefined) {
@@ -94,6 +107,7 @@ export function budgetView(status: JobStatus, nowSeconds: number): BudgetView | 
 
 /** A job that did not succeed: a non-zero exit, a kill, a timeout. */
 export function jobFailed(status: JobStatus): boolean {
+  if (status.failed === true) return true;
   if (status.killed === true || status.timedOut === true) return true;
   return status.exit !== undefined && status.exit !== 0;
 }
@@ -142,7 +156,7 @@ export function statusLine(views: JobView[], nowSeconds: number, cwd?: string): 
   if (inScope.length === 0) return elsewhere > 0 ? `jobs ${elsewhere} elsewhere` : undefined;
   const shown = inScope
     .slice(0, 2)
-    .map((v) => `${commandLabel(v.command, 24)} ${formatElapsed(elapsedSeconds(v, nowSeconds))}`)
+    .map((v) => `${viewTitle(v, 24)} ${formatElapsed(elapsedSeconds(v, nowSeconds))}`)
     .join(" · ");
   const more = inScope.length > 2 ? ` +${inScope.length - 2}` : "";
   const rest = elsewhere > 0 ? ` · +${elsewhere} elsewhere` : "";

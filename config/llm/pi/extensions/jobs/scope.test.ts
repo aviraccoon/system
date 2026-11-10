@@ -6,6 +6,7 @@ function view(overrides: Partial<JobView> = {}): JobView {
   return {
     id: "j-1",
     command: "make build",
+    kind: "job",
     status: { startedAt: 1_000 },
     alive: true,
     logBytes: 0,
