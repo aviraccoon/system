@@ -8,6 +8,7 @@ import {
   confirmBlockReason,
   contentFrameClose,
   contentFrameOpen,
+  denialEntry,
   describeToolCall,
   factorsToExplanation,
   findVerdictLine,
@@ -113,6 +114,25 @@ describe("classificationEntry", () => {
       detail: "thresholds: risky >= 0.50",
       mode: "trust-project",
       band: "scoped",
+    });
+  });
+});
+
+describe("denialEntry", () => {
+  test("carries the reason, the policy and the streak the breaker acted on", () => {
+    const entry = denialEntry("bash", "call_9", "no run scope bounds that", "careful", "unattended", {
+      consecutive: 3,
+      total: 4,
+    });
+    expect(entry).toEqual({
+      event: "denied",
+      toolCallId: "call_9",
+      toolName: "bash",
+      mode: "careful",
+      band: "unattended",
+      reason: "no run scope bounds that",
+      consecutive: 3,
+      total: 4,
     });
   });
 });

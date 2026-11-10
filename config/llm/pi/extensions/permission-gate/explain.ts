@@ -8,7 +8,7 @@ import { pluralLines, splitLines } from "../shared/diff";
 import { type FactorDecision, firedFactors, SEVERITY_DANGEROUS } from "../shared/risk-factors";
 import type { ExplanationVerdict } from "./confirm-ui";
 import { AWAY_AFTER_TIMEOUTS, formatDuration } from "./dialog-timeout";
-import { type Band, cacheKey, type ExplanationResult, type Mode } from "./logic";
+import { type Band, cacheKey, type DenialTracker, type ExplanationResult, type Mode } from "./logic";
 
 // ── Tool call description ──
 
@@ -350,6 +350,33 @@ export function classificationEntry(
     detail: result.detail,
     mode,
     band,
+  };
+}
+
+/**
+ * Session entry recording a refusal the gate's policy made, as opposed to one the
+ * user chose. The reason is the refusal itself; once the breaker trips, the tool
+ * result the model reads adds the stop sentence after it. The streak is what the
+ * breaker acted on, so a later reader can separate a run that stopped from one
+ * that kept running into the boundary.
+ */
+export function denialEntry(
+  toolName: string,
+  toolCallId: string,
+  reason: string,
+  mode: Mode,
+  band: Band,
+  streak: DenialTracker,
+) {
+  return {
+    event: "denied" as const,
+    toolCallId,
+    toolName,
+    mode,
+    band,
+    reason,
+    consecutive: streak.consecutive,
+    total: streak.total,
   };
 }
 

@@ -34,7 +34,7 @@
  * file's own test, which is the only kind of check that fails when pi changes the sequence.
  */
 
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stripVTControlCharacters } from "node:util";
@@ -360,6 +360,10 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
     const cwd = options.cwd ?? join(root, "cwd");
     // A supplied cwd is the test's own directory: create it only if the test did not.
     for (const dir of [agentDir, ...(options.cwd ? [] : [cwd])]) mkdirSync(dir, { recursive: true });
+    // The credential store creates this file lazily, and a dialog in a bound UI makes pi
+    // re-open it mid-run. Creating it up front keeps that read off the store's create path,
+    // which some sandboxes refuse with EPERM on this filename.
+    writeFileSync(join(agentDir, "auth.json"), "{}\n", { mode: 0o600 });
 
     const contexts: TranscriptContext[] = [];
     const responses = (options.responses ?? ["ok"]).map(normalize);

@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Harness, ScriptedResponse } from "../shared/testing/session-harness";
+import type { Harness, HarnessAnswers, ScriptedResponse } from "../shared/testing/session-harness";
 import type { ExplanationResult, Mode } from "./logic";
 
 // The suite runs against this machine's `roles.json`; each case sets its own
@@ -29,8 +29,13 @@ interface Run {
   classifierCalls: string[];
 }
 
-interface HeadlessOptions {
-  verdict: ExplanationResult | null;
+/** One verdict for every classified call, or a different one per call. */
+type VerdictOption =
+  | { verdict: ExplanationResult | null; verdicts?: never }
+  /** Consumed in order; the last one repeats. */
+  | { verdicts: Array<ExplanationResult | null>; verdict?: never };
+
+type HeadlessOptions = VerdictOption & {
   autoClassify?: "on" | "off";
   /** The saved gate mode; default `careful`. */
   mode?: Mode;
@@ -40,10 +45,13 @@ interface HeadlessOptions {
   tools?: string[];
   /** Register the gate with no classifier seam, so it must find a backend itself. */
   noSeam?: boolean;
-  /** Bind a UI context, so the supervised paths decide instead of the unattended ones. */
-  ui?: boolean;
+  /** Bind a UI context, so the supervised paths decide instead of the unattended ones. An
+   *  answer set also answers the gate's dialogs. */
+  ui?: boolean | HarnessAnswers;
+  /** Files to create in the session cwd before the run. */
+  files?: Record<string, string>;
   responses?: Array<ScriptedResponse | string>;
-}
+};
 
 const ONE_CALL: Array<ScriptedResponse | string> = [
   { toolCalls: [{ name: "bash", arguments: { command: "touch out.txt" } }] },
@@ -106,11 +114,12 @@ async function headless(options: HeadlessOptions, body: (run: Run) => void): Pro
     JSON.stringify({ mode: options.mode ?? "careful", autoClassify: options.autoClassify ?? "on" }),
   );
   const classifierCalls: string[] = [];
+  const queued = "verdicts" in options && options.verdicts ? [...options.verdicts] : null;
   const restoreEnvironment = isolateEnvironment(dir, options.pathPrefix);
   let harness: Harness | undefined;
   try {
     harness = await createHarness({
-      ui: options.ui ? {} : false,
+      ui: options.ui === undefined || options.ui === false ? false : typeof options.ui === "object" ? options.ui : {},
       tools: options.tools ?? ["bash"],
       extensions: [
         (pi) =>
@@ -121,13 +130,17 @@ async function headless(options: HeadlessOptions, body: (run: Run) => void): Pro
               : {
                   classifyCall: async (_ctx: unknown, toolName: string) => {
                     classifierCalls.push(toolName);
-                    return options.verdict;
+                    if (!queued) return ("verdict" in options ? options.verdict : null) ?? null;
+                    return queued.length > 1 ? (queued.shift() ?? null) : (queued[0] ?? null);
                   },
                 }),
           }),
       ],
       responses: options.responses ?? ONE_CALL,
     });
+    for (const [name, content] of Object.entries(options.files ?? {})) {
+      writeFileSync(join(harness.cwd, name), content);
+    }
     await harness.run("create the file");
     body({ harness, classifierCalls });
   } finally {
@@ -150,6 +163,130 @@ function classifiedEntries(harness: Harness): Array<Record<string, unknown>> {
     return custom.data?.event === "classified" ? [custom.data] : [];
   });
 }
+
+/** The `denied` entries the gate appended, in order. */
+function deniedEntries(harness: Harness): Array<Record<string, unknown>> {
+  return harness.session.sessionManager.getEntries().flatMap((entry) => {
+    const custom = entry as { type?: string; customType?: string; data?: Record<string, unknown> };
+    if (custom.type !== "custom" || custom.customType !== "permission_gate") return [];
+    return custom.data?.event === "denied" ? [custom.data] : [];
+  });
+}
+
+describe("the denial breaker", () => {
+  /** A verdict that auto-allows but whose advisory blocks, so the gate refuses by policy. */
+  const advisedSafe: ExplanationResult = {
+    verdict: "safe",
+    short: "nothing fired",
+    detail: "",
+    advices: { background: 0.9 },
+  };
+  const blockAnswer = { choice: "Block", note: "", explanation: null };
+  /** Four bash calls, then a read of a file the cwd already holds. */
+  const fourCalls: Array<ScriptedResponse | string> = [
+    { toolCalls: [{ name: "bash", arguments: { command: "touch a.txt" } }] },
+    { toolCalls: [{ name: "bash", arguments: { command: "touch b.txt" } }] },
+    { toolCalls: [{ name: "bash", arguments: { command: "touch c.txt" } }] },
+    { toolCalls: [{ name: "bash", arguments: { command: "touch d.txt" } }] },
+    { toolCalls: [{ name: "read", arguments: { path: "note.txt" } }] },
+    "done",
+  ];
+  const readRun = { tools: ["bash", "read"], files: { "note.txt": "hello\n" } };
+
+  test("three denials in a row stop the run, and the next call is never classified", async () => {
+    await headless({ verdicts: [DANGEROUS], ...readRun, responses: fourCalls }, ({ harness, classifierCalls }) => {
+      expect(existsSync(join(harness.cwd, "a.txt"))).toBe(false);
+      expect(
+        harness
+          .toolResults()
+          .slice(0, 4)
+          .every((result) => result.isError),
+      ).toBe(true);
+      expect(JSON.stringify(harness.toolResults()[3]?.result)).toContain("stopped this run");
+      // The stopped call is refused before spending a classification.
+      expect(classifierCalls).toHaveLength(3);
+      expect(deniedEntries(harness).map((entry) => entry.consecutive)).toEqual([1, 2, 3, 3]);
+      expect(deniedEntries(harness).at(-1)?.reason).toContain("the run is stopped");
+      // The stop ends judgment, not the session: a read still runs, unclassified.
+      expect(harness.toolResults()[4]?.isError).toBe(false);
+    });
+  });
+
+  test("an executed call ends the streak, so three denials spread apart do not stop it", async () => {
+    await headless(
+      { verdicts: [DANGEROUS, SAFE, DANGEROUS, DANGEROUS], responses: fourCalls },
+      ({ harness, classifierCalls }) => {
+        expect(existsSync(join(harness.cwd, "b.txt"))).toBe(true);
+        expect(classifierCalls).toHaveLength(4);
+        expect(deniedEntries(harness).map((entry) => entry.consecutive)).toEqual([1, 1, 2]);
+        expect(JSON.stringify(harness.toolResults()[3]?.result)).not.toContain("stopped this run");
+      },
+    );
+  });
+
+  test("a user's block in a dialog is not recorded as a denial and does not count", async () => {
+    await headless(
+      {
+        verdicts: [advisedSafe, DANGEROUS, advisedSafe, advisedSafe],
+        ui: { custom: [blockAnswer] },
+        responses: fourCalls,
+      },
+      ({ harness, classifierCalls }) => {
+        // Policy denial, user block, policy denial, policy denial: four classified
+        // calls, three denials, and the streak never restarts. A blocked call
+        // produces no tool result, so it neither counts nor ends the streak.
+        expect(deniedEntries(harness).map((entry) => entry.consecutive)).toEqual([1, 2, 3]);
+        expect(classifierCalls).toHaveLength(4);
+        expect(JSON.stringify(harness.toolResults()[1]?.result)).toContain("BLOCKED by user");
+        // The third policy denial is the one that trips; the block never counted.
+        expect(JSON.stringify(harness.toolResults()[3]?.result)).toContain("3 consecutive denials");
+      },
+    );
+  });
+
+  test("a stopped refusal repeats the streak that tripped, even after a read ran", async () => {
+    const tirith = fakeTirith(
+      '{"action":"block","findings":[{"severity":"CRITICAL","rule_id":"fake-rule","title":"fake finding","description":"x"}]}',
+    );
+    try {
+      await headless(
+        {
+          verdicts: [DANGEROUS],
+          pathPrefix: tirith.dir,
+          ...readRun,
+          responses: [
+            { toolCalls: [{ name: "bash", arguments: { command: "touch a.txt" } }] },
+            { toolCalls: [{ name: "bash", arguments: { command: "touch b.txt" } }] },
+            { toolCalls: [{ name: "bash", arguments: { command: "touch c.txt" } }] },
+            { toolCalls: [{ name: "read", arguments: { path: "note.txt" } }] },
+            { toolCalls: [{ name: "bash", arguments: { command: "touch d.txt" } }] },
+            "done",
+          ],
+        },
+        ({ harness }) => {
+          // Three CRITICAL-floored refusals trip the stop; the read then runs and resets
+          // the live counter, so the stopped refusal must log the trip's streak, not zero.
+          expect(deniedEntries(harness).map((entry) => entry.consecutive)).toEqual([1, 2, 3, 3]);
+          const stopped = JSON.stringify(harness.toolResults()[4]?.result);
+          expect(stopped).toContain("the run is stopped");
+          // A stopped refusal still carries the evidence that made the call risky.
+          expect(stopped).toContain("fake finding");
+        },
+      );
+    } finally {
+      tirith.cleanup();
+    }
+  });
+
+  test("a tripped stop tells the user once", async () => {
+    await headless({ verdicts: [advisedSafe], ui: {}, responses: fourCalls }, ({ harness, classifierCalls }) => {
+      expect(classifierCalls).toHaveLength(3);
+      expect(deniedEntries(harness).map((entry) => entry.consecutive)).toEqual([1, 2, 3, 3]);
+      const warnings = (harness.ui?.notifications ?? []).filter((note) => note.message.includes("stopped this run"));
+      expect(warnings).toHaveLength(1);
+    });
+  });
+});
 
 describe("a call with no dialog", () => {
   test("a safe verdict runs the call", async () => {

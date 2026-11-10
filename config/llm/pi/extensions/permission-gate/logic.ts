@@ -54,6 +54,12 @@ export interface GateState {
   classifyCache: Map<string, ExplanationResult>;
   /** Audit log of auto-allowed calls */
   autoAllowLog: AutoClassifyLog[];
+  /** Policy denials this session, for the circuit breaker. */
+  denials: DenialTracker;
+  /** The breaker's stop sentence once it tripped; null while the run may continue. */
+  stopped: string | null;
+  /** The streak as it stood when the stop tripped, so later refusals can record it. */
+  stoppedStreak: DenialTracker | null;
 }
 
 /** Classifier verdict plus the explanation lines, as cached and shown.
@@ -535,6 +541,9 @@ export function createInitialState(): GateState {
     toolOverrides: {},
     classifyCache: new Map<string, ExplanationResult>(),
     autoAllowLog: [],
+    denials: createDenialTracker(),
+    stopped: null,
+    stoppedStreak: null,
   };
 }
 
@@ -782,6 +791,13 @@ export function recordDenial(tracker: DenialTracker): { tripped: boolean; reason
 /** Any executed call resets the consecutive counter. */
 export function recordAllow(tracker: DenialTracker): void {
   tracker.consecutive = 0;
+}
+
+/** Clear the breaker's stop: the run may be judged again. The session's total goes with it. */
+export function clearDenialStop(state: GateState): void {
+  state.denials = createDenialTracker();
+  state.stopped = null;
+  state.stoppedStreak = null;
 }
 
 /**

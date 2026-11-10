@@ -58,6 +58,7 @@ import {
   classificationEntry,
   classifierInput,
   confirmBlockReason,
+  denialEntry,
   describeToolCall,
   factorsToExplanation,
   mergeExplanations,
@@ -70,6 +71,7 @@ import { collectFacts, hasContainerFacts } from "./facts";
 import {
   autoResolve,
   type Band,
+  clearDenialStop,
   createInitialState,
   decide,
   findGitRoot,
@@ -81,6 +83,8 @@ import {
   MODE_LABELS,
   MODE_SHORT,
   nonInteractiveResolution,
+  recordAllow,
+  recordDenial,
   sensitiveReadDecision,
   statusText,
   stripShellPreamble,
@@ -295,6 +299,39 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
   /** The band a call is resolved under: a bound UI means a dialog can be asked. */
   function bandFor(ctx: ExtensionContext): Band {
     return ctx.hasUI ? "supervised" : "unattended";
+  }
+
+  /**
+   * Refuse a call the policy denied, as opposed to one the user chose. Records the
+   * refusal, advances the breaker, and tells both sides: the model gets the reason
+   * in the tool result, the user gets a toast when the streak stops the run. The
+   * user's own "Block" answer never comes through here: a refusal is intent, not
+   * policy, and stopping a run on it would hand the breaker to the wrong judge.
+   *
+   * A call refused because the run is already stopped is not counted: it was never
+   * judged, and counting it would make the session total a count of refusals rather
+   * than of the policy denials that stopped the run.
+   */
+  function deny(
+    ctx: ExtensionContext,
+    event: { toolName: string; toolCallId: string },
+    reason: string,
+    band: Band,
+    count = true,
+  ): { block: true; reason: string } {
+    if (count) {
+      const { tripped, reason: stop } = recordDenial(state.denials);
+      if (tripped && !state.stopped) {
+        state.stopped = stop ?? "permission-gate stopped this run";
+        state.stoppedStreak = { ...state.denials };
+        ctx.ui.notify(`${state.stopped} A new session starts with a clean streak.`, "warning");
+      }
+    }
+    // An uncounted refusal repeats the streak that stopped the run: the live counter
+    // moves on as calls run through the stop, and only this one is about the trip.
+    const streak = count ? state.denials : (state.stoppedStreak ?? state.denials);
+    pi.appendEntry("permission_gate", denialEntry(event.toolName, event.toolCallId, reason, state.mode, band, streak));
+    return { block: true, reason: state.stopped ? `${reason}\n${state.stopped}` : reason };
   }
 
   /** Ask the explain role for the human sentence. Null on failure or timeout. */
@@ -569,6 +606,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
     pendingNotes.length = 0;
     // A streak belongs to the session that saw it; a new session's dialogs start fresh.
     state.consecutiveTimeouts = 0;
+    clearDenialStop(state);
     const budget = resolveDialogBudget(process.env[DIALOG_TIMEOUT_ENV], state.dialogTimeoutSeconds);
     if (budget.invalidEnv !== undefined) {
       ctx.ui.notify(
@@ -637,6 +675,9 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         if (state.autoAllowLog.length > 0) {
           msg += `Auto-allowed: ${state.autoAllowLog.length} calls\n`;
         }
+        if (state.stopped) {
+          msg += `\nStopped by the denial breaker: ${state.denials.total} denials this session.\n`;
+        }
 
         // Session allows
         const hasAllows =
@@ -667,6 +708,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
           "Add bash prefix rule",
           ...(state.autoAllowLog.length > 0 ? ["View auto-allow log"] : []),
           ...(hasAllows ? ["Clear all session allows"] : []),
+          ...(state.stopped ? ["Clear the denial stop"] : []),
           "Reset to Careful",
         ];
 
@@ -743,6 +785,9 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
               : `Saved ${describeDialogTimeout(next)}; ${DIALOG_TIMEOUT_ENV}=${env} still wins`,
             "info",
           );
+        } else if (choice === "Clear the denial stop") {
+          clearDenialStop(state);
+          ctx.ui.notify("Denial stop cleared", "info");
         } else if (choice === "Reset to Careful") {
           setPreferences(ctx, { mode: "careful", autoClassify: "off" });
           state.allowedBashPrefixes = [];
@@ -1044,8 +1089,15 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
       return undefined;
     }
 
+    // A tripped breaker ends the run's confirm-reaching work. Reads and session rules
+    // returned above, so this only catches a call that would have been judged.
+    if (state.stopped) {
+      const stopped = "permission-gate did not classify this call: the run is stopped.";
+      return deny(ctx, event, tirithFacts ? `${stopped}\n${tirithFacts}` : stopped, bandFor(ctx), false);
+    }
+
     if (decision.action === "block") {
-      return { block: true, reason: decision.reason ?? "Blocked by permission gate" };
+      return deny(ctx, event, decision.reason ?? "Blocked by permission gate", bandFor(ctx));
     }
 
     // action === "confirm"
@@ -1118,7 +1170,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         const advised = adviceInterception(classified.advices, resolution.action);
         if (advised) {
           recordClassification(event.toolName, event.toolCallId, classified, bandFor(ctx));
-          return { block: true, reason: withTirithFacts(advised.reason) };
+          return deny(ctx, event, withTirithFacts(advised.reason), bandFor(ctx));
         }
       }
 
@@ -1128,7 +1180,7 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         return undefined;
       }
       if (classified) recordClassification(event.toolName, event.toolCallId, classified, bandFor(ctx));
-      return { block: true, reason: withTirithFacts(resolution.reason) };
+      return deny(ctx, event, withTirithFacts(resolution.reason), bandFor(ctx));
     }
 
     // Facts about the world the call reaches, appended to the classifier's state.
@@ -1179,13 +1231,13 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         const advised = adviceInterception(cached.advices, resolution.action);
         if (advised) {
           recordClassification(event.toolName, event.toolCallId, cached, bandFor(ctx));
-          return { block: true, reason: advised.reason };
+          return deny(ctx, event, advised.reason, bandFor(ctx));
         }
         if (resolution.action === "allow") {
           autoAllow(cached, " (cached)");
           return undefined;
         }
-        if (resolution.action === "block") return { block: true, reason: resolution.reason };
+        if (resolution.action === "block") return deny(ctx, event, resolution.reason, bandFor(ctx));
         return await showConfirmDialog(
           ctx,
           event,
@@ -1207,13 +1259,13 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
         const advised = adviceInterception(explResult.advices, resolution.action);
         if (advised) {
           recordClassification(event.toolName, event.toolCallId, explResult, bandFor(ctx));
-          return { block: true, reason: advised.reason };
+          return deny(ctx, event, advised.reason, bandFor(ctx));
         }
         if (resolution.action === "allow") {
           autoAllow(explResult, "");
           return undefined;
         }
-        if (resolution.action === "block") return { block: true, reason: resolution.reason };
+        if (resolution.action === "block") return deny(ctx, event, resolution.reason, bandFor(ctx));
         // Not auto-allowed -- fall through to dialog with pre-loaded explanation
         return await showConfirmDialog(
           ctx,
@@ -1257,6 +1309,9 @@ export default function permissionGate(pi: ExtensionAPI, options: PermissionGate
   // Append advisory notes to tool results so the model sees them.
   // Also refresh status bar (sidecar cost may have changed).
   pi.on("tool_result", async (event, ctx) => {
+    // Only an executed call reaches this handler, and only an executed call ends a
+    // denial streak: pi answers a block without a tool result.
+    recordAllow(state.denials);
     if (explainEnabled) updateStatus(ctx);
     const note = await resultNotesFor(event.toolCallId);
     if (!note) return undefined;

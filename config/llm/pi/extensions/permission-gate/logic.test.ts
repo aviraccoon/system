@@ -8,6 +8,7 @@ import {
   BREAKER_TOTAL_DENIALS,
   type ClassifiedCall,
   cacheKey,
+  clearDenialStop,
   collectTargetPaths,
   createDenialTracker,
   createInitialState,
@@ -1276,6 +1277,20 @@ describe("isClassifierFloor", () => {
 });
 
 // ── denial breaker ──
+
+describe("clearDenialStop", () => {
+  test("clears both the streak and the stop, so the run is judged again", () => {
+    const state = createInitialState();
+    recordDenial(state.denials);
+    recordDenial(state.denials);
+    state.stopped = "permission-gate stopped this run";
+    state.stoppedStreak = { consecutive: 2, total: 2 };
+    clearDenialStop(state);
+    expect(state.denials).toEqual({ consecutive: 0, total: 0 });
+    expect(state.stopped).toBeNull();
+    expect(state.stoppedStreak).toBeNull();
+  });
+});
 
 describe("denial breaker", () => {
   test("trips after the consecutive limit", () => {

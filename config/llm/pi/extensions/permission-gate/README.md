@@ -55,6 +55,26 @@ path, a missing verdict and a dangerous verdict block; a safe or risky one runs,
 advisory blocks it. A tirith finding that forces a dialog blocks as well, whatever the
 classifier says. With auto-classify off the blanket block stands.
 
+### Denials
+
+A refusal the gate's policy makes is recorded and told to the model; a refusal that was
+judged also counts toward the stop. The `denied` session entry carries the reason, the
+mode and band, and the streak that produced it; the model reads the same reason in the tool
+result, with the sentence that says what to do instead.
+
+Three denials in a row, or twenty in total, stop the run. A call that runs resets the
+row; the total does not reset. Every later call that would be judged is refused without a
+classification and carries the stop sentence, until the session ends or `/permissions`
+clears the stop. Such a refusal is recorded, not counted: its entry repeats the streak that
+tripped the stop, since the call itself was never judged. A read-only call, or one a session
+rule covers, still runs, unless a tirith finding turns it into a confirmation, which the
+stop then refuses: the stop ends judgment, not the session.
+
+The user's own `Block` answer in a dialog is not one of these. It is intent rather than
+policy, so it neither counts toward the stop nor is written as a denial, and it does not
+reset the row either: only a call that runs does. The tool result still says they refused.
+A `patch` dry run writes nothing but is still a judged call, so a stopped run refuses it.
+
 ### Classifier
 
 The confirm dialog and auto-classify share one classifier. A decisions model
