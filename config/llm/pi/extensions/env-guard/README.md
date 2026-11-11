@@ -83,6 +83,22 @@ floor on that file is the only rule that still applies there.
 | `/guard revoke` | Take the grant back |
 | `/guard off` / `/guard on` | Turn policy checks off or on for this session |
 
+## Tool
+
+`env_policy` (read-only, no arguments) is the agent's view of the guard: either the
+rules with their clause ids, precedence and binding, or the policy path with its
+parse errors; the session state (granted or off); and the newest calls the guard has
+judged in this session, each with the clause it broke (an allowed call has none).
+
+## Decision log
+
+`~/.pi/agent/state/env-guard.log` holds one JSON line per call the guard judged or
+refused, tagged with the session id: allowed calls included, and a bash command is not
+re-judged while its verdict is cached. It is the record the judge's probability lives
+in; the tool's view never renders it, though an uncited refusal quotes it in the reason
+line. `session_start` trims the file to its newest `FILE_LIMIT` lines, so the oldest
+records are dropped.
+
 ## Configuration
 
 | Variable | Default |
@@ -105,4 +121,5 @@ any of the risk battery's answers when both ride one request.
 | `policy-file.ts` | Parser and validator for `environment.json` |
 | `policy-source.ts` | Stat-gated policy loading, with the change signal that drops cached verdicts |
 | `numbers.ts` | Validated `PI_GUARD_THRESHOLD` / `PI_GUARD_TIMEOUT_MS` with the warning lines for bad values |
+| `decisions.ts` | The decision record and the session-scoped view the tool renders |
 | `refusal.ts` | The blocked-call text |

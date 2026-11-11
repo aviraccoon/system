@@ -24,9 +24,11 @@
  * rules has no rules.
  */
 
-import { readFileSync, realpathSync, statSync } from "node:fs";
-import { isAbsolute, join, normalize, resolve } from "node:path";
+import { appendFileSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, normalize, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { DEFAULT_DECISIONS_MODEL, decisionsComplete } from "../shared/decisions";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import {
@@ -39,6 +41,16 @@ import {
 } from "../shared/env-policy";
 import { journalNotesDir, projectFor } from "../shared/journal-context";
 import { resolveProviderAuth } from "../shared/model-roles";
+import {
+  commandLine,
+  type DecisionKind,
+  FILE_LIMIT,
+  formatDecision,
+  type GuardDecision,
+  parseDecisions,
+  sessionView,
+  trimLines,
+} from "./decisions";
 import { guardNumbers } from "./numbers";
 import { createPolicySource } from "./policy-source";
 import { refusalText } from "./refusal";
@@ -49,6 +61,7 @@ const NUMBERS = guardNumbers(process.env);
 const THRESHOLD = NUMBERS.threshold;
 const TIMEOUT_MS = NUMBERS.timeoutMs;
 const POLICY_FILE = join(".agents", "environment.json");
+const DECISIONS_PATH = join(homedir(), ".pi", "agent", "state", "env-guard.log");
 
 /** A file the guard enforces is not a file the agent writes. Case-folded: APFS
  * opens `Environment.json` as the same file. */
@@ -100,6 +113,8 @@ export interface EnvGuardOverrides {
   ask?: PolicyAsk;
   /** Bypass the notes-tree lookup (tests): where this cwd's policy lives. */
   policyPath?: (cwd: string) => string;
+  /** Where decisions are recorded (tests); defaults to the state directory. */
+  decisionsPath?: string;
 }
 
 export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardOverrides = {}) {
@@ -112,6 +127,64 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
   /** Verdicts by command. Failures are not cached, so a retry retries. */
   const verdicts = new Map<string, PolicyVerdict>();
   const notified = new Set<string>();
+  const decisionsPath = overrides.decisionsPath ?? DECISIONS_PATH;
+
+  /** Append one decision. A log that cannot be written must not change a verdict. */
+  function recordDecision(
+    ctx: ExtensionContext,
+    kind: DecisionKind,
+    command: string,
+    verdict: PolicyVerdict | null,
+  ): void {
+    try {
+      const record: GuardDecision = {
+        at: new Date().toISOString(),
+        session: ctx.sessionManager.getSessionId(),
+        project: policy?.project ?? "",
+        kind,
+        command: commandLine(command),
+        violated: verdict?.violation ?? true,
+        clause: verdict?.clause ?? null,
+        probability: verdict?.probability ?? null,
+        threshold: verdict?.threshold ?? THRESHOLD,
+      };
+      mkdirSync(dirname(decisionsPath), { recursive: true });
+      appendFileSync(decisionsPath, formatDecision(record));
+    } catch {
+      // Swallowed on purpose: losing a record is cheaper than losing a refusal.
+    }
+  }
+
+  function readDecisions(): GuardDecision[] {
+    try {
+      // Whole file: `trimDecisions` bounds it, and filtering after a tail slice would let
+      // another window's records push this session's out of the view.
+      return parseDecisions(readFileSync(decisionsPath, "utf-8"));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Drop the oldest records at session start, so the file stays bounded. This is the
+   * only reader that writes, so an append landing between the read and the rewrite is
+   * lost; the record is a calibration set, not a ledger of record.
+   */
+  function trimDecisions(): void {
+    try {
+      const raw = readFileSync(decisionsPath, "utf-8");
+      const kept = trimLines(raw, FILE_LIMIT);
+      if (kept !== raw) writeFileSync(decisionsPath, kept);
+    } catch {
+      // No log yet, or one that cannot be read: nothing to trim.
+    }
+  }
+
+  /** A call in one line, for the decision record: the command, or the path it targets. */
+  function describeCall(toolName: string, input: Record<string, unknown>): string {
+    if (typeof input.command === "string") return input.command;
+    return collectToolPaths(toolName, input)[0] ?? toolName;
+  }
 
   const source = createPolicySource({
     pathFor: (cwd) => overrides.policyPath?.(cwd) ?? join(projectFor(journalNotesDir(), cwd).dir, POLICY_FILE),
@@ -189,6 +262,7 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
     verdicts.clear();
     notified.clear();
     if (NUMBERS.warnings.length > 0) notifyOnce(ctx, "bad-numbers", `env-guard: ${NUMBERS.warnings.join("; ")}`);
+    trimDecisions();
     refresh(ctx);
   });
 
@@ -214,7 +288,16 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
   pi.on("tool_call", async (event, ctx) => {
     if (off) return;
     const write = policyWriteReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd);
-    if (write) return { block: true, reason: write };
+    if (write) {
+      const input = event.input as Record<string, unknown>;
+      recordDecision(
+        ctx,
+        event.toolName === "bash" ? "policy-shell" : "policy-write",
+        describeCall(event.toolName, input),
+        null,
+      );
+      return { block: true, reason: write };
+    }
     if (event.toolName !== "bash" || granted) return;
     refresh(ctx);
     const current = policy;
@@ -225,6 +308,7 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
     if (!verdict) {
       const judged = await judge(ctx, current, command);
       if (!judged) return;
+      recordDecision(ctx, "policy", command, judged);
       verdict = judged;
       verdicts.set(command, verdict);
     }
@@ -277,6 +361,34 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
         errors.length > 0 ? `errors: ${errors.join("; ")}` : "",
       ].filter(Boolean);
       ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  pi.registerTool({
+    name: "env_policy",
+    label: "Environment policy",
+    description:
+      "This project's environment policy: the rules the guard enforces, whether they loaded, the session's guard state, and the newest calls the guard has judged in this session. Read-only; the rules file is the user's to edit.",
+    parameters: Type.Object({}),
+    promptSnippet:
+      "env_policy: the project's environment policy, its load state, this session's guard state, and the newest calls the guard has judged this session.",
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      refresh(ctx);
+      const lines: string[] = [];
+      if (policy) {
+        lines.push(policySummary(policy, policyPath));
+      } else {
+        lines.push(`No usable environment policy at ${policyPath}.`);
+        if (errors.length > 0) lines.push(`errors: ${errors.join("; ")}`);
+      }
+      lines.push("", `state: ${off ? "off" : "on"}; host grant: ${granted ? "given for this session" : "not given"}`);
+      const view = sessionView(readDecisions(), ctx.sessionManager.getSessionId());
+      lines.push(
+        "",
+        view.length > 0 ? `judged in this session (newest ${view.length}):` : "judged in this session: none yet",
+      );
+      lines.push(...view);
+      return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };
     },
   });
 }
