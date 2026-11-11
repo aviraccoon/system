@@ -15,17 +15,24 @@ interface Sent {
 
 function fakePi() {
   const sent: Sent[] = [];
-  const handlers = new Map<string, (event: Record<string, unknown>) => void>();
+  const handlers = new Map<string, Array<(event: Record<string, unknown>) => void>>();
   const pi = {
     on: (name: string, handler: (event: Record<string, unknown>) => void) => {
-      handlers.set(name, handler);
-      return () => handlers.delete(name);
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]);
+      return () =>
+        handlers.set(
+          name,
+          (handlers.get(name) ?? []).filter((entry) => entry !== handler),
+        );
     },
     sendMessage: (message: Record<string, unknown>, options: Record<string, unknown>) => {
       sent.push({ message, options });
     },
   };
-  return { pi: pi as unknown as ExtensionAPI, sent, handlers };
+  const fire = (name: string, event: Record<string, unknown> = {}) => {
+    for (const handler of handlers.get(name) ?? []) handler(event);
+  };
+  return { pi: pi as unknown as ExtensionAPI, sent, fire };
 }
 
 function ctxFor(cwd: string): ExtensionContext {
@@ -192,7 +199,7 @@ describe("BackgroundRuns", () => {
   });
 
   test("every session-shutdown reason aborts the runs, a reload included", async () => {
-    const { pi, handlers } = fakePi();
+    const { pi, fire } = fakePi();
     const signals: AbortSignal[] = [];
     const never = new Promise<SingleResult>(() => {});
     const spawn = ((...args: unknown[]) => {
@@ -207,7 +214,7 @@ describe("BackgroundRuns", () => {
       expect("run" in runs.start(ctxFor(dir), startArgs("second"))).toBe(true);
       // A reload builds a fresh extension with an empty map, so a run it kept alive would be an
       // orphan: no tool could reach it and its wake has no runtime to send through.
-      handlers.get("session_shutdown")?.({ reason });
+      fire("session_shutdown", { reason });
       expect(signals.map((signal) => signal.aborted)).toEqual([true, true]);
     }
   });
@@ -257,7 +264,7 @@ describe("BackgroundRuns", () => {
   });
 
   test("a wait that shows the answer cancels the wake it would have sent", async () => {
-    const { pi, sent, handlers } = fakePi();
+    const { pi, sent, fire } = fakePi();
     const runs = new BackgroundRuns(pi, spawnOf(result({ messages: assistant("the answer") })));
     const started = runs.start(ctxFor(dir), startArgs());
     if ("error" in started) throw new Error(started.error);
@@ -265,8 +272,83 @@ describe("BackgroundRuns", () => {
     expect(sent).toHaveLength(1);
 
     await runs.wait([started.run.id], 1_000);
-    handlers.get("agent_settled")?.({ aborted: true });
+    fire("agent_settled", { aborted: true });
     expect(sent).toHaveLength(1);
+  });
+
+  test("a wake is held until the agent run settles, so a wait in that agent run cancels it", async () => {
+    const { pi, sent, fire } = fakePi();
+    const runs = new BackgroundRuns(pi, spawnOf(result({ messages: assistant("the answer") })));
+    fire("agent_start");
+    const started = runs.start(ctxFor(dir), startArgs());
+    if ("error" in started) throw new Error(started.error);
+    await started.run.settled;
+    expect(sent).toHaveLength(0);
+
+    await runs.wait([started.run.id], 1_000);
+    fire("agent_settled", { aborted: false });
+    expect(sent).toHaveLength(0);
+  });
+
+  test("a held wake is sent when the agent run ends and nothing waited", async () => {
+    const { pi, sent, fire } = fakePi();
+    const runs = new BackgroundRuns(pi, spawnOf(result({ messages: assistant("the answer") })));
+    fire("agent_start");
+    const started = runs.start(ctxFor(dir), startArgs());
+    if ("error" in started) throw new Error(started.error);
+    await started.run.settled;
+    expect(sent).toHaveLength(0);
+
+    fire("agent_settled", { aborted: false });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].message.content).toContain("the answer");
+  });
+
+  test("two background runs finishing in one agent run both wake at its end", async () => {
+    const { pi, sent, fire } = fakePi();
+    const runs = new BackgroundRuns(pi, spawnOf(result({ messages: assistant("the answer") })));
+    fire("agent_start");
+    const first = runs.start(ctxFor(dir), startArgs("first"));
+    if ("error" in first) throw new Error(first.error);
+    const second = runs.start(ctxFor(dir), startArgs("second"));
+    if ("error" in second) throw new Error(second.error);
+    await Promise.all([first.run.settled, second.run.settled]);
+    expect(sent).toHaveLength(0);
+
+    fire("agent_settled", { aborted: false });
+    expect(sent).toHaveLength(2);
+    const ids = sent.map((item) => (item.message.details as { runId: string }).runId);
+    expect(new Set(ids).size).toBe(2);
+  });
+
+  test("an aborted agent run still releases a held wake", async () => {
+    const { pi, sent, fire } = fakePi();
+    const runs = new BackgroundRuns(pi, spawnOf(result({ messages: assistant("the answer") })));
+    fire("agent_start");
+    const started = runs.start(ctxFor(dir), startArgs());
+    if ("error" in started) throw new Error(started.error);
+    await started.run.settled;
+    expect(sent).toHaveLength(0);
+
+    fire("agent_settled", { aborted: true });
+    expect(sent).toHaveLength(1);
+  });
+
+  test("a background run finishing between agent runs wakes at once", async () => {
+    const { pi, sent, fire } = fakePi();
+    const runs = new BackgroundRuns(pi, spawnOf(result({ messages: assistant("the answer") })));
+    fire("agent_start");
+    const first = runs.start(ctxFor(dir), startArgs());
+    if ("error" in first) throw new Error(first.error);
+    await first.run.settled;
+    fire("agent_settled", { aborted: false });
+    expect(sent).toHaveLength(1);
+
+    // No agent run is active now, so the next completion must wake at once, not wait for a settle.
+    const second = runs.start(ctxFor(dir), startArgs("second"));
+    if ("error" in second) throw new Error(second.error);
+    await second.run.settled;
+    expect(sent).toHaveLength(2);
   });
 
   test("wait names a failed run's stop reason, since it acks the wake", async () => {
@@ -344,11 +426,11 @@ describe("BackgroundRuns", () => {
   });
 
   test("a shutdown reports the runs it stopped", () => {
-    const { pi, sent, handlers } = fakePi();
+    const { pi, sent, fire } = fakePi();
     const never = new Promise<SingleResult>(() => {});
     const runs = new BackgroundRuns(pi, spawnOf(never));
     runs.start(ctxFor(dir), startArgs());
-    handlers.get("session_shutdown")?.({ reason: "quit" });
+    fire("session_shutdown", { reason: "quit" });
     const shutdown = sent.find((item) => item.message.customType === "subagent-shutdown");
     expect(shutdown?.message.content).toContain("Stopped 1 background subagent run");
   });

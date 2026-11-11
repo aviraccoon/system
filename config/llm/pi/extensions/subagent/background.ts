@@ -172,12 +172,26 @@ export function orderRuns<T extends { status: RunStatus; startedAt: number }>(ru
 export class BackgroundRuns {
   private readonly runs = new Map<string, BackgroundRun>();
   private readonly delivery: WakeDelivery;
+  /** Wakes held until the current agent run settles, so a `wait` in that run can cancel one. */
+  private readonly held = new Map<string, string>();
+  private inRun = false;
 
   constructor(
     private readonly pi: ExtensionAPI,
     private readonly spawn: typeof runSingleAgent = runSingleAgent,
   ) {
     this.delivery = new WakeDelivery(pi);
+    // A completion is delivered once the agent run settles, or at once when none is running: during
+    // that agent run the model can `wait` for it, and a wake sent then would put the same text in
+    // context twice. The cost is that a background run finishing early in a long agent run waits for
+    // the rest of it.
+    pi.on("agent_start", () => {
+      this.inRun = true;
+    });
+    pi.on("agent_settled", () => {
+      this.inRun = false;
+      this.releaseHeld();
+    });
     // A run's answer only reaches the session that started it, so a session that ends takes its runs
     // with it. Nothing re-adopts them: the map is in memory, and the runtime that could send their
     // wakes is gone after a reload too.
@@ -328,12 +342,17 @@ export class BackgroundRuns {
       stopReason: run.stopReason,
       sessionFile: run.sessionFile,
     });
-    this.delivery.send({
-      key: run.id,
-      customType: "subagent-completion",
-      content: message,
-      details: { runId: run.id, status: run.status },
-    });
+    this.held.set(run.id, message);
+    if (!this.inRun) this.releaseHeld();
+  }
+
+  /** Send every held wake: at the agent run's settle, or at once when no agent run is active. */
+  private releaseHeld(): void {
+    const wakes = [...this.held];
+    this.held.clear();
+    for (const [id, message] of wakes) {
+      this.delivery.send({ key: id, customType: "subagent-completion", content: message, details: { runId: id } });
+    }
   }
 
   async wait(ids: string[] | undefined, timeoutMs: number): Promise<{ text: string }> {
@@ -347,10 +366,12 @@ export class BackgroundRuns {
       await Promise.race([Promise.all(running.map((run) => run.settled)), sleep(timeoutMs)]);
     }
     const timedOut = runs.some((run) => run.status === "running");
-    // A later abort must not re-send what this call already showed. The first delivery, if it is
-    // still queued as a steer, is pi's to deliver; the ledger only owns the retry.
+    // A shown answer's wake belongs to this call: a held one is dropped, a sent one is acked, so a
+    // later abort cannot re-send it.
     for (const run of runs) {
-      if (run.status !== "running") this.delivery.ack(run.id);
+      if (run.status === "running") continue;
+      this.held.delete(run.id);
+      this.delivery.ack(run.id);
     }
     const lines = runs.map((run) => runLine({ ...run, elapsedMs: Date.now() - run.startedAt }));
     const answers = runs

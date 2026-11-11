@@ -96,9 +96,10 @@ every child, and it gets the built-in tool set, so, unlike an agent file, it can
 ## Background runs
 
 `background: true` on a single-mode dispatch returns a run id instead of the answer. The completion
-arrives as a message; `subagent_wait` collects it early (ids or none, default 30s, and a timeout
-returns the current state rather than an error), and `subagent_close` stops a run. The run's record
-and output sit in `/jobs` beside shell jobs.
+arrives as a message when the run settles, or when your turn ends if that is later. `subagent_wait`
+collects it early and drops that message; it takes ids or none, defaults to 30s, and a timeout returns
+the current state rather than an error. `subagent_close` stops a run. The run's record and output sit
+in `/jobs` beside shell jobs.
 
 A background run is not killed when your turn is interrupted; it ends with the session or a
 `/reload`, or when `subagent_close` names it. Five at once is refused.
