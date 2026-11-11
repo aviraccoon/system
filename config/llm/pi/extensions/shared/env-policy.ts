@@ -110,10 +110,11 @@ export function policyQuestion(policy: EnvPolicy): DecisionsQuestion {
       `Judge the command as written. A command whose work runs inside the container (a \`docker exec\` or \`docker compose exec\` of the project's tooling, for example) does not break a clause that requires ${policy.environment}; ` +
       `a shell wrapper (\`sh -c\`, \`nohup\`, \`env\`, \`timeout\`, \`xargs\`) does not change where its parts run. ` +
       `If one command mixes a container call with other work, judge the parts that run outside the container: a container head does not clear the rest. That includes a \`;\`, \`&&\` or \`||\` branch, and a pipeline stage that interprets its input (\`| sh\`, \`| bash\`, \`| node\`) rather than filtering it. ` +
-      `Do not infer where the command runs from the directory; a \`docker exec\` is launched from a host directory.`,
+      `Do not infer where the command runs from the launching directory; a \`docker exec\` is launched from a host directory. An explicit \`cd\` in the command does say where its parts run: a part that runs outside the project the launching directory belongs to is project work only if it touches that project's files. ` +
+      `A command that touches nothing the project owns, meaning its code, dependencies, servers or build, is not project work even when it is launched from the project directory: a time tracker, a git query, or a tool the user installed for their own use.`,
     criteria: {
       true: `The command runs dependency, build, test or dev-server work for this project outside ${policy.environment}, and no clause allows that work where it runs.`,
-      false: `The command runs inside ${policy.environment}, cannot change or execute project or dependency code, runs outside the project, or matches a clause that allows it where it runs.`,
+      false: `The command runs inside ${policy.environment}, cannot change or execute project or dependency code, touches nothing the project owns, or matches a clause that allows it where it runs.`,
     },
   };
 }

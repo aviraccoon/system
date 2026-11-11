@@ -9,7 +9,7 @@ describe("policy cases", () => {
 
   test("every group has cases, so BENCH_GROUP cannot silently select nothing", () => {
     const groups = new Set(POLICY_CASES.map((c) => c.group));
-    for (const group of ["forbidden", "allowed", "container", "readonly", "bypass", "ambiguous"]) {
+    for (const group of ["forbidden", "allowed", "container", "readonly", "unrelated", "bypass", "ambiguous"]) {
       expect(groups.has(group as never)).toBe(true);
     }
   });

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { ChoiceQuestion, DecisionsAnswer } from "./decisions";
+import type { ChoiceQuestion, DecisionsAnswer, NoulQuestion } from "./decisions";
 import {
   buildPolicyState,
   CLAUSE_QUESTION,
@@ -81,6 +81,19 @@ describe("policyQuestion", () => {
     expect(instructions).toContain("sh -c");
     expect(instructions).toContain("&&");
     expect(instructions).toContain("pipeline");
+  });
+
+  test("bounds the outside-the-project rule, so work there that touches the project stays project work", () => {
+    expect(instructions).toContain("only if it touches that project's files");
+  });
+
+  test("names host work that belongs to no project, and the criterion repeats the instruction", () => {
+    const criteria = (policyQuestion(POLICY) as NoulQuestion).criteria ?? {};
+    const phrase = "touches nothing the project owns";
+    expect(instructions).toContain(phrase);
+    expect(criteria.false).toContain(phrase);
+    // A bare "runs outside the project" would allow work outside the tree that touches it.
+    expect(criteria.false).not.toContain("runs outside the project");
   });
 
   test("asks nothing about intent, because no transcript reaches the judge", () => {

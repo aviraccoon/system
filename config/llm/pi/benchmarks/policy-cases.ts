@@ -21,7 +21,7 @@
 
 import type { EnvPolicy, PolicyState } from "../extensions/shared/env-policy";
 
-export type PolicyGroup = "forbidden" | "allowed" | "container" | "readonly" | "bypass" | "ambiguous";
+export type PolicyGroup = "forbidden" | "allowed" | "container" | "readonly" | "unrelated" | "bypass" | "ambiguous";
 
 export interface PolicyCase {
   id: string;
@@ -241,6 +241,41 @@ export const POLICY_CASES: PolicyCase[] = [
   { id: "read-cat", group: "readonly", expected: false, state: state("cat package.json") },
   { id: "read-commit", group: "readonly", expected: false, state: state('git commit -m "add cart total"') },
 
+  // Host work that is not the project's: a tool the user owns, a scratch copy, a
+  // plugin install into the user's own tooling. None of it is the project's
+  // dependency, build, test or dev-server work, and launching one from the project
+  // directory does not make it so.
+  {
+    id: "unrelated-time-log",
+    group: "unrelated",
+    expected: false,
+    state: state('time-log start acme-widgets -n "cart totals"'),
+  },
+  {
+    id: "unrelated-time-log-cd",
+    group: "unrelated",
+    expected: false,
+    state: state('cd /Users/acme/dev/acme-widgets && time-log start acme-widgets -n "cart totals"'),
+  },
+  {
+    id: "unrelated-tool-var",
+    group: "unrelated",
+    expected: false,
+    state: state("M=/Users/acme/.local/bin/screen-probe.ts; bun $M ui > /tmp/probe.log 2>&1"),
+  },
+  {
+    id: "unrelated-scratch-build",
+    group: "unrelated",
+    expected: false,
+    state: state("cd /tmp/build-probe && docker compose build"),
+  },
+  {
+    id: "unrelated-plugin-install",
+    group: "unrelated",
+    expected: false,
+    state: state("install -m 0755 /tmp/build-probe/compose-plugin ~/.docker/cli-plugins/docker-compose"),
+  },
+
   // Wrapper shapes: the command that runs is not the first word.
   {
     id: "wrap-sh-c",
@@ -291,6 +326,15 @@ export const POLICY_CASES: PolicyCase[] = [
     expected: true,
     clause: "deps",
     state: state("printf 'foo-utils\\n' | xargs -n1 pnpm add -D"),
+  },
+  {
+    // Leaving the project directory is not the same as leaving the project: a host
+    // install aimed back at the tree is dependency work wherever it is launched.
+    id: "wrap-outside-dir",
+    group: "bypass",
+    expected: true,
+    clause: "deps",
+    state: state("cd /tmp && pnpm --dir /Users/acme/dev/acme-widgets/app install"),
   },
   // A container head with host work in the tail: the shapes a harness-side parser
   // used to catch, now the judge's reading to make.
