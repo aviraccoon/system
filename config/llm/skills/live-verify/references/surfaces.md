@@ -2,23 +2,22 @@
 
 One section per surface: the commands the loop needs and that surface's gotchas. What follows is the
 minimum this loop needs; the authority is the tool's own documentation, which is version-matched and
-knows more than this file does. Mobile and desktop are covered by a skill: read the one that fits in full
-before the first run. Everywhere else read the CLI help or the project's docs, and reread when a flag
-behaves unexpectedly.
+knows more than this file does. Reread that documentation when a flag behaves unexpectedly.
 
 If the project already has an automated suite for the surface, run that first: it is cheaper, and it
 outlives the session. What follows covers the rest. The commands assume bash; on Windows run them inside
 the VM or under WSL.
 
-| Surface | Read in full before driving it |
+| Surface | Read before driving it |
 |---|---|
-| Terminal UI and CLI | `man tmux`, `tmux list-commands` |
+| Terminal UI and CLI | `tmux list-commands`, plus the `man tmux` entries for the commands the recipe below calls |
 | Web | `agent-browser skills get core` (and `dogfood` for charter mode) |
 | Mobile | its skill |
 | Desktop | its skill |
 | API | the project's request collection or API docs, `curl --help` |
 | Service | the project's run docs, `podman --help` |
 | VM | the project's VM docs and its own run tasks |
+| Generated artifact | the generator's own help and docs, plus the command the project runs it with |
 
 ## Terminal UI and CLI (tmux)
 

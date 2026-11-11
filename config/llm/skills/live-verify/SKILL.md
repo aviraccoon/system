@@ -102,8 +102,16 @@ before starting, or it never ends.
 ## Surfaces
 
 Read [references/surfaces.md](references/surfaces.md) for the per-surface commands: terminal UI and CLI
-(tmux), web, mobile, desktop, API, service, VM, generated artifact. Each tool ships its own skill or help
-output, and that is the authority; read it in full before driving the surface.
+(tmux), web, mobile, desktop, API, service, VM, generated artifact.
+
+**Pick the surface the claim lives on, and drive more than one when a claim spans them.** A tool's output
+may be readable from a plain CLI while the command it registers only appears in the TUI, or while the key
+handling it documents only shows up in a pane; a web claim may need the request the page sends as well as
+the page.
+
+**Read what the commands you will use need, not the whole manual.** Read a tool's own skill in full when
+it ships one; otherwise read the help, the project's own docs, or the manual entry for each command you
+will drive. The reference's table names the set per surface.
 
 Terminal surfaces are the cheapest and the least obvious. Launch the app in a detached tmux session with a
 fixed geometry, capture the pane, send one key, capture again, and `diff` the two: the delta is the
@@ -117,13 +125,13 @@ Three lines in the reply, plus the evidence path:
 
 ```
 claim:     <one sentence>
-artifact:  <commit or build id, launch path, instance and port>
+artifact:  <commit or build id, surface driven, launch path, instance and port>
 seen:      <the observable delta, quoted from the capture>
 evidence:  <run temp dir>/<capture file>
 ```
 
 A charter reports one entry per finding: the finding in place of the claim, with its own seen and
-evidence lines.
+evidence lines. A claim driven on more than one surface gets one entry per surface.
 
 On a failure, name the bucket before proposing a cause: app, scenario, or environment. Read
 [references/triage.md](references/triage.md) rather than guessing; the same three buckets cover nearly
