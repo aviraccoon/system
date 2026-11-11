@@ -23,15 +23,17 @@ its reason, not silently dropped.
 
 1. **State the claim.** One sentence: what should be observable, and where. "After saving, the footer
    shows the new state and the next request carries it." A claim you cannot write down cannot be
-   verified.
+   verified. Check the project's journeys in `~/notes/llm/<project>/.agents/verify/`: one may already
+   cover this walk or a step it needs.
 2. **Fix the artifact under test.** Record the commit (or build id) and the launch path. Verify the build
    from the working tree; name anything that needs deploying first (a rebuild, an install, a migration)
    before claiming a result. A process that is already running keeps the code it loaded, so restart or
    reload it before verifying an edit to that process.
 3. **Check prerequisites.** Surface, device, port, credential, seeded data. Missing: report
    `skipped: <reason>`. Skipped is not passed.
-4. **Launch isolated.** Own tmux socket, own port, own simulator, own temp data. Never kill something you
-   did not start; reuse is governed by the isolation rules above.
+4. **Launch isolated.** Own tmux socket, own port, own simulator, own temp data. The spin-up recipe,
+   once a run has recorded one, is `instance.md` in that verify directory (Isolation 3, below). Reuse
+   of a running instance follows Isolation 1 and 2.
 5. **Predict, then act.** Write the expected observable change before the keypress. Then act and poll
    for state; never sleep a fixed time.
 6. **Read the evidence.** A capture nobody read is not a verification. Assert the property (the row is
