@@ -79,7 +79,7 @@ Do not split when:
 
 ## One fact, one home
 
-The skill covers the general rule (see *Re-Explaining What the Document Already Shows*). The doc set adds one: a
+The skill covers the general rule (see *One Fact, One Home*). The doc set adds one: a
 command's invocation may appear in two entry points, but its explanation lives in one.
 
 Code-level and product-level facts are the same case: an inventory of what the product or the code declares, such as

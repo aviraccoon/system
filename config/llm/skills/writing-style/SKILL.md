@@ -178,11 +178,11 @@ Outside that list, keep a character only when it says something the words cannot
 
 Brevity is not rudeness. Concise writing respects the reader's time.
 
-### Re-Explaining What the Document Already Shows
+### One Fact, One Home
 
-**The problem**: Prose that re-walks the document's table, re-transcribes a tool's `--help` output, or repeats one fact across sections. The copies drift until they contradict each other. The code and the product are another such source: an inventory of what they declare is a copy the source will outgrow.
+**The problem**: Prose that re-walks the document's table, re-transcribes a tool's `--help`, or repeats one fact across sections. Across artifacts too: a comment restating the signature or the name, a README restating a flag's default, a doc restating the README, a commit body restating the diff. The copies drift until they contradict each other.
 
-**Instead**: One fact, one home. A table (or the tool's own help) is the command reference; prose carries only what the table cannot: runtime gotchas and non-obvious defaults. A value maintained elsewhere (a manifest, a config, a registry) stays there: point at it, or generate the page from it, instead of restating it. A useless detail is not improved by moving it; delete it.
+**Instead**: The artifact that derives the fact owns it: code, config, a generated table, the tool's own help. Elsewhere point, or generate the copy from the owner. Repeat it only where a reader cannot act without it (an install command, a default that would otherwise read as a bug), never its reasoning. A useless detail is not improved by moving it; delete it.
 
 ### Status Prose
 
