@@ -37,6 +37,19 @@ describe("parsePolicyFile", () => {
     expect(policy?.project).toBe("acme-widgets");
   });
 
+  test("keeps a declared binding shell, and leaves it off when absent", () => {
+    const withShell = { ...VALID, binding: { ...VALID.binding, shell: " bash -lc " } };
+    expect(parsePolicyFile(json(withShell)).policy?.binding?.shell).toBe("bash -lc");
+    expect(parsePolicyFile(json(VALID)).policy?.binding?.shell).toBeUndefined();
+  });
+
+  test("an empty binding shell is an error, since it would silently fall back to the default", () => {
+    const empty = { ...VALID, binding: { ...VALID.binding, shell: "  " } };
+    const { policy, errors } = parsePolicyFile(json(empty));
+    expect(policy).toBeNull();
+    expect(errors.join()).toContain("binding.shell");
+  });
+
   // One row per way a hand-edited file goes wrong. Each must name the problem and
   // deactivate the guard, never run on a partial policy.
   const broken: [string, unknown, string][] = [

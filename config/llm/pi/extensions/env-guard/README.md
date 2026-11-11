@@ -29,23 +29,37 @@ host one, without a rule for every shape.
 ```
 
 `binding` is the one project-specific machine fact: it turns a refusal into a
-runnable command. Clauses are numbered in the question and cited by `id` in the
-refusal, so the reason can be checked against the policy. `precedence` is for
-clauses that collide; a policy that contradicts itself produces a judge that
-picks a side per call.
+runnable command. `command` is everything before the command string, `workdir`
+is the directory inside the environment that the host checkout mirrors, and
+`shell` is the prefix that turns a command string into one argv (`sh -lc` when
+absent, `bash -lc` or `sh -c` for an environment that wants another). Clauses are
+numbered in the question and cited by `id` in the refusal, so the reason can be
+checked against the policy. `precedence` is for clauses that collide; a policy
+that contradicts itself produces a judge that picks a side per call.
 
 Every entry the parser drops is reported, and any error leaves the guard
 inactive rather than running on part of a policy. `/guard status` shows the
 path, the project, the clause count and every error.
 
+The rules also reach the agent directly: the first turn of a session carries the
+clause list, generated from the policy file, opened with what the guard is and
+closed with where the rules live. A project with no policy file gets no block; the
+floor on that file is the only rule that still applies there.
+
 ## Behaviour
 
 - **Refusal**: a blocked call, with the clause quoted when the judge names one
   (and said so when it does not), the command to run in the environment instead
-  when the binding can wrap the call, and the grant line. Nothing auto-allows a refusal and there is no per-call
-  dialog; the only unlocks are the user-typed `/guard allow` and `/guard off`.
-- **No policy file**: the guard does nothing, and a project that wants it writes
-  the file.
+  when the binding can wrap the call, the policy file with its clause count, and
+  the grant line. Nothing auto-allows a refusal and there is no per-call dialog;
+  the only unlocks are the user-typed `/guard allow` and `/guard off`.
+- **The policy is the user's to write**: an edit-like call whose target resolves to
+  a `.agents/environment.json` is refused, whatever the session was granted and
+  whether or not the file parses. A shell command naming the file is refused too,
+  read or write, because telling those apart means parsing shell; its refusal points
+  at the read tool instead.
+- **No policy file**: the guard refuses nothing except a call that names a
+  `.agents/environment.json`, and a project that wants the rest writes the file.
 - **Where a command runs** is a reading the judge makes, from the command itself.
   The question tells it that a command whose work runs inside the container does
   not break a container clause, and that a wrapper, a chain or a pipeline does not

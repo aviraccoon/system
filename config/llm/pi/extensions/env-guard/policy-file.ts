@@ -19,7 +19,7 @@ export interface PolicyFileResult {
 
 const TOP_KEYS = new Set(["project", "environment", "binding", "clauses", "precedence"]);
 const CLAUSE_KEYS = new Set(["id", "text"]);
-const BINDING_KEYS = new Set(["command", "workdir"]);
+const BINDING_KEYS = new Set(["command", "workdir", "shell"]);
 
 function objectAt(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -89,7 +89,14 @@ export function parsePolicyFile(raw: string): PolicyFileResult {
       const workdir = textAt(raw.workdir);
       if (!command) errors.push('"binding.command" must be a non-empty string');
       if (!workdir) errors.push('"binding.workdir" must be a non-empty string');
-      if (command && workdir) binding = { command, workdir };
+      // Optional: the prefix the environment's runtime needs for a command string.
+      let shell: string | undefined;
+      if (raw.shell !== undefined) {
+        const text = textAt(raw.shell);
+        if (!text) errors.push('"binding.shell" must be a non-empty string when present (for example "sh -lc")');
+        else shell = text;
+      }
+      if (command && workdir) binding = shell === undefined ? { command, workdir } : { command, workdir, shell };
     }
   }
 

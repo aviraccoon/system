@@ -71,9 +71,17 @@ describe("refusalText", () => {
   });
 
   test("passes the cwd through so a leading cd into the workdir is dropped", () => {
-    const text = refusalText(POLICY, VERDICT, "cd app && pnpm install", "/Users/acme/acme-widgets");
+    const text = refusalText(POLICY, VERDICT, "cd app && pnpm install", { cwd: "/Users/acme/acme-widgets" });
     expect(text).toContain("sh -lc 'pnpm install'");
     expect(text).not.toContain("cd app");
+  });
+
+  test("names the rules file, so a misfiring clause is reported rather than worked around", () => {
+    const withRules = refusalText(POLICY, VERDICT, "pnpm install", { policyPath: "/notes/acme/environment.json" });
+    expect(withRules).toContain("Rules: /notes/acme/environment.json (2 clauses)");
+    expect(withRules).toContain("the user's to change");
+    // No path supplied, no line: the text never invents a location.
+    expect(text).not.toContain("Rules:");
   });
 
   test("without a binding it says so rather than inventing a command", () => {

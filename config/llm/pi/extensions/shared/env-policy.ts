@@ -45,10 +45,20 @@ export interface EnvPolicy {
   /** Environment name used in the question, e.g. "the devcontainer". */
   environment: string;
   /** Command prefix that runs work in that environment, e.g. a `docker exec`. */
-  binding: { command: string; workdir: string } | null;
+  binding: { command: string; workdir: string; shell?: string } | null;
   clauses: PolicyClause[];
   /** Stated precedence when clauses collide, e.g. an exception list. */
   precedence?: string;
+}
+
+/**
+ * The prefix that turns a command string into one argv: `sh -lc` for a container
+ * exec, whatever the environment's own runtime takes (`bash -lc`, `sh -c`). A
+ * policy whose runtime does not take a command string sets it explicitly; the
+ * default is the shell the devcontainer bindings use.
+ */
+export function bindingShell(binding: { shell?: string }): string {
+  return binding.shell?.trim() || "sh -lc";
 }
 
 /** What the judge is told about the call. Facts only: no transcript, no intent. */
@@ -117,6 +127,42 @@ export function policyQuestion(policy: EnvPolicy): DecisionsQuestion {
       false: `The command runs inside ${policy.environment}, cannot change or execute project or dependency code, touches nothing the project owns, or matches a clause that allows it where it runs.`,
     },
   };
+}
+
+/**
+ * The line that points at the policy file, in one literal for both renderers: the
+ * session block and a refusal. A refusal is self-contained by design, so both
+ * carry the sentence; one literal keeps them from drifting apart.
+ */
+export function rulesLine(policyPath: string, clauseCount: number): string {
+  const clauses = clauseCount === 1 ? "1 clause" : `${clauseCount} clauses`;
+  return `Rules: ${policyPath} (${clauses}). A clause that looks wrong is the user's to change: say so rather than working around it.`;
+}
+
+/**
+ * The policy as a session-start block: what the guard is, the clauses as prose,
+ * where the rules live, and that a wrong rule is the user's to change.
+ *
+ * Rendered from the clauses the judge reads, so the block cannot drift from what
+ * is enforced; the file stays the owner.
+ */
+export function policySummary(policy: EnvPolicy, policyPath: string): string {
+  const binding = policy.binding;
+  const lines = [
+    "Environment policy for this project, enforced by pi's env-guard: a bash call that breaks one of these is refused before it runs, unless the judge is unavailable or the user grants the session.",
+    "",
+    ...policy.clauses.map((clause) => `- ${clause.id}: ${clause.text}`),
+  ];
+  if (policy.precedence) lines.push("", `Precedence: ${policy.precedence}`);
+  if (binding) {
+    lines.push(
+      "",
+      `Run project work in ${policy.environment} with:`,
+      `  ${binding.command} ${bindingShell(binding)} '<command>'`,
+    );
+  }
+  lines.push("", rulesLine(policyPath, policy.clauses.length));
+  return lines.join("\n");
 }
 
 /** Which clause fired. `none` keeps the choice total: every case has an answer. */
@@ -207,11 +253,12 @@ export function policyFromAnswers(
 export function replacementCommand(policy: EnvPolicy, command: string, cwd?: string): string | null {
   const binding = policy.binding;
   if (!binding) return null;
+  const shell = bindingShell(binding);
   // A container head with host work in its tail is refused; wrapping it in the
   // binding again would nest the call and run nothing. Strip the exact binding,
   // and offer nothing when the call is some other container invocation.
   if (command.startsWith(`${binding.command} `)) {
-    return `${binding.command} sh -lc ${shellQuote(command.slice(binding.command.length + 1))}`;
+    return `${binding.command} ${shell} ${shellQuote(command.slice(binding.command.length + 1))}`;
   }
   let inner = command;
   const leading = inner.match(/^cd\s+(\S+)\s*&&\s*([\s\S]+)$/);
@@ -233,7 +280,7 @@ export function replacementCommand(policy: EnvPolicy, command: string, cwd?: str
   }
   const runtime = binding.command.split(/\s+/)[0] ?? "";
   if (runtime !== "" && inner.split(/\s+/)[0] === runtime) return null;
-  return `${binding.command} sh -lc ${shellQuote(inner)}`;
+  return `${binding.command} ${shell} ${shellQuote(inner)}`;
 }
 
 /** Asks the decision model a set of questions about one state. */

@@ -9,26 +9,33 @@
  * floor. Nothing auto-allows it, there is no per-call dialog, and the only unlocks
  * are the user-typed `/guard allow` and `/guard off`.
  *
- * Failures are visible, and mostly open. No policy file means no guard. An
- * unreadable policy, a missing credential or an unavailable judge notifies the
- * user once and lets the call through: a classifier outage that blocks every bash
- * call costs more than one that reports itself, and the report is what keeps it
- * from being silent. The citation request is the exception: it runs only after a
- * refusal is decided, so a failure there keeps the refusal and loses the clause.
+ * Failures are visible, and mostly open. No policy file means nothing is judged; the
+ * policy file itself is still floored. An unreadable policy, a missing credential or an
+ * unavailable judge notifies the user once and lets the call through: a classifier outage
+ * that blocks every bash call costs more than one that reports itself, and the report is
+ * what keeps it from being silent. The citation request is the exception: it runs only
+ * after a refusal is decided, so a failure there keeps the refusal and loses the clause.
  *
  * Commands: /guard status | allow | revoke | off | on.
+ *
+ * The rules also reach the agent without a refusal: the first turn of a session
+ * carries the clause list, rendered from the policy file. That block names the
+ * file, so the file is floored against writes: an agent that can edit its own
+ * rules has no rules.
  */
 
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, realpathSync, statSync } from "node:fs";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_DECISIONS_MODEL, decisionsComplete } from "../shared/decisions";
+import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import {
   buildPolicyState,
   type EnvPolicy,
   judgePolicy,
   type PolicyAsk,
   type PolicyVerdict,
+  policySummary,
 } from "../shared/env-policy";
 import { journalNotesDir, projectFor } from "../shared/journal-context";
 import { resolveProviderAuth } from "../shared/model-roles";
@@ -43,6 +50,51 @@ const THRESHOLD = NUMBERS.threshold;
 const TIMEOUT_MS = NUMBERS.timeoutMs;
 const POLICY_FILE = join(".agents", "environment.json");
 
+/** A file the guard enforces is not a file the agent writes. Case-folded: APFS
+ * opens `Environment.json` as the same file. */
+const POLICY_NAME = /(^|\/)\.agents\/environment\.json$/i;
+
+const POLICY_WRITE_REASON =
+  "[env-guard] refused: a project's environment policy is the user's to edit. Name the rule you think is wrong instead of writing it.";
+
+const POLICY_SHELL_REASON =
+  "[env-guard] refused: a shell command that names an environment policy. The guard does not parse shell to tell a read from a write, so read the file with the read tool; the user is the one who changes it.";
+
+/** pi's write and edit tools strip a leading `@`, so a target path is read the same way. */
+function resolveTarget(path: string, cwd: string): string {
+  const bare = path.trim().replace(/^@/, "");
+  return isAbsolute(bare) ? bare : resolve(cwd, bare);
+}
+
+/** Whether a path names an environment policy, by its own form or its resolved one. */
+function isPolicyPath(path: string): boolean {
+  if (POLICY_NAME.test(normalize(path))) return true;
+  try {
+    return POLICY_NAME.test(realpathSync(path));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The write floor for the policy: an agent that can edit its own rules has no
+ * rules. Edit-like tools are matched by target path. A shell command is matched by
+ * text and refused whether it reads or writes, because telling those apart is shell
+ * parsing; the refusal names the read tool as the way in.
+ *
+ * No loaded policy is needed: the rule is about the file, not about what this
+ * session enforces, so a session in a project without a policy cannot rewrite
+ * another project's.
+ */
+function policyWriteReason(toolName: string, input: Record<string, unknown>, cwd: string): string | null {
+  if (EDIT_LIKE_TOOLS.includes(toolName)) {
+    const targets = collectToolPaths(toolName, input).map((path) => resolveTarget(path, cwd));
+    return targets.some(isPolicyPath) ? POLICY_WRITE_REASON : null;
+  }
+  const command = (input as { command?: unknown }).command;
+  return typeof command === "string" && command.toLowerCase().includes(POLICY_FILE) ? POLICY_SHELL_REASON : null;
+}
+
 export interface EnvGuardOverrides {
   /** Bypass the decision model (tests): answers the questions directly. */
   ask?: PolicyAsk;
@@ -53,6 +105,7 @@ export interface EnvGuardOverrides {
 export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardOverrides = {}) {
   let granted = false;
   let off = false;
+  let summarySent = false;
   let policy: EnvPolicy | null = null;
   let policyPath = "";
   let errors: string[] = [];
@@ -132,14 +185,37 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
   pi.on("session_start", async (_event, ctx) => {
     granted = false;
     off = false;
+    summarySent = false;
     verdicts.clear();
     notified.clear();
     if (NUMBERS.warnings.length > 0) notifyOnce(ctx, "bad-numbers", `env-guard: ${NUMBERS.warnings.join("; ")}`);
     refresh(ctx);
   });
 
+  // The rules are in context from the first turn, rendered from the file the judge
+  // reads. Subagents get it too: a child running bash in this project meets the
+  // same floor.
+  pi.on("before_agent_start", async (_event, ctx) => {
+    if (summarySent) return;
+    refresh(ctx);
+    const current = policy;
+    if (!current) return;
+    summarySent = true;
+    return {
+      message: { customType: "env-guard-policy", content: policySummary(current, policyPath), display: false },
+    };
+  });
+
+  // Compaction summarizes the injected block away, so the next turn carries it again.
+  pi.on("session_before_compact", async () => {
+    summarySent = false;
+  });
+
   pi.on("tool_call", async (event, ctx) => {
-    if (event.toolName !== "bash" || granted || off) return;
+    if (off) return;
+    const write = policyWriteReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd);
+    if (write) return { block: true, reason: write };
+    if (event.toolName !== "bash" || granted) return;
     refresh(ctx);
     const current = policy;
     if (!current) return;
@@ -153,7 +229,7 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
       verdicts.set(command, verdict);
     }
     if (!verdict.violation) return;
-    return { block: true, reason: refusalText(current, verdict, command, ctx.cwd) };
+    return { block: true, reason: refusalText(current, verdict, command, { cwd: ctx.cwd, policyPath }) };
   });
 
   pi.registerCommand("guard", {
@@ -193,7 +269,9 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
         `policy: ${policyPath}`,
         policy
           ? `project: ${policy.project}; environment: ${policy.environment}; clauses: ${policy.clauses.length}`
-          : "project: none (no policy file, so nothing is refused)",
+          : off
+            ? "project: none (no usable policy file; the guard is off, so nothing is refused)"
+            : "project: none (no usable policy file, so only the policy file itself is refused)",
         `state: ${off ? "off" : "on"}${granted ? ", host granted for this session" : ""}`,
         `judge: ${MODEL} via ${PROVIDER}, threshold ${THRESHOLD}`,
         errors.length > 0 ? `errors: ${errors.join("; ")}` : "",

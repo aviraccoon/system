@@ -11,6 +11,7 @@ import {
   POLICY_QUESTION,
   policyFromAnswers,
   policyQuestion,
+  policySummary,
   replacementCommand,
   withClauseCitation,
 } from "./env-policy";
@@ -98,6 +99,66 @@ describe("policyQuestion", () => {
 
   test("asks nothing about intent, because no transcript reaches the judge", () => {
     expect(instructions.toLowerCase()).not.toContain("request");
+  });
+});
+
+describe("policySummary", () => {
+  const path = "/notes/acme/.agents/environment.json";
+  const text = policySummary(POLICY, path);
+
+  test("says what the guard is and what happens on a break, which a bare rule list cannot", () => {
+    expect(text).toContain("enforced by pi's env-guard");
+    expect(text).toContain("refused before it runs");
+  });
+
+  test("renders every clause with the id the refusal cites", () => {
+    expect(text).toContain("- deps: Dependency installs run in the container.");
+    expect(text).toContain("- e2e: Browser end-to-end suites run on the host.");
+  });
+
+  test("names the command that reaches the environment, so a block is runnable", () => {
+    expect(text).toContain("docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc");
+  });
+
+  test("uses the shell the policy declares, because not every environment takes `sh -lc`", () => {
+    const custom = {
+      ...POLICY,
+      binding: {
+        command: "docker exec -w /workspaces/acme-widgets/app acme-dev-1",
+        workdir: "/workspaces/acme-widgets/app",
+        shell: "bash -lc",
+      },
+    };
+    const rendered = policySummary(custom, path);
+    expect(rendered).toContain("acme-dev-1 bash -lc '<command>'");
+    expect(rendered).not.toContain("acme-dev-1 sh -lc");
+    expect(replacementCommand(custom, "pnpm install")).toBe(
+      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 bash -lc 'pnpm install'",
+    );
+  });
+
+  test("carries the precedence, and only when the policy declares one", () => {
+    expect(text).toContain("Precedence: The e2e clause beats the deps clause.");
+    expect(policySummary({ ...POLICY, precedence: undefined }, path)).not.toContain("Precedence:");
+  });
+
+  test("names the file, its clause count and who may change it", () => {
+    expect(text).toContain(`Rules: ${path} (2 clauses)`);
+    expect(text).toContain("the user's to change");
+  });
+
+  test("counts one clause in the singular, since a one-clause policy is valid", () => {
+    const single = policySummary(
+      { ...POLICY, clauses: [{ id: "deps", text: "Dependency work runs in the container." }] },
+      path,
+    );
+    expect(single).toContain("Rules: /notes/acme/.agents/environment.json (1 clause)");
+  });
+
+  test("a policy without a binding renders the rules and no command", () => {
+    const noBinding = policySummary({ ...POLICY, binding: null }, path);
+    expect(noBinding).toContain("- deps:");
+    expect(noBinding).not.toContain("Run project work in");
   });
 });
 
