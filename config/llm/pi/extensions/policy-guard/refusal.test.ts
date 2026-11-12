@@ -21,6 +21,7 @@ const VERDICT: PolicyVerdict = {
   clause: "deps",
   reasons: ["clause deps: Dependency work runs in the devcontainer."],
   missing: [],
+  scores: { deps: 0.91 },
 };
 
 describe("refusalText", () => {
@@ -70,6 +71,7 @@ describe("refusalText", () => {
       clause: null,
       reasons: [],
       missing: [],
+      scores: {},
     };
     expect(refusalText(POLICY, bare)).toContain("refused by a policy clause");
   });

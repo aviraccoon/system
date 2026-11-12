@@ -224,6 +224,11 @@ export interface PolicyVerdict {
   reasons: string[];
   /** Clause ids the judge did not answer. They were not checked, and the caller says so. */
   missing: string[];
+  /**
+   * Every answered clause's probability for this call: the per-clause calibration set. An
+   * unanswered clause is absent and named in `missing`.
+   */
+  scores: Record<string, number>;
 }
 
 /**
@@ -244,12 +249,14 @@ export function verdictFromAnswers(
   let strongest: { clause: PolicyClause; probability: number; threshold: number } | null = null;
   let highest = 0;
   const missing: string[] = [];
+  const scores: Record<string, number> = {};
   for (const clause of policy.clauses) {
     const answer = answers[clauseQuestionId(clause.id)];
     if (answer?.type !== "noul") {
       missing.push(clause.id);
       continue;
     }
+    scores[clause.id] = answer.noul;
     highest = Math.max(highest, answer.noul);
     const threshold = clause.threshold ?? defaultThreshold;
     if (answer.noul < threshold) continue;
@@ -258,7 +265,15 @@ export function verdictFromAnswers(
     }
   }
   if (!strongest) {
-    return { violation: false, probability: highest, threshold: defaultThreshold, clause: null, reasons: [], missing };
+    return {
+      violation: false,
+      probability: highest,
+      threshold: defaultThreshold,
+      clause: null,
+      reasons: [],
+      missing,
+      scores,
+    };
   }
   return {
     violation: true,
@@ -267,6 +282,7 @@ export function verdictFromAnswers(
     clause: strongest.clause.id,
     reasons: [`clause ${strongest.clause.id}: ${strongest.clause.text}`],
     missing,
+    scores,
   };
 }
 

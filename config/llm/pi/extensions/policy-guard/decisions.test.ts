@@ -15,10 +15,13 @@ const record = (over: Partial<GuardDecision> = {}): GuardDecision => ({
   project: "acme",
   kind: "policy",
   command: "pnpm install --frozen-lockfile",
+  tool: "bash",
   violated: true,
   clause: "deps",
   probability: 0.91,
   threshold: 0.65,
+  scores: { deps: 0.91, e2e: 0.02 },
+  missing: [],
   ...over,
 });
 
@@ -35,6 +38,25 @@ describe("formatDecision and parseDecisions", () => {
     const parsed = parseDecisions(truncated);
     expect(parsed).toHaveLength(1);
     expect(parsed[0]?.command).toBe("pnpm install --frozen-lockfile");
+  });
+
+  test("a line without scores, missing or a tool still parses, with none", () => {
+    const bare = `${JSON.stringify({
+      at: "2026-01-01T00:00:00.000Z",
+      session: "s-1",
+      project: "acme",
+      kind: "policy",
+      command: "pnpm install",
+      violated: true,
+      clause: "deps",
+      probability: 0.91,
+      threshold: 0.65,
+    })}\n`;
+    const parsed = parseDecisions(bare);
+    expect(parsed[0]?.scores).toEqual({});
+    expect(parsed[0]?.missing).toEqual([]);
+    // No tool means the record cannot say which unlock could answer it, so nothing labels it.
+    expect(parsed[0]?.tool).toBe("");
   });
 
   test("a line with the wrong shape is skipped rather than guessed at", () => {
@@ -62,6 +84,14 @@ describe("commandLine", () => {
 });
 
 describe("sessionView", () => {
+  test("an unlock renders as one, not as a refusal citing nothing", () => {
+    const view = sessionView(
+      [record({ kind: "unlock", violated: false, clause: null, command: "/guard off", scores: {} })],
+      "s-1",
+    );
+    expect(view).toEqual(["- unlock  /guard off"]);
+  });
+
   test("shows only the session it was asked about", () => {
     const view = sessionView([record({ session: "s-1" }), record({ session: "s-2", command: "other" })], "s-1");
     expect(view.join("\n")).toContain("pnpm install");

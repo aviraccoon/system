@@ -80,6 +80,8 @@ interface PolicyRow {
   citedClause: string | null;
   /** Clause ids the judge did not answer; they were not checked. */
   missing: string[];
+  /** Every answered clause's probability for this case: what a threshold is calibrated from. */
+  scores: Record<string, number>;
   pass: boolean;
   clausePass: boolean | null;
   ms: number;
@@ -101,6 +103,7 @@ async function runPolicyCase(apiKey: string, policy: Policy, test: PolicyCase): 
     probability: null,
     citedClause: null,
     missing: [],
+    scores: {},
     pass: false,
     clausePass: null,
     ms: 0,
@@ -126,6 +129,7 @@ async function runPolicyCase(apiKey: string, policy: Policy, test: PolicyCase): 
       probability: verdict.probability,
       citedClause: verdict.clause,
       missing: verdict.missing,
+      scores: verdict.scores,
       pass: policyRowPass(verdict, test.expected, test.clause ?? null),
       clausePass,
       ms,

@@ -1,5 +1,5 @@
 /**
- * The guard's decision record: one line per judged call, and the view of it the
+ * The guard's decision record: one line per judged call or unlock, and the view of it the
  * agent gets.
  *
  * Two readers, one writer. The file keeps the probability and which session it
@@ -11,8 +11,8 @@
  * No pi imports. Tests run under bun.
  */
 
-/** Which rule did the refusing: the judge, or the floor on the policy file. */
-export type DecisionKind = "policy" | "policy-write" | "policy-shell";
+/** Which rule did the refusing: the judge, the floor on the policy file, or a user unlock. */
+export type DecisionKind = "policy" | "policy-write" | "policy-shell" | "unlock";
 
 export interface GuardDecision {
   at: string;
@@ -22,12 +22,25 @@ export interface GuardDecision {
   kind: DecisionKind;
   /** First line of the command, clipped: enough to recognize it, not a log of it. */
   command: string;
+  /**
+   * The tool the call used. On an unlock, the surface it unlocks: a tool name, or `*` for
+   * every surface. Empty on a record that predates it.
+   */
+  tool: string;
   violated: boolean;
   /** The clause the refusal cited, or null when it cited none. */
   clause: string | null;
   /** The judge's probability. File only: the agent's view never shows it. */
   probability: number | null;
   threshold: number;
+  /**
+   * Every answered clause's probability for this call, which is what a per-clause threshold is
+   * calibrated from. An unanswered clause is absent, and named in `missing`. Absent in records
+   * written before it was recorded.
+   */
+  scores: Record<string, number>;
+  /** Clause ids the judge did not answer, so they were not checked. */
+  missing: string[];
 }
 
 /** How much of a command a decision keeps. */
@@ -43,6 +56,17 @@ export const FILE_LIMIT = 2000;
 export function commandLine(command: string, limit: number = COMMAND_LIMIT): string {
   const line = command.split("\n")[0]?.trim() ?? "";
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
+}
+
+/** A record's per-clause scores, tolerant of an older line that carries none. */
+function scoresAt(value: unknown): Record<string, number> {
+  const raw = typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
+  if (!raw) return {};
+  const out: Record<string, number> = {};
+  for (const [key, score] of Object.entries(raw)) {
+    if (typeof score === "number" && Number.isFinite(score)) out[key] = score;
+  }
+  return out;
 }
 
 /** One record as a JSON line. */
@@ -70,16 +94,20 @@ export function parseDecisions(raw: string): GuardDecision[] {
     if (typeof record.at !== "string" || typeof record.session !== "string") continue;
     if (typeof record.kind !== "string" || typeof record.command !== "string") continue;
     if (typeof record.violated !== "boolean") continue;
+    const rawMissing = (record as { missing?: unknown }).missing;
     out.push({
       at: record.at,
       session: record.session,
       project: typeof record.project === "string" ? record.project : "",
       kind: record.kind as DecisionKind,
       command: record.command,
+      tool: typeof record.tool === "string" ? record.tool : "",
       violated: record.violated,
       clause: typeof record.clause === "string" ? record.clause : null,
       probability: typeof record.probability === "number" ? record.probability : null,
       threshold: typeof record.threshold === "number" ? record.threshold : 0,
+      scores: scoresAt((record as { scores?: unknown }).scores),
+      missing: Array.isArray(rawMissing) ? rawMissing.filter((id): id is string => typeof id === "string") : [],
     });
   }
   return out;
@@ -112,6 +140,8 @@ export function sessionView(decisions: GuardDecision[], sessionId: string, limit
   const mine = decisions.filter((decision) => decision.session === sessionId);
   const shown = mine.slice(-limit);
   return shown.map((decision) => {
+    // An unlock is the user's own decision, recorded as a label: it refused nothing.
+    if (decision.kind === "unlock") return `- unlock  ${decision.command}`;
     const what = decision.violated ? kindLabel(decision.kind) : "allowed";
     const why = decision.violated ? ` -> ${decision.clause ?? "no clause cited"}` : "";
     return `- ${what}  ${decision.command}${why}`;

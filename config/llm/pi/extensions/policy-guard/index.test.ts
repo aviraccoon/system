@@ -676,7 +676,7 @@ describe("policy tool", () => {
     const text = await guard.tool("policy");
     expect(text).toContain("enforced by pi's policy-guard");
     expect(text).toContain("state: on; host grant: not given");
-    expect(text).toContain("judged in this session (newest 1):");
+    expect(text).toContain("guard records this session (newest 1):");
     expect(text).toContain("refused  pnpm install -> deps");
     // The judge answered 0.95; that number belongs to the file, not to the agent.
     expect(text).not.toContain("0.95");
@@ -709,7 +709,7 @@ describe("policy tool", () => {
     await first.fire("tool_call", { toolName: "bash", input: { command: "pnpm install" } });
     const second = await started(dir, "s-second");
     const text = await second.tool("policy");
-    expect(text).toContain("judged in this session: none yet");
+    expect(text).toContain("guard records this session: none yet");
     expect(text).not.toContain("pnpm install");
   });
 
@@ -746,6 +746,14 @@ describe("policy tool", () => {
     const guard = await started(dir);
     await guard.command("guard", "allow");
     expect(await guard.tool("policy")).toContain("host grant: given for this session");
+  });
+
+  test("shows an unlock in the list, alongside the calls it judged", async () => {
+    const guard = await started(dir);
+    await guard.command("guard", "allow");
+    const text = await guard.tool("policy");
+    expect(text).toContain("newest 1");
+    expect(text).toContain("- unlock  /guard allow");
   });
 
   test("records a policy-file write under its own reason, with the path it targeted", async () => {
@@ -786,6 +794,60 @@ describe("policy tool", () => {
     const text = await guard.tool("policy");
     expect(text).toContain("No usable policy at");
     expect(text).toContain(policyFile);
+  });
+});
+
+describe("decision log", () => {
+  const records = () => parseDecisions(readFileSync(join(dir, "policy-guard.log"), "utf-8"));
+
+  test("an unlock is recorded as one, with the command and the surface it covers", async () => {
+    const guard = await started(dir);
+    await guard.command("guard", "allow");
+    const [record] = records();
+    expect(record?.kind).toBe("unlock");
+    expect(record?.violated).toBe(false);
+    expect(record?.command).toBe("/guard allow");
+    // A host grant covers bash, so a fit must not read it as answering a write refusal.
+    expect(record?.tool).toBe("bash");
+  });
+
+  test("/guard off is recorded too, and covers every surface", async () => {
+    const guard = await started(dir);
+    await guard.command("guard", "off");
+    const [record] = records();
+    expect(record?.kind).toBe("unlock");
+    expect(record?.violated).toBe(false);
+    expect(record?.command).toBe("/guard off");
+    expect(record?.tool).toBe("*");
+  });
+
+  test("a judged call records every answered clause's score, which is what a per-clause fit reads", async () => {
+    const guard = await started(dir);
+    await guard.fire("tool_call", { toolName: "bash", input: { command: "pnpm install" } });
+    const [record] = records();
+    // The injected judge answers 0.95 for every clause.
+    expect(record?.scores).toEqual({ deps: 0.95 });
+    expect(record?.tool).toBe("bash");
+  });
+
+  test("a judged call names the clauses the judge left unanswered", async () => {
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [...POLICY.clauses, { id: "e2e", text: "Browser suites run on the host." }],
+      }),
+    );
+    const partial: PolicyAsk = async (questions) => {
+      const out: Record<string, DecisionsAnswer> = {};
+      for (const key of Object.keys(questions)) if (key === "clause:deps") out[key] = { type: "noul", noul: 0.95 };
+      return out;
+    };
+    const guard = await started(dir, "s-test", partial);
+    await guard.fire("tool_call", { toolName: "bash", input: { command: "pnpm install" } });
+    // A fit reads this to know the verdict came from part of the policy.
+    expect(records()[0]?.missing).toEqual(["e2e"]);
+    expect(records()[0]?.scores).toEqual({ deps: 0.95 });
   });
 });
 

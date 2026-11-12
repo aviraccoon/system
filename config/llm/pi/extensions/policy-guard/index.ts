@@ -179,6 +179,7 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
     kind: DecisionKind,
     command: string,
     verdict: PolicyVerdict | null,
+    tool: string,
   ): void {
     try {
       const record: GuardDecision = {
@@ -187,10 +188,14 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
         project: policy?.project ?? "",
         kind,
         command: commandLine(command),
-        violated: verdict?.violation ?? true,
+        tool,
+        // An unlock is written with violated: false because it refuses nothing.
+        violated: verdict?.violation ?? kind !== "unlock",
         clause: verdict?.clause ?? null,
         probability: verdict?.probability ?? null,
         threshold: verdict?.threshold ?? THRESHOLD,
+        scores: verdict?.scores ?? {},
+        missing: verdict?.missing ?? [],
       };
       mkdirSync(dirname(decisionsPath), { recursive: true });
       appendFileSync(decisionsPath, formatDecision(record));
@@ -344,7 +349,13 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
     const facts = callSummary(event.toolName, input, ctx.cwd, (path) => resolveTarget(path, ctx.cwd));
     const write = policyWriteReason(event.toolName, input, ctx.cwd);
     if (write) {
-      recordDecision(ctx, event.toolName === "bash" ? "policy-shell" : "policy-write", describeCall(facts), null);
+      recordDecision(
+        ctx,
+        event.toolName === "bash" ? "policy-shell" : "policy-write",
+        describeCall(facts),
+        null,
+        event.toolName,
+      );
       return { block: true, reason: write };
     }
     // A host grant is about host work, so it covers bash and nothing else.
@@ -359,7 +370,7 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
     if (!verdict) {
       const judged = await judge(ctx, current, facts);
       if (!judged) return;
-      recordDecision(ctx, "policy", describeCall(facts), judged);
+      recordDecision(ctx, "policy", describeCall(facts), judged, event.toolName);
       verdict = judged;
       verdicts.set(key, verdict);
     }
@@ -378,6 +389,9 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
       refresh(ctx);
       if (action === "allow") {
         granted = true;
+        // Recorded as a label: an unlock after a refusal marks that refusal overridden. A host
+        // grant covers bash only, so the record says `bash` and a fit cannot label a write with it.
+        recordDecision(ctx, "unlock", "/guard allow", null, "bash");
         ctx.ui.notify("policy-guard: host work allowed for this session", "info");
         return;
       }
@@ -388,6 +402,8 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
       }
       if (action === "off") {
         off = true;
+        // The unlock a non-shell refusal names, and the only one that covers every surface.
+        recordDecision(ctx, "unlock", "/guard off", null, "*");
         ctx.ui.notify("policy-guard: policy checks off for this session", "info");
         return;
       }
@@ -422,10 +438,10 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
     name: "policy",
     label: "Project policy",
     description:
-      "This project's policy: the rules the guard enforces, whether they loaded, the session's guard state, and the newest calls the guard has judged in this session. Read-only; the rules file is the user's to edit.",
+      "This project's policy: the rules the guard enforces, whether they loaded, the session's guard state, and the newest judged calls and unlocks in this session. Read-only; the rules file is the user's to edit.",
     parameters: Type.Object({}),
     promptSnippet:
-      "policy: the project's policy, its load state, this session's guard state, and the newest calls the guard has judged this session.",
+      "policy: the project's policy, its load state, this session's guard state, and the newest judged calls and unlocks this session.",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       refresh(ctx);
       const lines: string[] = [];
@@ -439,7 +455,9 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
       const view = sessionView(readDecisions(), ctx.sessionManager.getSessionId());
       lines.push(
         "",
-        view.length > 0 ? `judged in this session (newest ${view.length}):` : "judged in this session: none yet",
+        view.length > 0
+          ? `guard records this session (newest ${view.length}):`
+          : "guard records this session: none yet",
       );
       lines.push(...view);
       return { content: [{ type: "text" as const, text: lines.join("\n") }], details: {} };

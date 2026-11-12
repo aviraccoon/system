@@ -119,16 +119,52 @@ there.
 
 `policy` (read-only, no arguments) is the agent's view of the guard: either the
 rules with their clause ids, precedence and binding, or the policy path with its
-parse errors; the session state (granted or off); and the newest calls the guard has
-judged in this session, each with the clause it broke (an allowed call has none).
+parse errors; the session state (granted or off); and the newest judged calls and unlocks
+in this session, each with the clause it broke (an allowed call and an unlock have none).
 
 ## Decision log
 
-`~/.pi/agent/state/policy-guard.log` holds one JSON line per call the guard judged or
-refused, tagged with the session id: allowed calls included, and a call is not
-re-judged while its verdict is cached. It is the record of the verdict probability and
-the clause that fired; the tool's view never renders a number. `session_start` trims the
-file to its newest `FILE_LIMIT` lines, so the oldest records are dropped.
+`~/.pi/agent/state/policy-guard.log` holds one JSON line per judged or refused call,
+tagged with the session id and the project: allowed calls included, and a call is not
+re-judged while its verdict is cached. Each line carries the verdict probability, the
+clause that fired, every answered clause's probability, the clauses the judge left
+unanswered, and the tool the call used. A `/guard allow` and a `/guard off` are recorded
+too, as the mark that a refusal was overridden (see Calibration); their line carries the
+surface the unlock covers. The tool's view never renders a number. `session_start` trims the
+file to its newest `FILE_LIMIT` lines.
+
+## Calibration
+
+```bash
+bun run extensions/policy-guard/calibrate.ts                    # from the decision log
+BENCH_DUMP=/tmp/dump.jsonl bun run benchmarks/policy.ts         # labeled synthetic cases
+bun run extensions/policy-guard/calibrate.ts --bench --policy short /tmp/dump.jsonl
+bun run extensions/policy-guard/calibrate.ts --project acme-widgets
+```
+
+A threshold is fitted per clause: every refusal that **stood** must score above it and
+every **overridden** one below it, and the suggestion is the unrounded midpoint, printed to
+three decimals. The print separates the classes only while the gap between them exceeds a
+thousandth; a narrower gap needs the number widened by hand before it is pasted. Neither label
+is ground truth, since the log records what the judge said and not whether it was right, so each
+refusal's label comes from what happened next in its session: an unlock within ten minutes marks
+it overridden, a next call the judge cleared marks it stood. Only an unlock that covers the
+refused surface counts, because `/guard allow` is a host grant for `bash` while `/guard off`
+covers every tool. A refusal whose verdict came from part of the policy (the judge did not answer
+every clause) is not labeled at all. An unlock lasts for the rest of the session, so it can
+override a later refusal rather than the one before it, and a cleared call need not be related to
+the refused work; the report names the label it used, not "right" or "wrong". A clause with
+fewer than five labels of either class, or whose classes overlap, gets no suggestion and the
+reason why.
+
+The log is shared by every project, and a clause id means a different rule in each, so a
+fit reads one project's records: `--project <name>` picks it when the log carries several.
+A record with no project name is not fitted.
+
+The benchmark dump is the labeled set, its cases written by hand, so `stood` and
+`overridden` there are the labels a case was written with rather than session
+observations, and the report says so under the table. A dump carries several policies over
+the same cases, so name one: `calibrate.ts --bench --policy short <dump>`.
 
 ## Configuration
 
@@ -155,3 +191,4 @@ answers when both ride one request.
 | `numbers.ts` | Validated `PI_GUARD_THRESHOLD` / `PI_GUARD_TIMEOUT_MS` with the warning lines for bad values |
 | `decisions.ts` | The decision record and the session-scoped view the tool renders |
 | `refusal.ts` | The blocked-call text |
+| `calibrate.ts` | Fits a per-clause threshold from the decision log or a benchmark dump |
