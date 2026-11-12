@@ -65,8 +65,11 @@ path, the project, the clause count and every error.
 
 The rules also reach the agent directly: the first turn of a session carries the
 clause list, generated from the policy file, opened with what the guard is and
-closed with where the rules live. A project with no policy file gets no block; the
-floor on that file is the only rule that still applies there.
+closed with where the rules live. The block is carried again whenever the copy in the
+context is not the current rendering, and a copy sent beside one that is still visible is
+marked as the current one: it says it supersedes the earlier copy. A project with no
+policy file gets no block; the floor on that file is the only rule that still applies
+there.
 
 ## Behaviour
 
@@ -107,7 +110,7 @@ floor on that file is the only rule that still applies there.
 
 | Command | Effect |
 |---|---|
-| `/guard status` | Policy path, project, clause count, state, judge and errors |
+| `/guard status` | Policy path, project, clause count, the clauses on the default criteria and the ones no refusal has cited this session, state, judge and errors |
 | `/guard allow` | Grant host work for this session |
 | `/guard revoke` | Take the grant back |
 | `/guard off` / `/guard on` | Turn policy checks off or on for this session |

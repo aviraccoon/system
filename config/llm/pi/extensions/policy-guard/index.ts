@@ -22,9 +22,9 @@
  * Commands: /guard status | allow | revoke | off | on.
  *
  * The rules also reach the agent without a refusal: the first turn of a session
- * carries the clause list, rendered from the policy file. That block names the
- * file, so the file is floored against writes: an agent that can edit its own
- * rules has no rules.
+ * carries the clause list, rendered from the policy file, and it is carried again when the
+ * copy in context is out of date. That block names the file, so the file is floored
+ * against writes: an agent that can edit its own rules has no rules.
  */
 
 import { appendFileSync, mkdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
@@ -67,6 +67,8 @@ const THRESHOLD = NUMBERS.threshold;
 const TIMEOUT_MS = NUMBERS.timeoutMs;
 const POLICY_FILE = join(".agents", "policy.json");
 export const DECISIONS_PATH = join(homedir(), ".pi", "agent", "state", "policy-guard.log");
+/** The session entry type the rules block is written under. */
+const POLICY_CUSTOM_TYPE = "policy-guard-policy";
 
 /** A file the guard enforces is not a file the agent writes. Case-folded: APFS
  * opens `Policy.json` as the same file. */
@@ -114,6 +116,37 @@ function policyWriteReason(toolName: string, input: Record<string, unknown>, cwd
   return typeof command === "string" && command.toLowerCase().includes(POLICY_FILE) ? POLICY_SHELL_REASON : null;
 }
 
+/** The text a projected message carries, when it carries one. */
+function messageText(message: unknown): string | null {
+  const content = (message as { content?: unknown } | null)?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return null;
+  return content
+    .map((part) => ((part as { type?: string }).type === "text" ? ((part as { text?: string }).text ?? "") : ""))
+    .join("");
+}
+
+/**
+ * The last policy block the model can still see, read from the session projection. The
+ * projection is what the model actually gets: it follows the leaf, applies a compaction's
+ * kept window and honours a context edit, none of which a flag in this process can know.
+ */
+function lastBlockContent(ctx: ExtensionContext): string | null {
+  const projection = ctx.sessionManager.buildSessionProjection();
+  for (let index = projection.entries.length - 1; index >= 0; index--) {
+    const projected = projection.entries[index];
+    const source = projected.sourceEntry;
+    if (source.type !== "custom_message" || source.customType !== POLICY_CUSTOM_TYPE) continue;
+    // A replaced entry contributes text that is no longer this block, and an omitted one
+    // contributes none: neither is a copy the model can read as the rules.
+    const own = typeof source.content === "string" ? source.content : null;
+    const text = projected.messages.map(messageText).find((value): value is string => value !== null);
+    if (text === undefined || text !== own) continue;
+    return text;
+  }
+  return null;
+}
+
 /** The clauses judged against the neutral pair, named so the author can add their own. */
 function defaultCriteriaLine(policy: Policy): string {
   const defaults = policy.clauses.filter((clause) => !clause.criteria).map((clause) => clause.id);
@@ -132,7 +165,6 @@ export interface PolicyGuardOverrides {
 export default function policyGuardExtension(pi: ExtensionAPI, overrides: PolicyGuardOverrides = {}) {
   let granted = false;
   let off = false;
-  let summarySent = false;
   let policy: Policy | null = null;
   let policyPath = "";
   let errors: string[] = [];
@@ -190,6 +222,18 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
     } catch {
       // No log yet, or one that cannot be read: nothing to trim.
     }
+  }
+
+  /** The clauses no refusal this session has cited; one that is never cited may be dead or misworded. */
+  function neverCitedLine(current: Policy, ctx: ExtensionContext): string {
+    const session = ctx.sessionManager.getSessionId();
+    const fired = new Set(
+      readDecisions()
+        .filter((record) => record.session === session)
+        .flatMap((record) => (record.clause === null ? [] : [record.clause])),
+    );
+    const never = current.clauses.filter((clause) => !fired.has(clause.id)).map((clause) => clause.id);
+    return never.length > 0 ? `never cited by a refusal this session: ${never.join(", ")}` : "";
   }
 
   /** A call in one line, for the decision record: the command, or the path it targets. */
@@ -270,7 +314,6 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
   pi.on("session_start", async (_event, ctx) => {
     granted = false;
     off = false;
-    summarySent = false;
     verdicts.clear();
     notified.clear();
     if (NUMBERS.warnings.length > 0) notifyOnce(ctx, "bad-numbers", `policy-guard: ${NUMBERS.warnings.join("; ")}`);
@@ -278,23 +321,21 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
     refresh(ctx);
   });
 
-  // The rules are in context from the first turn, rendered from the file the judge
-  // reads. Subagents get it too: a child running bash in this project meets the
-  // same floor.
+  // The rules are in context from the first turn, rendered from the file the judge reads.
+  // Subagents get it too: a child running bash in this project meets the same floor. It is
+  // carried again when the rendering changes or an earlier copy is gone, and a copy sent beside
+  // one that is still there is marked as the current one.
   pi.on("before_agent_start", async (_event, ctx) => {
-    if (summarySent) return;
     refresh(ctx);
     const current = policy;
     if (!current) return;
-    summarySent = true;
+    const plain = policySummary(current, policyPath);
+    const marked = policySummary(current, policyPath, { supersedes: true });
+    const last = lastBlockContent(ctx);
+    if (last === plain || last === marked) return;
     return {
-      message: { customType: "policy-guard-policy", content: policySummary(current, policyPath), display: false },
+      message: { customType: POLICY_CUSTOM_TYPE, content: last === null ? plain : marked, display: false },
     };
-  });
-
-  // Compaction summarizes the injected block away, so the next turn carries it again.
-  pi.on("session_before_compact", async () => {
-    summarySent = false;
   });
 
   pi.on("tool_call", async (event, ctx) => {
@@ -368,7 +409,7 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
             : "project: none (no usable policy file, so only the policy file itself is refused)",
         // A clause without criteria is judged against the neutral pair, which is what a
         // permission gets wrong; naming them is the only place the author sees it.
-        ...(policy ? [defaultCriteriaLine(policy)] : []),
+        ...(policy ? [defaultCriteriaLine(policy), neverCitedLine(policy, ctx)] : []),
         `state: ${off ? "off" : "on"}${granted ? ", host granted for this session" : ""}`,
         `judge: ${MODEL} via ${PROVIDER}, threshold ${THRESHOLD}`,
         errors.length > 0 ? `errors: ${errors.join("; ")}` : "",

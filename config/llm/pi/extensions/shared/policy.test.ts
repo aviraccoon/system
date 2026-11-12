@@ -288,6 +288,15 @@ describe("policySummary", () => {
   test("says what the guard is and what happens on a break, which a bare rule list cannot", () => {
     expect(text).toContain("enforced by pi's policy-guard");
     expect(text).toContain("refused before it runs");
+    // A marked copy keeps the attribution: it is the same opening with a prefix.
+    expect(policySummary(POLICY, path, { supersedes: true })).toContain("enforced by pi's policy-guard");
+  });
+
+  test("a later copy says it supersedes the earlier one, and the first does not", () => {
+    const later = policySummary(POLICY, path, { supersedes: true });
+    expect(later).toContain("supersedes any earlier policy block");
+    expect(later).toContain("- deps: Dependency installs run in the container.");
+    expect(text).not.toContain("supersedes");
   });
 
   test("renders every clause with the id the refusal cites", () => {

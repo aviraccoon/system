@@ -65,6 +65,8 @@ interface Guard {
   tool(name: string): Promise<string>;
   /** Notifications the extension sent through `ctx.ui.notify`. */
   notices: string[];
+  /** The block's session entries; `omitted` and `replacement` model the two context edits. */
+  entries: { type: string; customType?: string; content?: string; omitted?: boolean; replacement?: string }[];
 }
 
 /** A loaded extension instance whose `pi` records every handler, so a test can drive any event. */
@@ -98,11 +100,25 @@ async function started(
       tools.set(tool.name, tool);
     },
   } as unknown as ExtensionAPI;
+  const entries: { type: string; customType?: string; content?: string; omitted?: boolean; replacement?: string }[] =
+    [];
   const ctx = {
     cwd,
     ui: { notify: (message: string) => notices.push(message) },
     modelRegistry: {},
-    sessionManager: { getSessionId: () => sessionId },
+    sessionManager: {
+      getSessionId: () => sessionId,
+      // The projection is what the model sees, so the harness serves it the way pi does.
+      buildSessionProjection: () => ({
+        entries: entries.map((entry) => ({
+          sourceEntry: entry,
+          messages: entry.omitted === true ? [] : [{ role: "user", content: entry.replacement ?? entry.content ?? "" }],
+        })),
+        messages: [],
+        thinkingLevel: "none",
+        model: null,
+      }),
+    },
     signal: undefined,
   } as unknown as ExtensionContext;
   const notices: string[] = [];
@@ -110,7 +126,15 @@ async function started(
   policyGuardExtension(pi, { ask, policyPath: () => policyFile, decisionsPath });
   await handlers.get("session_start")?.({}, ctx);
   return {
-    fire: async (event, payload) => handlers.get(event)?.(payload ?? {}, ctx),
+    fire: async (event, payload) => {
+      const result = await handlers.get(event)?.(payload ?? {}, ctx);
+      // pi persists an injected message as a custom_message entry, which is what the guard reads back.
+      const message = (result as { message?: { customType?: string; content?: string } } | undefined)?.message;
+      if (message?.customType) {
+        entries.push({ type: "custom_message", customType: message.customType, content: message.content });
+      }
+      return result;
+    },
     command: async (name, args) => {
       const definition = commands.get(name);
       if (!definition) throw new Error(`no command ${name}`);
@@ -123,6 +147,7 @@ async function started(
       return result.content.map((part) => part.text).join("\n");
     },
     notices,
+    entries,
   };
 }
 
@@ -272,17 +297,122 @@ describe("rules in context", () => {
     expect(result?.message?.customType).toBe("policy-guard-policy");
   });
 
-  test("it is sent once, so a later turn does not carry a second copy", async () => {
+  test("an unchanged rendering is not sent twice", async () => {
     const guard = await started("/Users/acme/acme-widgets");
     expect(await guard.fire("before_agent_start")).toBeDefined();
     expect(await guard.fire("before_agent_start")).toBeUndefined();
   });
 
-  test("compaction summarizes the block away, so the next turn carries it again", async () => {
+  test("a policy edited mid-session is carried again, marked as the current copy", async () => {
+    const guard = await started("/Users/acme/acme-widgets");
+    const first = (await guard.fire("before_agent_start")) as { message?: { content?: string } } | undefined;
+    expect(first?.message?.content).not.toContain("supersedes");
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [{ id: "deps", text: "Dependency work runs in the devcontainer, always." }],
+      }),
+    );
+    const second = (await guard.fire("before_agent_start")) as { message?: { content?: string } } | undefined;
+    expect(second?.message?.content).toContain("always.");
+    // The earlier block is still in the context, so the new one says it supersedes it.
+    expect(second?.message?.content).toContain("supersedes any earlier policy block");
+    // And the marked copy is the current one now, so a further turn carries nothing.
+    expect(await guard.fire("before_agent_start")).toBeUndefined();
+  });
+
+  test("an edit that leaves the rendering unchanged is not carried again", async () => {
+    const guard = await started("/Users/acme/acme-widgets");
+    await guard.fire("before_agent_start");
+    // Criteria are the judge's instructions, not part of the rules the agent reads.
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [
+          { id: "deps", text: "Dependency work runs in the devcontainer.", criteria: { true: "t", false: "f" } },
+        ],
+      }),
+    );
+    expect(await guard.fire("before_agent_start")).toBeUndefined();
+  });
+
+  test("a block a compaction dropped from the context is carried again, unmarked", async () => {
     const guard = await started("/Users/acme/acme-widgets");
     expect(await guard.fire("before_agent_start")).toBeDefined();
-    await guard.fire("session_before_compact");
-    expect(await guard.fire("before_agent_start")).toBeDefined();
+    // The compaction kept no copy: the context the model sees no longer has it.
+    guard.entries.length = 0;
+    const again = (await guard.fire("before_agent_start")) as { message?: { content?: string } } | undefined;
+    expect(again?.message?.content).toContain("enforced by pi's policy-guard");
+    expect(again?.message?.content).not.toContain("supersedes");
+  });
+
+  test("a block the model's context omits is carried again unmarked, so nothing is superseded", async () => {
+    const guard = await started("/Users/acme/acme-widgets");
+    await guard.fire("before_agent_start");
+    // A context edit took the block out of the model's view; the entry itself is still there.
+    guard.entries[0].omitted = true;
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [{ id: "deps", text: "Dependency work runs in the devcontainer, always." }],
+      }),
+    );
+    const again = (await guard.fire("before_agent_start")) as { message?: { content?: string } } | undefined;
+    expect(again?.message?.content).toContain("always.");
+    expect(again?.message?.content).not.toContain("supersedes");
+  });
+
+  test("a block a replacement edit removed is carried again unmarked", async () => {
+    const guard = await started("/Users/acme/acme-widgets");
+    await guard.fire("before_agent_start");
+    // A context edit replaced the block's text, so the model no longer sees the block.
+    guard.entries[0].replacement = "a summarised note";
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [{ id: "deps", text: "Dependency work runs in the devcontainer, always." }],
+      }),
+    );
+    const again = (await guard.fire("before_agent_start")) as { message?: { content?: string } } | undefined;
+    expect(again?.message?.content).toContain("always.");
+    expect(again?.message?.content).not.toContain("supersedes");
+  });
+
+  test("a later message after the block does not make it stale", async () => {
+    const guard = await started("/Users/acme/acme-widgets");
+    await guard.fire("before_agent_start");
+    guard.entries.push({ type: "message", content: "go on" });
+    // Another extension's injected message is not this block.
+    guard.entries.push({ type: "custom_message", customType: "other-extension", content: "not the policy" });
+    expect(await guard.fire("before_agent_start")).toBeUndefined();
+  });
+
+  test("a resumed session does not carry a block its context already has", async () => {
+    const first = await started("/Users/acme/acme-widgets");
+    await first.fire("before_agent_start");
+    const resumed = await started("/Users/acme/acme-widgets");
+    resumed.entries.push(...first.entries);
+    expect(await resumed.fire("before_agent_start")).toBeUndefined();
+  });
+
+  test("a resumed session with a changed policy marks the new copy", async () => {
+    const first = await started("/Users/acme/acme-widgets");
+    await first.fire("before_agent_start");
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [{ id: "deps", text: "Dependency work runs in the devcontainer, always." }],
+      }),
+    );
+    const resumed = await started("/Users/acme/acme-widgets");
+    resumed.entries.push(...first.entries);
+    const next = (await resumed.fire("before_agent_start")) as { message?: { content?: string } } | undefined;
+    expect(next?.message?.content).toContain("supersedes any earlier policy block");
   });
 
   test("a project without a policy carries nothing, because nothing can be refused", async () => {
@@ -411,6 +541,66 @@ describe("the policy is not the agent's to write", () => {
     await guard.command("guard", "status");
     // The fixture's clause has no criteria, so the author is told it runs on the neutral pair.
     expect(guard.notices.join("\n")).toContain("clauses on the default criteria: deps");
+  });
+
+  test("/guard status names the clauses no refusal has cited", async () => {
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [...POLICY.clauses, { id: "e2e", text: "Browser suites run on the host." }],
+      }),
+    );
+    const guard = await started(dir);
+    await guard.fire("tool_call", { toolName: "bash", input: { command: "pnpm install" } });
+    await guard.command("guard", "status");
+    expect(guard.notices.join("\n")).toContain("never cited by a refusal this session: e2e");
+  });
+
+  test("/guard status lists every clause when nothing has been refused", async () => {
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [...POLICY.clauses, { id: "e2e", text: "Browser suites run on the host." }],
+      }),
+    );
+    const guard = await started(dir, "s-test", CLEARS);
+    await guard.fire("tool_call", { toolName: "bash", input: { command: "git status" } });
+    await guard.command("guard", "status");
+    expect(guard.notices.join("\n")).toContain("never cited by a refusal this session: deps, e2e");
+  });
+
+  test("/guard status ignores another session's refusals", async () => {
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [...POLICY.clauses, { id: "e2e", text: "Browser suites run on the host." }],
+      }),
+    );
+    const record = (session: string, clause: string) =>
+      `${JSON.stringify({ at: "2026-01-01T00:00:00.000Z", session, project: "acme-widgets", kind: "policy", command: "x", violated: true, clause, probability: 0.9, threshold: 0.65 })}\n`;
+    writeFileSync(join(dir, "policy-guard.log"), record("s-other", "deps") + record("s-other", "e2e"));
+    const guard = await started(dir);
+    await guard.command("guard", "status");
+    expect(guard.notices.join("\n")).toContain("never cited by a refusal this session: deps, e2e");
+  });
+
+  test("/guard status omits the line once every clause has been cited", async () => {
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [...POLICY.clauses, { id: "e2e", text: "Browser suites run on the host." }],
+      }),
+    );
+    const record = (clause: string) =>
+      `${JSON.stringify({ at: "2026-01-01T00:00:00.000Z", session: "s-test", project: "acme-widgets", kind: "policy", command: "x", violated: true, clause, probability: 0.9, threshold: 0.65 })}\n`;
+    writeFileSync(join(dir, "policy-guard.log"), record("deps") + record("e2e"));
+    const guard = await started(dir);
+    await guard.command("guard", "status");
+    expect(guard.notices.join("\n")).not.toContain("never cited by a refusal");
   });
 
   test("/guard status says the floor still applies where no policy loads", async () => {

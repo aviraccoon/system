@@ -281,18 +281,19 @@ export function rulesLine(policyPath: string, clauseCount: number): string {
 }
 
 /**
- * The policy as a session-start block: what the guard is, the clauses as prose,
- * where the rules live, and the binding when the policy names an environment.
+ * The policy as a context block: the clauses as prose, where the rules live, and the
+ * binding when the policy has one. Sent whenever the copy in the context is
+ * not the current rendering; `supersedes` marks a copy sent beside an earlier one that is
+ * still visible, which would otherwise read as equally current.
  *
  * Rendered from the clauses the judge reads, so the block cannot drift from what
  * is enforced; the file stays the owner.
  */
-export function policySummary(policy: Policy, policyPath: string): string {
-  const lines = [
-    "Project policy, enforced by pi's policy-guard: a call that breaks one of these is refused before it runs, unless the judge is unavailable or the user grants the session.",
-    "",
-    ...policy.clauses.map((clause) => `- ${clause.id}: ${clause.text}`),
-  ];
+export function policySummary(policy: Policy, policyPath: string, options: { supersedes?: boolean } = {}): string {
+  const opening =
+    (options.supersedes ? "Current copy: this supersedes any earlier policy block in this session. " : "") +
+    "Project policy, enforced by pi's policy-guard: a call that breaks one of these is refused before it runs, unless the judge is unavailable or the user grants the session.";
+  const lines = [opening, "", ...policy.clauses.map((clause) => `- ${clause.id}: ${clause.text}`)];
   if (policy.precedence) lines.push("", `Precedence: ${policy.precedence}`);
   if (policy.binding) {
     lines.push(
