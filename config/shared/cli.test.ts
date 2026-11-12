@@ -440,8 +440,8 @@ describe("scriptCli", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  async function run(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
-    const proc = Bun.spawn([process.execPath, fixture, ...args], { stdout: "pipe", stderr: "pipe" });
+  async function run(path: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
+    const proc = Bun.spawn([process.execPath, path, ...args], { stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, code] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -451,42 +451,158 @@ describe("scriptCli", () => {
   }
 
   test("help prints and exits 0", async () => {
-    const result = await run("--help");
+    const result = await run(fixture, "--help");
     expect(result.code).toBe(0);
     expect(result.stdout).toContain("usage: s [flags]");
   });
 
   test("a usage error is one line and exit 2", async () => {
-    const result = await run("--bogus");
+    const result = await run(fixture, "--bogus");
     expect(result.code).toBe(2);
     expect(result.stderr.trim().split("\n")).toHaveLength(1);
     expect(result.stderr).toContain("error: s: Unknown option");
   });
 
   test("a spec with no positional part rejects a stray word", async () => {
-    const result = await run("stray");
+    const result = await run(fixture, "stray");
     expect(result.code).toBe(2);
     expect(result.stderr).toContain('error: s: unexpected argument "stray"');
     expect(result.stderr).toContain("(--help shows its flags)");
     expect(result.stderr).not.toContain("s --help");
   });
 
-  test("a spec with a positional part accepts it", async () => {
-    const argsFixture = join(dir, "args.ts");
+  /** Write a spec fixture from `body`, so the count cases share one path. */
+  function arityFixture(body: string): string {
+    const path = join(dir, "arity.ts");
     writeFileSync(
-      argsFixture,
+      path,
       `import { scriptCli } from ${JSON.stringify(cliUrl)};\n` +
-        `const spec = { name: "s", summary: "s", args: "<p>", flags: [] };\n` +
-        `console.log(scriptCli(spec).positionals.join(","));\n`,
+        `const spec = ${body};\n` +
+        `const parsed = scriptCli(spec);\n` +
+        `console.log(parsed.positionals.join(","));\n`,
     );
-    const proc = Bun.spawn([process.execPath, argsFixture, "value"], { stdout: "pipe", stderr: "pipe" });
-    const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-    expect(code).toBe(0);
-    expect(stdout.trim()).toBe("value");
+    return path;
+  }
+
+  test("a spec with a positional part accepts it", async () => {
+    const path = arityFixture('{ name: "s", summary: "s", args: "[p]", arity: { min: 0, max: 1 }, flags: [] }');
+    const result = await run(path, "value");
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe("value");
+  });
+
+  test("more positionals than the arity allows is a usage error naming each stray one", async () => {
+    const path = arityFixture('{ name: "s", summary: "s", args: "[p]", arity: { min: 0, max: 1 }, flags: [] }');
+    const result = await run(path, "one", "two", "three");
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('error: s: unexpected arguments "two", "three"');
+  });
+
+  test("fewer positionals than the arity requires is a usage error", async () => {
+    const path = arityFixture(
+      '{ name: "s", summary: "s", args: "<p>", arity: { min: 1, max: 1 }, flags: [{ key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" }] }',
+    );
+    const result = await run(path);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("error: s: missing argument(s)");
+    // The refusal carries the synopsis, so the reader sees the shape without opening the help.
+    expect(result.stderr).toContain("it takes <p>");
+    expect(result.stderr).toContain("(--help shows its flags)");
+    // Help is served before the count is enforced, which is what keeps `--help` usable.
+    const help = await run(path, "--help");
+    expect(help.code).toBe(0);
+    expect(help.stdout).toContain("usage: s <p>");
+  });
+
+  test("an optional positional may be absent", async () => {
+    const path = arityFixture('{ name: "s", summary: "s", args: "[p]", arity: { min: 0, max: 1 }, flags: [] }');
+    const result = await run(path);
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe("");
+  });
+
+  test("an unbounded arity takes as many as it is given", async () => {
+    const path = arityFixture(
+      '{ name: "s", summary: "s", args: "<p>...", arity: { min: 1, max: Infinity }, flags: [] }',
+    );
+    const result = await run(path, "a", "b", "c");
+    expect(result.code).toBe(0);
+    expect(result.stdout.trim()).toBe("a,b,c");
+  });
+
+  test("a spec that declares a positional part without an arity refuses to run", async () => {
+    // The count is a contract: an undeclared one is how a stray argument goes missing.
+    const path = arityFixture('{ name: "s", summary: "s", args: "[p]", flags: [] }');
+    const result = await run(path);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("declares positional arguments, so it needs an arity");
+    // One line, not a stack: a caught spec bug reads like every other refusal in this module.
+    expect(result.stderr.trim().split("\n")).toHaveLength(1);
+    // Validated before help: a broken spec is loud even when the user asked for the usage.
+    const help = await run(path, "--help");
+    expect(help.code).toBe(1);
+    expect(help.stdout).toBe("");
+  });
+
+  test("a spec that declares an arity with nothing to count refuses to run", async () => {
+    // A count over no positional part has no meaning.
+    const path = arityFixture('{ name: "s", summary: "s", arity: { min: 0, max: 1 }, flags: [] }');
+    const result = await run(path);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("declares an arity without a positional part");
+    expect(result.stderr.trim().split("\n")).toHaveLength(1);
+  });
+
+  test("an arity that no argument list can satisfy refuses to run", async () => {
+    // One row per way the count can be wrong: inverted, negative, or fractional.
+    const impossible = [
+      { min: 2, max: 1 },
+      { min: -1, max: 0 },
+      { min: 1.5, max: 2 },
+      { min: 0, max: 1.5 },
+    ];
+    for (const arity of impossible) {
+      const path = arityFixture(`{ name: "s", summary: "s", args: "<p>", arity: ${JSON.stringify(arity)}, flags: [] }`);
+      const result = await run(path, "a", "b");
+      expect(result.code).toBe(1);
+      expect(result.stderr.trim().split("\n")).toHaveLength(1);
+      expect(result.stderr).toContain(`arity {min: ${arity.min}, max: ${arity.max}} is not a count`);
+    }
+  });
+
+  test("a command name is not counted as a positional argument", async () => {
+    // The count is over `args`; a spec with commands and a positional part must not count the command.
+    const spec =
+      '{ name: "s", summary: "s", args: "[p]", arity: { min: 0, max: 1 }, flags: [], commands: [{ name: "c", args: "c", handler: { min: 0, max: 0, run: () => {} } }] }';
+    const result = await run(arityFixture(spec), "c", "x");
+    expect(result.code).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  test("a command name does not satisfy a required positional argument", async () => {
+    // The other half of the same reading: with `min: 1`, the bare command is one argument short.
+    const spec =
+      '{ name: "s", summary: "s", args: "<p>", arity: { min: 1, max: 1 }, flags: [], commands: [{ name: "c", args: "c", handler: { min: 0, max: 0, run: () => {} } }] }';
+    const result = await run(arityFixture(spec), "c");
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain("missing argument(s)");
+    expect(result.stderr).toContain("it takes <p>");
+  });
+
+  test("a spec with commands and no positional part counts no command as an argument", async () => {
+    // The `none` arm reads `args` too: the command name is consumed, and only what follows counts.
+    const spec =
+      '{ name: "s", summary: "s", flags: [], commands: [{ name: "c", args: "c", handler: { min: 0, max: 0, run: () => {} } }] }';
+    const path = arityFixture(spec);
+    const bare = await run(path, "c");
+    expect(bare.code).toBe(0);
+    const stray = await run(path, "c", "x");
+    expect(stray.code).toBe(2);
+    expect(stray.stderr).toContain('unexpected argument "x"');
   });
 
   test("parsed values reach the script", async () => {
-    const result = await run("--x");
+    const result = await run(fixture, "--x");
     expect(result.code).toBe(0);
     expect(result.stdout.trim()).toBe('{"x":true}');
   });

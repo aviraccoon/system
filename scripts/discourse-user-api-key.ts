@@ -37,6 +37,7 @@ const SPEC: CliSpec = {
   summary: "request a Discourse user API key with RSA-OAEP",
   usage: "bun scripts/discourse-user-api-key.ts <forum-origin> [username] [flags]",
   args: "<forum-origin> [username]",
+  arity: { min: 1, max: 2 },
   flags: [
     { key: "app-name", type: "string", usage: "--app-name <name>", help: "application name shown in Discourse" },
     { key: "client-id", type: "string", usage: "--client-id <id>", help: "client id sent with the request" },
@@ -44,13 +45,13 @@ const SPEC: CliSpec = {
   ],
 };
 const cli = scriptCli(SPEC);
+// The arity guarantees the origin; the check is its scheme.
 const [forum, username] = cli.args;
 const appName = typeof cli.values["app-name"] === "string" ? cli.values["app-name"] : undefined;
 const clientId = typeof cli.values["client-id"] === "string" ? cli.values["client-id"] : undefined;
 
-if (!forum || !/^https?:\/\//.test(forum)) {
-  const problem = forum ? `invalid forum origin "${forum}"` : "missing <forum-origin>";
-  console.error(`error: discourse-user-api-key: ${problem}`);
+if (!/^https?:\/\//.test(forum)) {
+  console.error(`error: discourse-user-api-key: invalid forum origin "${forum}"`);
   process.exit(2);
 }
 

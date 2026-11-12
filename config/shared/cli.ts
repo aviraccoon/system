@@ -34,9 +34,13 @@ export interface FlagSpec {
 
 export type Values = Record<string, string | boolean | string[] | undefined>;
 
-export interface Handler<Ctx, R, C> {
+/** A positional count: how many arguments are required, and how many are allowed at most. */
+export interface Arity {
   min: number;
   max: number;
+}
+
+export interface Handler<Ctx, R, C> extends Arity {
   run(ctx: Ctx, positionals: string[], cli: C): R | Promise<R>;
 }
 
@@ -60,6 +64,12 @@ export interface CliSpec<Ctx = unknown, R = unknown, C = unknown> {
   summary: string;
   /** Positional part for a single-command app; commands carry their own `args`. */
   args?: string;
+  /**
+   * Positionals the app itself takes, required by `scriptCli` when `args` is declared: the count
+   * is a contract, not a rendering. Keep it in step with `args`, which is what the help prints.
+   * A command declares its own on its handler instead.
+   */
+  arity?: Arity;
   /** Overrides the derived usage line, in which `[flags]` appears only when the full help lists flags. */
   usage?: string;
   /** Prose block after the pointer line in the full help. */
@@ -464,11 +474,48 @@ function groupHelp<Ctx, R, C>(compiled: Compiled<Ctx, R, C>, path: Group<Ctx, R,
   return blocks.join("\n").trimEnd();
 }
 
+/** What a spec declares for positionals: nothing to count, or a count and the synopsis it prints. */
+type SpecPositionals = { kind: "none" } | ({ kind: "counted" } & Arity & { synopsis: string });
+
 /**
- * Parse a one-off script's argv: `--help` prints and exits 0, a usage error is one line and
- * exit 2, and a spec that declares no positional part rejects stray words the same way.
+ * The positionals a spec declares. A spec that reaches `scriptCli` must declare a count for its
+ * positional part, and a count no argument list can satisfy is a spec bug; this function is the
+ * only place either is enforced.
+ */
+function positionalArity<Ctx, R, C>(spec: CliSpec<Ctx, R, C>): SpecPositionals {
+  if (spec.args === undefined) {
+    if (spec.arity !== undefined) {
+      throw new Error(`${spec.name}: declares an arity without a positional part (args) to count`);
+    }
+    return { kind: "none" };
+  }
+  const { arity } = spec;
+  if (arity === undefined) {
+    throw new Error(`${spec.name}: declares positional arguments, so it needs an arity {min, max}`);
+  }
+  const minOk = Number.isInteger(arity.min) && arity.min >= 0;
+  const maxOk = arity.max === Infinity || (Number.isInteger(arity.max) && arity.max >= arity.min);
+  if (!minOk || !maxOk) {
+    throw new Error(`${spec.name}: arity {min: ${arity.min}, max: ${arity.max}} is not a count`);
+  }
+  return { kind: "counted", min: arity.min, max: arity.max, synopsis: spec.args };
+}
+
+/**
+ * Parse a one-off script's argv: the positional count is resolved first, then a usage error is one
+ * line and exit 2, `--help` prints and exits 0, and the count is enforced. A spec that declares
+ * `args` without an `arity` is rejected with one error line and exit 1 before any of that, since a
+ * silently unbounded count is how a stray argument is lost.
  */
 export function scriptCli<Ctx, R, C>(spec: CliSpec<Ctx, R, C>, argv: string[] = process.argv.slice(2)): ParsedCli {
+  let positionals: SpecPositionals;
+  try {
+    positionals = positionalArity(spec);
+  } catch (error) {
+    // A bad arity is not a usage error: one line too, but its own exit code.
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  }
   let parsed: ParsedCli;
   try {
     parsed = parseCli(spec, argv);
@@ -480,10 +527,22 @@ export function scriptCli<Ctx, R, C>(spec: CliSpec<Ctx, R, C>, argv: string[] = 
     console.log(helpText(spec, parsed));
     process.exit(0);
   }
-  // A spec with no positional part takes none: a stray word is a usage error, not noise.
-  if (spec.args === undefined && parsed.positionals.length > 0) {
-    console.error(`error: ${spec.name}: unexpected argument "${parsed.positionals[0]}" (--help shows its flags)`);
+  // The count is over `args`, as in `runCli`: a command name is not an argument.
+  const extras = positionals.kind === "counted" ? parsed.args.slice(positionals.max) : parsed.args;
+  if (extras.length > 0) {
+    const named = extras.map((extra) => `"${extra}"`).join(", ");
+    console.error(
+      `error: ${spec.name}: unexpected argument${extras.length === 1 ? "" : "s"} ${named} (--help shows its flags)`,
+    );
     process.exit(2);
+  }
+  if (positionals.kind === "counted") {
+    const problem = arityError(spec.name, parsed.args.length, positionals.min, positionals.max);
+    if (problem !== null) {
+      // The refusal carries the synopsis, so the reader sees the shape without opening the help.
+      console.error(`error: ${problem}; it takes ${positionals.synopsis} (--help shows its flags)`);
+      process.exit(2);
+    }
   }
   return parsed;
 }

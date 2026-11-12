@@ -39,6 +39,7 @@ const SPEC: CliSpec = {
   summary: "print a sweep table from benchmark dump files",
   usage: "bun scripts/llm/bench-sweep.ts <dump.jsonl>... [flags]",
   args: "<dump.jsonl>...",
+  arity: { min: 1, max: Infinity },
   flags: [{ key: "help", type: "boolean", short: "h", global: true, usage: "-h, --help", help: "this help" }],
 };
 
@@ -46,11 +47,7 @@ const SPEC: CliSpec = {
 const isEditLike = (state: string): boolean => /^(write to|edit |patch )/.test(state);
 const wants = (row: Row, verdict: string): boolean => row.expected.split("|").includes(verdict);
 
-const paths = scriptCli(SPEC).positionals;
-if (paths.length === 0) {
-  console.error("error: bench-sweep: missing <dump.jsonl>");
-  process.exit(2);
-}
+const { args: paths } = scriptCli(SPEC);
 
 const runs = paths.map(load);
 
