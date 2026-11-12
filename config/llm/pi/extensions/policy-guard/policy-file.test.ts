@@ -3,7 +3,6 @@ import { parsePolicyFile } from "./policy-file";
 
 const VALID = {
   project: "acme-widgets",
-  environment: "the devcontainer",
   binding: {
     command: "docker exec -w /workspaces/acme-widgets/app acme-dev-1",
     workdir: "/workspaces/acme-widgets/app",
@@ -25,8 +24,8 @@ describe("parsePolicyFile", () => {
   });
 
   test("a file without a binding or precedence is valid, with both absent", () => {
-    const { project, environment, clauses } = VALID;
-    const { policy, errors } = parsePolicyFile(json({ project, environment, clauses }));
+    const { project, clauses } = VALID;
+    const { policy, errors } = parsePolicyFile(json({ project, clauses }));
     expect(errors).toEqual([]);
     expect(policy?.binding).toBeNull();
     expect(policy?.precedence).toBeUndefined();
@@ -50,13 +49,39 @@ describe("parsePolicyFile", () => {
     expect(errors.join()).toContain("binding.shell");
   });
 
+  test("keeps a clause's own threshold, and leaves it off when absent", () => {
+    const strict = {
+      ...VALID,
+      clauses: [{ id: "deps", text: "Dependency work runs in the devcontainer.", threshold: 0.9 }],
+    };
+    expect(parsePolicyFile(json(strict)).policy?.clauses[0]?.threshold).toBe(0.9);
+    expect(parsePolicyFile(json(VALID)).policy?.clauses[0]?.threshold).toBeUndefined();
+  });
+
+  test("keeps a clause's own criteria, and leaves them off when absent", () => {
+    const withCriteria = {
+      ...VALID,
+      clauses: [
+        {
+          id: "deps",
+          text: "Dependency work runs in the devcontainer.",
+          criteria: { true: " It runs outside. ", false: "It runs inside." },
+        },
+      ],
+    };
+    expect(parsePolicyFile(json(withCriteria)).policy?.clauses[0]?.criteria).toEqual({
+      true: "It runs outside.",
+      false: "It runs inside.",
+    });
+    expect(parsePolicyFile(json(VALID)).policy?.clauses[0]?.criteria).toBeUndefined();
+  });
+
   // One row per way a hand-edited file goes wrong. Each must name the problem and
   // deactivate the guard, never run on a partial policy.
   const broken: [string, unknown, string][] = [
     ["not JSON", undefined, "not valid JSON"],
     ["a top-level array", [], "must be a JSON object"],
     ["a missing project", { ...VALID, project: undefined }, '"project" must be a non-empty string'],
-    ["a blank environment", { ...VALID, environment: "   " }, '"environment" must be a non-empty string'],
     ["no clauses", { ...VALID, clauses: [] }, '"clauses" must be a non-empty array'],
     ["clauses not an array", { ...VALID, clauses: "deps" }, '"clauses" must be a non-empty array'],
     ["a clause that is not an object", { ...VALID, clauses: ["deps"] }, "clauses[0] must be an object"],
@@ -73,6 +98,36 @@ describe("parsePolicyFile", () => {
       'clauses[1].id "deps" is a duplicate',
     ],
     [
+      "a threshold of zero",
+      { ...VALID, clauses: [{ id: "deps", text: "a", threshold: 0 }] },
+      "clauses[0].threshold must be a number above 0 and at most 1",
+    ],
+    [
+      "a threshold above one",
+      { ...VALID, clauses: [{ id: "deps", text: "a", threshold: 1.5 }] },
+      "clauses[0].threshold must be a number above 0 and at most 1",
+    ],
+    [
+      "a threshold that is not a number",
+      { ...VALID, clauses: [{ id: "deps", text: "a", threshold: "0.9" }] },
+      "clauses[0].threshold must be a number above 0 and at most 1",
+    ],
+    [
+      "criteria that are not an object",
+      { ...VALID, clauses: [{ id: "deps", text: "a", criteria: "runs outside" }] },
+      'clauses[0].criteria must be an object with "true" and "false"',
+    ],
+    [
+      "criteria missing their false half",
+      { ...VALID, clauses: [{ id: "deps", text: "a", criteria: { true: "only this" } }] },
+      "clauses[0].criteria.false must be a non-empty string",
+    ],
+    [
+      "an unknown criteria key",
+      { ...VALID, clauses: [{ id: "deps", text: "a", criteria: { true: "t", false: "f", maybe: "m" } }] },
+      'clauses[0].criteria: unknown key "maybe"',
+    ],
+    [
       "a binding without a workdir",
       { ...VALID, binding: { command: "docker exec c" } },
       '"binding.workdir" must be a non-empty string',
@@ -80,6 +135,9 @@ describe("parsePolicyFile", () => {
     ["a binding that is not an object", { ...VALID, binding: "docker exec c" }, '"binding" must be an object or null'],
     ["a blank precedence", { ...VALID, precedence: " " }, '"precedence" must be a non-empty string when present'],
     ["an unknown top-level key", { ...VALID, clauses_note: "typo" }, 'unknown key "clauses_note"'],
+    // A policy-wide environment is a second home for what each clause says, so the
+    // parser names it rather than dropping it silently.
+    ["a stale environment field", { ...VALID, environment: "the devcontainer" }, 'unknown key "environment"'],
     [
       "an unknown clause key",
       { ...VALID, clauses: [{ id: "deps", text: "a", exceptions: [] }] },
@@ -97,7 +155,7 @@ describe("parsePolicyFile", () => {
   }
 
   test("every problem is reported, not just the first", () => {
-    const { errors } = parsePolicyFile(json({ project: "", environment: "", clauses: [] }));
+    const { errors } = parsePolicyFile(json({ project: "", clauses: [], binding: { command: "" } }));
     expect(errors.length).toBeGreaterThanOrEqual(3);
   });
 });

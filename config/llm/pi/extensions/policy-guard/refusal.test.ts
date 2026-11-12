@@ -1,17 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import {
-  CLAUSE_QUESTION,
-  NO_CLAUSE,
-  POLICY_QUESTION,
-  type Policy,
-  type PolicyVerdict,
-  policyFromAnswers,
-} from "../shared/policy";
+import type { Policy, PolicyVerdict } from "../shared/policy";
 import { refusalText } from "./refusal";
 
 const POLICY: Policy = {
   project: "acme-widgets",
-  environment: "the devcontainer",
   binding: {
     command: "docker exec -w /workspaces/acme-widgets/app acme-dev-1",
     workdir: "/workspaces/acme-widgets/app",
@@ -28,73 +20,63 @@ const VERDICT: PolicyVerdict = {
   threshold: 0.65,
   clause: "deps",
   reasons: ["clause deps: Dependency work runs in the devcontainer."],
+  missing: [],
 };
 
 describe("refusalText", () => {
-  const text = refusalText(POLICY, VERDICT, "pnpm install --frozen-lockfile");
+  const text = refusalText(POLICY, VERDICT, { policyPath: "/notes/acme/policy.json", tool: "bash" });
 
-  test("names the project and the environment it must run in", () => {
-    expect(text).toContain("acme-widgets");
-    expect(text).toContain("the devcontainer");
-    expect(text).toContain("not on the host");
-  });
-
-  test("quotes the clause that fired, so the reason is auditable", () => {
-    expect(text).toContain("clause deps: Dependency work runs in the devcontainer.");
-  });
-
-  test("hands back the command that would have been allowed", () => {
-    expect(text).toContain(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'pnpm install --frozen-lockfile'",
-    );
-  });
-
-  test("names the grant the user types, which is the one unlock a refusal can offer", () => {
-    expect(text).toContain("/guard allow");
-    expect(text).toContain("for this session");
-  });
-
-  test("an uncited refusal says so instead of inventing a clause", () => {
-    // Assembled by the real derivation, so the wording is the one production emits.
-    const verdict = policyFromAnswers(
-      {
-        [POLICY_QUESTION]: { type: "noul", noul: 0.91 },
-        [CLAUSE_QUESTION]: { type: "choice", choice: NO_CLAUSE, probabilities: { [NO_CLAUSE]: 1 } },
-      },
-      POLICY,
-    );
-    if (!verdict) throw new Error("expected a verdict");
-    const uncited = refusalText(POLICY, verdict, "pnpm install");
-    expect(uncited).toContain("no clause was cited");
-    expect(uncited).toContain("0.91");
-    expect(uncited).not.toContain("clause deps");
-  });
-
-  test("passes the cwd through so a leading cd into the workdir is dropped", () => {
-    const text = refusalText(POLICY, VERDICT, "cd app && pnpm install", { cwd: "/Users/acme/acme-widgets" });
-    expect(text).toContain("sh -lc 'pnpm install'");
-    expect(text).not.toContain("cd app");
+  test("names the rule that fired and quotes it, which is the whole reason", () => {
+    expect(text).toContain("[policy-guard] refused by clause deps: Dependency work runs in the devcontainer.");
   });
 
   test("names the rules file, so a misfiring clause is reported rather than worked around", () => {
-    const withRules = refusalText(POLICY, VERDICT, "pnpm install", { policyPath: "/notes/acme/policy.json" });
-    expect(withRules).toContain("Rules: /notes/acme/policy.json (2 clauses)");
-    expect(withRules).toContain("the user's to change");
-    // No path supplied, no line: the text never invents a location.
-    expect(text).not.toContain("Rules:");
+    expect(text).toContain("Rules: /notes/acme/policy.json (2 clauses)");
+    expect(text).toContain("the user's to change");
   });
 
-  test("without a binding it says so rather than inventing a command", () => {
-    const noBinding = refusalText({ ...POLICY, binding: null }, VERDICT, "pnpm install");
-    expect(noBinding).toContain("no command binding is configured");
+  test("points at the unlock that works for a shell call", () => {
+    expect(text).toContain("grants host work for this session");
+    expect(text).not.toContain("covers host work only");
+  });
+
+  test("a non-shell call names the unlock that works for it, since a host grant covers bash only", () => {
+    const write = refusalText(POLICY, VERDICT, { tool: "write" });
+    expect(write).toContain("/guard off");
+    expect(write).toContain("/guard allow covers host work only");
+  });
+
+  test("says nothing about the call itself, since a clause can be about any axis", () => {
+    // A per-clause sentence about the input would need one per clause, and the agent
+    // already has the clause in context.
+    expect(text).not.toContain("sh -lc");
+    expect(text).not.toContain("instead");
+    expect(text).not.toContain("not on the host");
+  });
+
+  test("no path supplied, no rules line: the text never invents a location", () => {
+    expect(refusalText(POLICY, VERDICT)).not.toContain("Rules:");
+  });
+
+  test("a verdict with no reason still names its clause id", () => {
+    expect(refusalText(POLICY, { ...VERDICT, reasons: [] })).toContain("refused by clause deps");
+  });
+
+  test("a verdict with neither reason nor clause says so rather than rendering a null", () => {
+    const bare: PolicyVerdict = {
+      violation: true,
+      probability: 0.9,
+      threshold: 0.65,
+      clause: null,
+      reasons: [],
+      missing: [],
+    };
+    expect(refusalText(POLICY, bare)).toContain("refused by a policy clause");
+  });
+
+  test("a policy without a binding refuses the same way, since the clause is the reason", () => {
+    const noBinding = refusalText({ ...POLICY, binding: null }, VERDICT);
+    expect(noBinding).toContain("refused by clause deps");
     expect(noBinding).not.toContain("sh -lc");
-  });
-
-  test("a container-headed command with no single replacement says to rerun the host part", () => {
-    const mixed = refusalText(POLICY, VERDICT, "docker exec -it acme-dev-1 pnpm install; pnpm build");
-    expect(mixed).toContain("Run the host part inside the devcontainer yourself");
-    expect(mixed).toContain("starts with `docker`");
-    expect(mixed).not.toContain("sh -lc");
-    expect(mixed).not.toContain("/guard status");
   });
 });

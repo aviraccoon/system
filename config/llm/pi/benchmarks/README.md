@@ -74,17 +74,19 @@ the proposed commit message at all, or only quote an earlier round's verdict? On
 `MESSAGE_PROVIDER`, and `MESSAGE_THRESHOLD` override the defaults from
 `extensions/shared/review-message.ts`.
 
-## Environment-policy benchmark
+## Policy benchmark
 
-`policy.ts` judges bash commands against a project's environment policy: does the command do
-dependency, build, test or dev-server work outside the container the policy names, and which clause
-fired. There is no command list; the clauses are prose a project supplies, and the cases in
-`policy-cases.ts` (synthetic; `PolicyGroup` lists the groups and the case ids name the shapes).
+`policy.ts` judges a tool call against a project's policy: one question per clause, each with the
+criteria the clause carries or a neutral pair when it carries none, and the threshold that turns an
+answer into a refusal. There is no command list; the clauses are prose a project supplies, and the
+cases in `policy-cases.ts` (synthetic; `PolicyGroup` lists the groups and the case ids name the shapes).
 
-Two policies over the same clauses measure what length buys: `short` states the rules, `long` adds
-reasons and the clauses a project accumulates. The run also measures contamination: the factor battery
-is asked over the same states with and without the policy question, and the per-factor probability shifts
-are printed, so a future merge of the two into one request can be checked before it ships.
+Two policies over the same location clauses measure what length buys: `short` states the rules, `long`
+adds reasons and the clauses a project accumulates. A third policy carries one timeout-budget clause and
+no binding, so a clause on an axis other than where work runs is measured where it lives. The run also
+measures contamination: the factor battery is asked over the same states with and without the policy
+questions, and the per-factor probability shifts are printed, so a future merge of the two into one
+request can be checked before it ships.
 `BENCH_GROUP` selects case groups, `BENCH_SEED` fixes the risk fixtures,
 `POLICY_THRESHOLD` moves the refusal threshold, `CONTAM_CASES` sets the contamination sample,
 `BENCH_DUMP` writes JSONL, and `JEV_MODEL` / `JEV_PROVIDER` (default `openrouter-sidecar`) select the
@@ -147,7 +149,7 @@ All benchmarks use the same `TestCase` type and runner from `shared.ts`.
 | `verdict-cases.ts` | Synthetic verdict cases and threshold scoring |
 | `message.ts` | Message-judgment runner (synthetic cases) |
 | `message-cases.ts` | Synthetic message-judgment cases |
-| `policy.ts` | Environment-policy runner: accuracy per policy length, and contamination of the factor battery |
+| `policy.ts` | Policy runner: accuracy per policy length, a clause on another axis, and contamination of the factor battery |
 | `policy-cases.ts` | Synthetic policy cases and the short and long policies they are judged against |
 | `../extensions/shared/policy.ts` | Policy questions, their rendering, and the refusal derivation |
 | `jev.ts` | Jev (TypeSafe decisions-model) factor runner |

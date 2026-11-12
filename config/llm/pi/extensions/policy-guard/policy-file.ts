@@ -1,5 +1,5 @@
 /**
- * Parse and validate a project's environment policy file:
+ * Parse and validate a project's policy file:
  * `~/notes/llm/<project>/.agents/policy.json`.
  *
  * A hand-edited file gets one parser and one report. Every entry the parser
@@ -17,8 +17,9 @@ export interface PolicyFileResult {
   errors: string[];
 }
 
-const TOP_KEYS = new Set(["project", "environment", "binding", "clauses", "precedence"]);
-const CLAUSE_KEYS = new Set(["id", "text"]);
+const TOP_KEYS = new Set(["project", "binding", "clauses", "precedence"]);
+const CLAUSE_KEYS = new Set(["id", "text", "threshold", "criteria"]);
+const CRITERIA_KEYS = new Set(["true", "false"]);
 const BINDING_KEYS = new Set(["command", "workdir", "shell"]);
 
 function objectAt(value: unknown): Record<string, unknown> | null {
@@ -51,8 +52,6 @@ export function parsePolicyFile(raw: string): PolicyFileResult {
 
   const project = textAt(top.project);
   if (!project) errors.push('"project" must be a non-empty string');
-  const environment = textAt(top.environment);
-  if (!environment) errors.push('"environment" must be a non-empty string (for example "the devcontainer")');
 
   const clauses: PolicyClause[] = [];
   const rawClauses = top.clauses;
@@ -71,10 +70,39 @@ export function parsePolicyFile(raw: string): PolicyFileResult {
       const text = textAt(clause.text);
       if (!id) errors.push(`clauses[${index}].id must be a non-empty string`);
       if (!text) errors.push(`clauses[${index}].text must be a non-empty string`);
+      // Optional: a clause may refuse at its own probability instead of the policy default.
+      let threshold: number | undefined;
+      if (clause.threshold !== undefined) {
+        const value = clause.threshold;
+        if (typeof value !== "number" || !Number.isFinite(value) || value <= 0 || value > 1)
+          errors.push(`clauses[${index}].threshold must be a number above 0 and at most 1`);
+        else threshold = value;
+      }
+      // Optional: what counts as breaking this clause. Both halves are required, because a
+      // one-sided pair leaves the other answer to a default the author did not write.
+      let criteria: { true: string; false: string } | undefined;
+      if (clause.criteria !== undefined) {
+        const raw = objectAt(clause.criteria);
+        if (!raw) {
+          errors.push(`clauses[${index}].criteria must be an object with "true" and "false"`);
+        } else {
+          unknownKeys(raw, CRITERIA_KEYS, `clauses[${index}].criteria`, errors);
+          const whenTrue = textAt(raw.true);
+          const whenFalse = textAt(raw.false);
+          if (!whenTrue) errors.push(`clauses[${index}].criteria.true must be a non-empty string`);
+          if (!whenFalse) errors.push(`clauses[${index}].criteria.false must be a non-empty string`);
+          if (whenTrue && whenFalse) criteria = { true: whenTrue, false: whenFalse };
+        }
+      }
       if (id && seen.has(id))
         errors.push(`clauses[${index}].id "${id}" is a duplicate; clause ids are the citation key`);
       if (id) seen.add(id);
-      if (id && text) clauses.push({ id, text });
+      if (id && text) {
+        const parsed: PolicyClause = { id, text };
+        if (threshold !== undefined) parsed.threshold = threshold;
+        if (criteria !== undefined) parsed.criteria = criteria;
+        clauses.push(parsed);
+      }
     });
   }
 
@@ -107,6 +135,6 @@ export function parsePolicyFile(raw: string): PolicyFileResult {
     else precedence = text;
   }
 
-  if (errors.length > 0 || !project || !environment) return { policy: null, errors };
-  return { policy: { project, environment, binding, clauses, precedence }, errors };
+  if (errors.length > 0 || !project) return { policy: null, errors };
+  return { policy: { project, binding, clauses, precedence }, errors };
 }

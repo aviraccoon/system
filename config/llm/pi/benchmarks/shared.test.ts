@@ -3,17 +3,69 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  citationRows,
   fmt,
   loadAuthKey,
   loadProviders,
   mapWithConcurrency,
   parseModelArgs,
+  policyRowPass,
   resolveApiKey,
   resolveProviderKey,
   resolveRoleModels,
   selectTests,
   type TestCase,
 } from "./shared";
+
+// ── policyRowPass ──
+
+describe("policyRowPass", () => {
+  const verdict = (violation: boolean, clause: string | null, missing: string[] = []) => ({
+    violation,
+    clause,
+    missing,
+  });
+
+  test("a verdict that matches the label and cites the expected clause passes", () => {
+    expect(policyRowPass(verdict(true, "deps"), true, "deps")).toBe(true);
+    expect(policyRowPass(verdict(false, null), false, null)).toBe(true);
+  });
+
+  test("a row with an unchecked clause does not pass, whatever the verdict says", () => {
+    expect(policyRowPass(verdict(true, "deps", ["e2e"]), true, "deps")).toBe(false);
+    expect(policyRowPass(verdict(false, null, ["deps"]), false, null)).toBe(false);
+  });
+
+  test("a wrong verdict does not pass, including a false positive the citation cannot catch", () => {
+    expect(policyRowPass(verdict(false, null), true, "deps")).toBe(false);
+    // A false positive has no expected clause to compare, so only the verdict guard rejects it.
+    expect(policyRowPass(verdict(true, "deps"), false, null)).toBe(false);
+    expect(policyRowPass(verdict(true, "build"), true, "deps")).toBe(false);
+  });
+
+  test("a refusing row the case leaves unlabelled passes on its verdict alone", () => {
+    expect(policyRowPass(verdict(true, "deps"), true, null)).toBe(true);
+  });
+
+  test("a labelled allow row passes whatever it cites, since a citation is scored on refusals", () => {
+    expect(policyRowPass(verdict(false, "deps"), false, "e2e")).toBe(true);
+  });
+});
+
+// ── citationRows ──
+
+describe("citationRows", () => {
+  test("counts only labelled refusals the judge answered in full", () => {
+    const rows = [
+      { id: "complete", clausePass: true, missing: [] },
+      { id: "miscited", clausePass: false, missing: [] },
+      { id: "unchecked", clausePass: true, missing: ["e2e"] },
+      { id: "unlabelled", clausePass: null, missing: [] },
+    ];
+    // A miscited row counts: it is what makes the citation ratio able to fall.
+    expect(citationRows(rows).map((row) => row.id)).toEqual(["complete", "miscited"]);
+  });
+});
 
 // ── mapWithConcurrency ──
 

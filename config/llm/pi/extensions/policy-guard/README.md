@@ -1,41 +1,63 @@
 # policy-guard
 
-Refuses `bash` calls that break a project's environment policy: dependency,
-build, test or dev-server work that the project runs in a container.
+Refuses a tool call that breaks a project's policy: a command, a file write, a fetch or a dispatch that a clause in the project's file forbids.
 
 The policy is prose, per project, at `~/notes/llm/<project>/.agents/policy.json`.
 No command list lives in this extension and nothing here parses a shell. A
-decision model reads the command against the project's clauses and answers two
-questions: refuse it, and which clause fired. That is what lets the guard tell a
-dependency install apart from a packaging step, or a container test run from a
-host one, without a rule for every shape.
+decision model reads one call against the project's clauses, one question per
+clause, and the threshold that turns an answer into a refusal is a number in the
+file. That is what lets the guard tell a dependency install apart from a
+packaging step, or a budgeted run from an unbounded one, without a rule for
+every shape.
 
 ## Policy file
 
 ```json
 {
   "project": "acme-widgets",
-  "environment": "the devcontainer",
   "binding": {
     "command": "docker exec -w /workspaces/acme-widgets/app acme-dev-1",
     "workdir": "/workspaces/acme-widgets/app"
   },
   "clauses": [
-    { "id": "deps", "text": "Dependency work runs in the devcontainer." },
-    { "id": "e2e", "text": "Browser end-to-end suites run on the host." }
+    {
+      "id": "deps",
+      "text": "Dependency work runs in the devcontainer.",
+      "criteria": {
+        "true": "The call installs dependencies outside the devcontainer.",
+        "false": "The call runs no dependency install, or runs it in the devcontainer."
+      }
+    },
+    {
+      "id": "e2e",
+      "text": "Browser end-to-end suites run on the host.",
+      "criteria": {
+        "true": "The call runs a browser suite somewhere other than the host.",
+        "false": "The call runs no browser suite, or runs it on the host."
+      }
+    },
+    { "id": "budget", "text": "A long run carries a timeout budgeted from a measured run.", "threshold": 0.8 }
   ],
   "precedence": "The e2e clause is the only exception to the deps clause."
 }
 ```
 
-`binding` is the one project-specific machine fact: it turns a refusal into a
-runnable command. `command` is everything before the command string, `workdir`
-is the directory inside the environment that the host checkout mirrors, and
-`shell` is the prefix that turns a command string into one argv (`sh -lc` when
-absent, `bash -lc` or `sh -c` for an environment that wants another). Clauses are
-numbered in the question and cited by `id` in the refusal, so the reason can be
-checked against the policy. `precedence` is for clauses that collide; a policy
-that contradicts itself produces a judge that picks a side per call.
+`binding` is optional and is the one machine fact a policy may add: the command
+prefix that reaches the environment its clauses name. `command` is everything
+before the command string, `workdir` is the directory inside the environment that
+the host checkout mirrors, and `shell` is the prefix that turns a command string
+into one argv (`sh -lc` when absent, `bash -lc` or `sh -c` for an environment
+that wants another). A policy with no binding is judged on its clauses alone.
+
+Clauses are prose, and each one is asked separately, so a wrong verdict names the
+clause that caused it. `criteria` is what counts as breaking the clause, and it is the
+author's to write: only they know whether the clause requires work or allows it, and the
+neutral pair used when it is absent reads a permission as a requirement. `/guard status`
+names the clauses running on that default. `threshold` overrides the policy default for
+one clause, for a rule that should refuse earlier or later than the rest. `precedence` is
+for clauses that collide; it rides every question, because the clauses are judged
+independently and a clause that allows work another forbids is only visible to the model
+if it sees both.
 
 Every entry the parser drops is reported, and any error leaves the guard
 inactive rather than running on part of a policy. `/guard status` shows the
@@ -48,11 +70,20 @@ floor on that file is the only rule that still applies there.
 
 ## Behaviour
 
-- **Refusal**: a blocked call, with the clause quoted when the judge names one
-  (and said so when it does not), the command to run in the environment instead
-  when the binding can wrap the call, the policy file with its clause count, and
-  the grant line. Nothing auto-allows a refusal and there is no per-call dialog;
-  the only unlocks are the user-typed `/guard allow` and `/guard off`.
+- **Refusal**: a blocked call, naming the clause that fired and quoting it, the
+  policy file with its clause count, and the grant line. Nothing is derived from
+  the call itself: with clauses on any axis, a sentence about the input would need
+  one per clause, and the agent already has the clause in context. Nothing
+  auto-allows a refusal and there is no per-call dialog; the unlocks are the
+  user-typed `/guard allow` (host work, `bash` only) and `/guard off`.
+- **The refusal names the unlock that works for the call**: `/guard allow` for a
+  shell call, `/guard off` for anything else, because a host grant does not cover a
+  write, a fetch or a dispatch.
+- **Every tool call is judged**, not just `bash`: the call summary carries the
+  command, the resolved target paths, a url, a search query or a dispatch's task,
+  whichever the tool named. A call that names none of them is skipped, because no
+  clause can act on a bare tool name and a request per call is paid for by every
+  session. A host grant covers `bash` only.
 - **The policy is the user's to write**: an edit-like call whose target resolves to
   a `.agents/policy.json` is refused, whatever the session was granted and
   whether or not the file parses. A shell command naming the file is refused too,
@@ -60,25 +91,23 @@ floor on that file is the only rule that still applies there.
   at the read tool instead.
 - **No policy file**: the guard refuses nothing except a call that names a
   `.agents/policy.json`, and a project that wants the rest writes the file.
-- **Where a command runs** is a reading the judge makes, from the command itself.
-  The question tells it that a command whose work runs inside the container does
-  not break a container clause, and that a wrapper, a chain or a pipeline does not
-  change where its parts run. There is no harness-side recognizer to disagree
-  with, and no list of commands that stay transparent.
+- **Reading guidance, not a rule**: the question tells the judge that a wrapper, a
+  chain or a pipeline does not change what its parts do, and that a command
+  touching nothing the project owns is not project work. It says nothing about
+  where work runs, because a sentence that clears a container call also clears
+  every clause on another axis.
 - **Failures are loud, and mostly open**: an unavailable judge, an incomplete
   answer, a missing credential or an unreadable policy notifies the user once and
-  lets the call through, because blocking every bash call during a classifier
-  outage costs more than the report does. The citation request is the exception:
-  a failure there keeps the refusal and says the clause is missing.
-- **Verdicts are cached** per command for the session, so a retried test suite is
-  not re-judged. A judge failure is not cached; an uncited refusal is a verdict and
-  is.
+  lets the call through, because blocking every call during a classifier outage
+  costs more than the report does.
+- **Verdicts are cached** per call for the session, so a retried call is not
+  re-judged. A judge failure is not cached.
 
 ## Commands
 
 | Command | Effect |
 |---|---|
-| `/guard status` | Policy path, project, environment, clause count, state, judge and errors |
+| `/guard status` | Policy path, project, clause count, state, judge and errors |
 | `/guard allow` | Grant host work for this session |
 | `/guard revoke` | Take the grant back |
 | `/guard off` / `/guard on` | Turn policy checks off or on for this session |
@@ -93,11 +122,10 @@ judged in this session, each with the clause it broke (an allowed call has none)
 ## Decision log
 
 `~/.pi/agent/state/policy-guard.log` holds one JSON line per call the guard judged or
-refused, tagged with the session id: allowed calls included, and a bash command is not
-re-judged while its verdict is cached. It is the record the judge's probability lives
-in; the tool's view never renders it, though an uncited refusal quotes it in the reason
-line. `session_start` trims the file to its newest `FILE_LIMIT` lines, so the oldest
-records are dropped.
+refused, tagged with the session id: allowed calls included, and a call is not
+re-judged while its verdict is cached. It is the record of the verdict probability and
+the clause that fired; the tool's view never renders a number. `session_start` trims the
+file to its newest `FILE_LIMIT` lines, so the oldest records are dropped.
 
 ## Configuration
 
@@ -110,8 +138,9 @@ records are dropped.
 
 The questions, the clause rendering and the refusal derivation are in
 `../shared/policy.ts`. The threshold is a starting point calibrated with
-`benchmarks/policy.ts`, which also measures whether the policy question changes
-any of the risk battery's answers when both ride one request.
+`benchmarks/policy.ts`, which also measures a clause on an axis other than where
+work runs, and whether the policy questions change any of the risk battery's
+answers when both ride one request.
 
 ## Files
 

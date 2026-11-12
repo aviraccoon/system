@@ -1,20 +1,23 @@
 /**
- * policy-guard: refuse host work that a project's environment policy keeps in a
- * container.
+ * policy-guard: refuse a tool call that breaks a project's policy.
  *
- * The policy is prose, per project, in
- * `~/notes/llm/<project>/.agents/policy.json`. No command list lives in
- * this extension: a decision model reads the command and the clauses and answers
- * two questions, should this be refused and which clause fired. The verdict is a
- * floor. Nothing auto-allows it, there is no per-call dialog, and the only unlocks
- * are the user-typed `/guard allow` and `/guard off`.
+ * The policy is prose, per project, in `~/notes/llm/<project>/.agents/policy.json`.
+ * No command list lives in this extension: a decision model reads one call against
+ * the clauses, one question per clause, and the threshold that turns an answer into
+ * a refusal is a number in the file. The verdict is a floor. Nothing auto-allows it,
+ * there is no per-call dialog, and the only unlocks are the user-typed `/guard allow`
+ * and `/guard off`.
+ *
+ * Every tool call is judged, not just bash: a clause can be about a path, a url, a
+ * dispatch or a command, and the call summary carries whichever of those the tool
+ * named. A call that names none of them is skipped, because no clause can act on a
+ * bare tool name and a request per call is paid for by every session.
  *
  * Failures are visible, and mostly open. No policy file means nothing is judged; the
  * policy file itself is still floored. An unreadable policy, a missing credential or an
  * unavailable judge notifies the user once and lets the call through: a classifier outage
- * that blocks every bash call costs more than one that reports itself, and the report is
- * what keeps it from being silent. The citation request is the exception: it runs only
- * after a refusal is decided, so a failure there keeps the refusal and loses the clause.
+ * that blocks every call costs more than one that reports itself, and the report is what
+ * keeps it from being silent.
  *
  * Commands: /guard status | allow | revoke | off | on.
  *
@@ -34,7 +37,9 @@ import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
 import { journalNotesDir, projectFor } from "../shared/journal-context";
 import { resolveProviderAuth } from "../shared/model-roles";
 import {
-  buildPolicyState,
+  type CallFacts,
+  callSummary,
+  hasContent,
   judgePolicy,
   type Policy,
   type PolicyAsk,
@@ -68,18 +73,19 @@ export const DECISIONS_PATH = join(homedir(), ".pi", "agent", "state", "policy-g
 const POLICY_NAME = /(^|\/)\.agents\/policy\.json$/i;
 
 const POLICY_WRITE_REASON =
-  "[policy-guard] refused: a project's environment policy is the user's to edit. Name the rule you think is wrong instead of writing it.";
+  "[policy-guard] refused: a project's policy is the user's to edit. Name the rule you think is wrong instead of writing it.";
 
 const POLICY_SHELL_REASON =
-  "[policy-guard] refused: a shell command that names an environment policy. The guard does not parse shell to tell a read from a write, so read the file with the read tool; the user is the one who changes it.";
+  "[policy-guard] refused: a shell command that names a policy file. The guard does not parse shell to tell a read from a write, so read the file with the read tool; the user is the one who changes it.";
 
-/** pi's write and edit tools strip a leading `@`, so a target path is read the same way. */
+/** pi's write and edit tools strip a leading `@`, and a `~` names the home directory. */
 function resolveTarget(path: string, cwd: string): string {
   const bare = path.trim().replace(/^@/, "");
-  return isAbsolute(bare) ? bare : resolve(cwd, bare);
+  const expanded = bare === "~" || bare.startsWith("~/") ? join(homedir(), bare.slice(1)) : bare;
+  return isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
 }
 
-/** Whether a path names an environment policy, by its own form or its resolved one. */
+/** Whether a path names a policy file, by its own form or its resolved one. */
 function isPolicyPath(path: string): boolean {
   if (POLICY_NAME.test(normalize(path))) return true;
   try {
@@ -106,6 +112,12 @@ function policyWriteReason(toolName: string, input: Record<string, unknown>, cwd
   }
   const command = (input as { command?: unknown }).command;
   return typeof command === "string" && command.toLowerCase().includes(POLICY_FILE) ? POLICY_SHELL_REASON : null;
+}
+
+/** The clauses judged against the neutral pair, named so the author can add their own. */
+function defaultCriteriaLine(policy: Policy): string {
+  const defaults = policy.clauses.filter((clause) => !clause.criteria).map((clause) => clause.id);
+  return defaults.length > 0 ? `clauses on the default criteria: ${defaults.join(", ")}` : "";
 }
 
 export interface PolicyGuardOverrides {
@@ -181,9 +193,8 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
   }
 
   /** A call in one line, for the decision record: the command, or the path it targets. */
-  function describeCall(toolName: string, input: Record<string, unknown>): string {
-    if (typeof input.command === "string") return input.command;
-    return collectToolPaths(toolName, input)[0] ?? toolName;
+  function describeCall(facts: CallFacts): string {
+    return facts.command ?? facts.paths?.[0] ?? facts.url ?? facts.query ?? facts.task ?? facts.tool;
   }
 
   const source = createPolicySource({
@@ -221,7 +232,7 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
     }
   }
 
-  async function judge(ctx: ExtensionContext, current: Policy, command: string): Promise<PolicyVerdict | null> {
+  async function judge(ctx: ExtensionContext, current: Policy, facts: CallFacts): Promise<PolicyVerdict | null> {
     let ask: PolicyAsk;
     if (overrides.ask) {
       ask = overrides.ask;
@@ -235,14 +246,15 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
       ask = async (questions, state) => (await decisionsComplete({ model: MODEL, state, questions }, options)).answers;
     }
     try {
-      const verdict = await judgePolicy(
-        ask,
-        current,
-        buildPolicyState({ command, project: current.project, cwd: ctx.cwd }),
-        THRESHOLD,
-      );
-      if (!verdict) {
-        notifyOnce(ctx, "incomplete", "policy-guard: the judge answered incompletely; that call was not checked");
+      const verdict = await judgePolicy(ask, current, facts, THRESHOLD);
+      if (verdict.missing.length > 0) {
+        // A gap is reported once per session: the clauses it names were not checked, and
+        // the rest of the verdict still stands.
+        notifyOnce(
+          ctx,
+          "incomplete",
+          `policy-guard: the judge did not answer for ${verdict.missing.join(", ")}; those clauses were not checked`,
+        );
       }
       return verdict;
     } catch (err) {
@@ -287,37 +299,35 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
 
   pi.on("tool_call", async (event, ctx) => {
     if (off) return;
-    const write = policyWriteReason(event.toolName, event.input as Record<string, unknown>, ctx.cwd);
+    const input = event.input as Record<string, unknown>;
+    const facts = callSummary(event.toolName, input, ctx.cwd, (path) => resolveTarget(path, ctx.cwd));
+    const write = policyWriteReason(event.toolName, input, ctx.cwd);
     if (write) {
-      const input = event.input as Record<string, unknown>;
-      recordDecision(
-        ctx,
-        event.toolName === "bash" ? "policy-shell" : "policy-write",
-        describeCall(event.toolName, input),
-        null,
-      );
+      recordDecision(ctx, event.toolName === "bash" ? "policy-shell" : "policy-write", describeCall(facts), null);
       return { block: true, reason: write };
     }
-    if (event.toolName !== "bash" || granted) return;
+    // A host grant is about host work, so it covers bash and nothing else.
+    if (event.toolName === "bash" && granted) return;
+    // A call that names nothing a clause could be about is not judged.
+    if (!hasContent(facts)) return;
     refresh(ctx);
     const current = policy;
     if (!current) return;
-    const command = (event.input as { command?: unknown }).command;
-    if (typeof command !== "string" || command.trim() === "") return;
-    let verdict = verdicts.get(command);
+    const key = JSON.stringify(facts);
+    let verdict = verdicts.get(key);
     if (!verdict) {
-      const judged = await judge(ctx, current, command);
+      const judged = await judge(ctx, current, facts);
       if (!judged) return;
-      recordDecision(ctx, "policy", command, judged);
+      recordDecision(ctx, "policy", describeCall(facts), judged);
       verdict = judged;
-      verdicts.set(command, verdict);
+      verdicts.set(key, verdict);
     }
     if (!verdict.violation) return;
-    return { block: true, reason: refusalText(current, verdict, command, { cwd: ctx.cwd, policyPath }) };
+    return { block: true, reason: refusalText(current, verdict, { policyPath, tool: event.toolName }) };
   });
 
   pi.registerCommand("guard", {
-    description: "Environment policy guard: status, allow (host work for this session), revoke, off, on",
+    description: "Project policy guard: status, allow (host work for this session), revoke, off, on",
     getArgumentCompletions: (prefix) =>
       ["status", "allow", "revoke", "off", "on"]
         .filter((name) => name.startsWith(prefix))
@@ -352,10 +362,13 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
       const lines = [
         `policy: ${policyPath}`,
         policy
-          ? `project: ${policy.project}; environment: ${policy.environment}; clauses: ${policy.clauses.length}`
+          ? `project: ${policy.project}; clauses: ${policy.clauses.length}`
           : off
             ? "project: none (no usable policy file; the guard is off, so nothing is refused)"
             : "project: none (no usable policy file, so only the policy file itself is refused)",
+        // A clause without criteria is judged against the neutral pair, which is what a
+        // permission gets wrong; naming them is the only place the author sees it.
+        ...(policy ? [defaultCriteriaLine(policy)] : []),
         `state: ${off ? "off" : "on"}${granted ? ", host granted for this session" : ""}`,
         `judge: ${MODEL} via ${PROVIDER}, threshold ${THRESHOLD}`,
         errors.length > 0 ? `errors: ${errors.join("; ")}` : "",
@@ -366,19 +379,19 @@ export default function policyGuardExtension(pi: ExtensionAPI, overrides: Policy
 
   pi.registerTool({
     name: "policy",
-    label: "Environment policy",
+    label: "Project policy",
     description:
-      "This project's environment policy: the rules the guard enforces, whether they loaded, the session's guard state, and the newest calls the guard has judged in this session. Read-only; the rules file is the user's to edit.",
+      "This project's policy: the rules the guard enforces, whether they loaded, the session's guard state, and the newest calls the guard has judged in this session. Read-only; the rules file is the user's to edit.",
     parameters: Type.Object({}),
     promptSnippet:
-      "policy: the project's environment policy, its load state, this session's guard state, and the newest calls the guard has judged this session.",
+      "policy: the project's policy, its load state, this session's guard state, and the newest calls the guard has judged this session.",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       refresh(ctx);
       const lines: string[] = [];
       if (policy) {
         lines.push(policySummary(policy, policyPath));
       } else {
-        lines.push(`No usable environment policy at ${policyPath}.`);
+        lines.push(`No usable policy at ${policyPath}.`);
         if (errors.length > 0) lines.push(`errors: ${errors.join("; ")}`);
       }
       lines.push("", `state: ${off ? "off" : "on"}; host grant: ${granted ? "given for this session" : "not given"}`);

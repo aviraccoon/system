@@ -3,7 +3,6 @@ import { createPolicySource } from "./policy-source";
 
 const VALID = JSON.stringify({
   project: "acme-widgets",
-  environment: "the devcontainer",
   binding: {
     command: "docker exec -w /workspaces/acme-widgets/app acme-dev-1",
     workdir: "/workspaces/acme-widgets/app",

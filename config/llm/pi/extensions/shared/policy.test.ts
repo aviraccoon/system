@@ -1,25 +1,21 @@
 import { describe, expect, test } from "bun:test";
-import type { ChoiceQuestion, DecisionsAnswer, NoulQuestion } from "./decisions";
+import type { DecisionsAnswer, NoulQuestion } from "./decisions";
 import {
-  buildPolicyState,
-  CLAUSE_QUESTION,
-  clauseQuestion,
+  bindingShell,
+  callSummary,
+  clauseQuestionId,
+  clauseQuestions,
+  DEFAULT_CRITERIA,
   DEFAULT_POLICY_THRESHOLD,
+  hasContent,
   judgePolicy,
-  NO_CLAUSE,
-  POLICY_QUESTION,
   type Policy,
-  policyFromAnswers,
-  policyQuestion,
   policySummary,
-  replacementCommand,
-  withClauseCitation,
+  verdictFromAnswers,
 } from "./policy";
-import { shellQuote } from "./shell-quote";
 
 const POLICY: Policy = {
   project: "acme-widgets",
-  environment: "the devcontainer",
   binding: {
     command: "docker exec -w /workspaces/acme-widgets/app acme-dev-1",
     workdir: "/workspaces/acme-widgets/app",
@@ -31,74 +27,257 @@ const POLICY: Policy = {
   precedence: "The e2e clause beats the deps clause.",
 };
 
-const answers = (noul: number, cited?: string): Record<string, DecisionsAnswer> => {
-  const out: Record<string, DecisionsAnswer> = { [POLICY_QUESTION]: { type: "noul", noul } };
-  if (cited !== undefined) {
-    const probabilities: Record<string, number> = Object.fromEntries(
-      POLICY.clauses.map((c) => [c.id, c.id === cited ? 0.9 : 0.05]),
-    );
-    probabilities[cited] = 0.9;
-    out[CLAUSE_QUESTION] = { type: "choice", choice: cited, probabilities };
-  }
-  return out;
-};
+/** One noul answer per clause, keyed the way the questions are. */
+const answers = (...scores: number[]): Record<string, DecisionsAnswer> =>
+  Object.fromEntries(
+    POLICY.clauses.map((clause, index) => [
+      clauseQuestionId(clause.id),
+      { type: "noul" as const, noul: scores[index] ?? 0 },
+    ]),
+  );
 
-describe("buildPolicyState", () => {
-  test("carries the facts the runtime owns: project, cwd and command", () => {
-    const state = buildPolicyState({ command: "pnpm install", project: "acme-widgets", cwd: "/Users/acme/app" });
-    expect(state).toEqual({ project: "acme-widgets", cwd: "/Users/acme/app", command: "pnpm install" });
+describe("callSummary", () => {
+  test("carries the command of a shell call", () => {
+    const facts = callSummary("bash", { command: "pnpm install" }, "/Users/acme/app");
+    expect(facts).toEqual({ tool: "bash", cwd: "/Users/acme/app", command: "pnpm install" });
+  });
+
+  test("resolves the targets of an edit-like call through the caller's resolver", () => {
+    const resolve = (path: string) => `/Users/acme/app/${path}`;
+    expect(callSummary("write", { path: "src/a.ts" }, "/Users/acme/app", resolve).paths).toEqual([
+      "/Users/acme/app/src/a.ts",
+    ]);
+    expect(
+      callSummary("patch", { path: "src/a.ts", edits: [{ path: "src/b.ts" }, {}] }, "/Users/acme/app", resolve).paths,
+    ).toEqual(["/Users/acme/app/src/b.ts", "/Users/acme/app/src/a.ts"]);
+  });
+
+  test("carries a read's path, so a clause can scope reads", () => {
+    expect(callSummary("read", { path: ".env" }, "/p", (path) => `/p/${path}`).paths).toEqual(["/p/.env"]);
+  });
+
+  test("carries a fetch's url, a search's query and domains, and a dispatch's task", () => {
+    expect(callSummary("web_fetch", { url: "https://acme.test/x" }, "/p").url).toBe("https://acme.test/x");
+    const search = callSummary("web_search", { query: "acme", includeDomains: ["acme.test"] }, "/p");
+    expect(search.query).toBe("acme");
+    expect(search.domains).toEqual(["acme.test"]);
+    expect(callSummary("subagent", { task: "survey the repos", agent: "researcher" }, "/p").task).toBe(
+      "survey the repos",
+    );
   });
 
   test("carries no transcript-derived field, so the agent cannot steer the judge", () => {
-    const state = buildPolicyState({ command: "ls", project: "acme-widgets", cwd: "/Users/acme/app" });
-    expect(Object.keys(state).sort()).toEqual(["command", "cwd", "project"]);
+    const facts = callSummary("bash", { command: "ls", description: "the user asked for this" }, "/p");
+    expect(Object.keys(facts).sort()).toEqual(["command", "cwd", "tool"]);
+  });
+
+  test("carries the bash tool's own budget, which is not in the command", () => {
+    const facts = callSummary("bash", { command: "pnpm test", timeout: 240 }, "/p");
+    expect(facts.timeout).toBe(240);
+    expect(callSummary("bash", { command: "pnpm test" }, "/p").timeout).toBeUndefined();
+  });
+
+  test("carries a dispatch's text in every form the tool accepts", () => {
+    expect(callSummary("subagent", { agent: "researcher", task: "one task" }, "/p").task).toBe("one task");
+    expect(
+      callSummary(
+        "subagent",
+        {
+          tasks: [
+            { agent: "a", task: "first" },
+            { agent: "b", task: "second" },
+          ],
+        },
+        "/p",
+      ).task,
+    ).toBe("first\n\nsecond");
+    expect(callSummary("subagent", { chain: [{ agent: "a", task: "then" }] }, "/p").task).toBe("then");
+    expect(callSummary("subagent", { spec: { instructions: "a worker spec" } }, "/p").task).toBe("a worker spec");
+  });
+
+  test("carries an lsp target, which the tool names as `file`", () => {
+    expect(callSummary("lsp", { action: "rename", file: "src/a.ts" }, "/p", (path) => `/p/${path}`).paths).toEqual([
+      "/p/src/a.ts",
+    ]);
+  });
+
+  test("hasContent is false for a call that names nothing a clause could be about", () => {
+    expect(hasContent(callSummary("policy", {}, "/p"))).toBe(false);
+    expect(hasContent(callSummary("bash", { command: "ls" }, "/p"))).toBe(true);
+    expect(hasContent(callSummary("read", { path: "a.ts" }, "/p"))).toBe(true);
   });
 });
 
-describe("policyQuestion", () => {
-  const instructions = policyQuestion(POLICY).instructions;
+describe("clauseQuestions", () => {
+  const questions = clauseQuestions(POLICY);
+  const deps = questions[clauseQuestionId("deps")];
 
-  test("numbers every clause with its text", () => {
-    expect(instructions).toContain("1. Dependency installs run in the container.");
-    expect(instructions).toContain("2. Browser end-to-end suites run on the host.");
+  test("asks one question per clause, keyed by the clause id", () => {
+    expect(Object.keys(questions).sort()).toEqual(["clause:deps", "clause:e2e"]);
   });
 
-  test("names the environment and how to reach it, so a refusal can be runnable", () => {
-    expect(instructions).toContain("the devcontainer");
-    expect(instructions).toContain("docker exec -w /workspaces/acme-widgets/app acme-dev-1");
+  test("quotes the clause it asks about, and its id", () => {
+    expect(deps.type).toBe("noul");
+    expect(deps.instructions).toContain("Clause deps: Dependency installs run in the container.");
   });
 
-  test("states precedence when the policy declares it", () => {
-    expect(instructions).toContain("Precedence: The e2e clause beats the deps clause.");
-    expect(policyQuestion({ ...POLICY, precedence: undefined }).instructions).not.toContain("Precedence:");
+  test("states precedence in every question, since the clauses are judged independently", () => {
+    expect(deps.instructions).toContain("Precedence: The e2e clause beats the deps clause.");
+    expect(questions[clauseQuestionId("e2e")].instructions).toContain("Precedence:");
+    const noPrecedence = clauseQuestions({ ...POLICY, precedence: undefined });
+    expect(noPrecedence[clauseQuestionId("deps")].instructions).not.toContain("Precedence:");
   });
 
-  test("tells the judge how to read a container command, since no fact supplies it", () => {
-    expect(instructions).toContain("docker exec");
-    expect(instructions).toContain("does not break a clause");
+  test("states the binding as a fact when the policy names one, and nothing when it does not", () => {
+    expect(deps.instructions).toContain("docker exec -w /workspaces/acme-widgets/app acme-dev-1");
+    const noBinding = clauseQuestions({ ...POLICY, binding: null });
+    expect(noBinding[clauseQuestionId("deps")].instructions).not.toContain("work environment");
   });
 
-  test("warns that a wrapper, a chain or a pipeline does not change where its parts run", () => {
-    expect(instructions).toContain("sh -c");
-    expect(instructions).toContain("&&");
-    expect(instructions).toContain("pipeline");
+  test("carries reading guidance about wrappers, mixed commands and project ownership", () => {
+    expect(deps.instructions).toContain("A shell wrapper");
+    expect(deps.instructions).toContain("touches nothing the project owns");
+    // The sentence that cleared a container call cleared every clause on another axis.
+    expect(deps.instructions).not.toContain("does not break a clause");
   });
 
-  test("bounds the outside-the-project rule, so work there that touches the project stays project work", () => {
-    expect(instructions).toContain("only if it touches that project's files");
+  test("a clause without criteria gets the neutral pair, which assumes nothing about its direction", () => {
+    const criteria = (deps as NoulQuestion).criteria ?? {};
+    expect(criteria).toEqual(DEFAULT_CRITERIA);
+    expect(criteria.true).toContain("does not do what it requires");
   });
 
-  test("names host work that belongs to no project, and the criterion repeats the instruction", () => {
-    const criteria = (policyQuestion(POLICY) as NoulQuestion).criteria ?? {};
-    const phrase = "touches nothing the project owns";
-    expect(instructions).toContain(phrase);
-    expect(criteria.false).toContain(phrase);
-    // A bare "runs outside the project" would allow work outside the tree that touches it.
-    expect(criteria.false).not.toContain("runs outside the project");
+  test("a clause's own criteria replace the default, so a permission is not read as a requirement", () => {
+    const withCriteria = clauseQuestions({
+      ...POLICY,
+      clauses: [
+        {
+          id: "e2e",
+          text: "Browser suites run on the host.",
+          criteria: { true: "The suite runs somewhere other than the host.", false: "The suite runs on the host." },
+        },
+      ],
+    });
+    expect((withCriteria[clauseQuestionId("e2e")] as NoulQuestion).criteria).toEqual({
+      true: "The suite runs somewhere other than the host.",
+      false: "The suite runs on the host.",
+    });
   });
 
   test("asks nothing about intent, because no transcript reaches the judge", () => {
-    expect(instructions.toLowerCase()).not.toContain("request");
+    expect(deps.instructions.toLowerCase()).not.toContain("request");
+  });
+});
+
+describe("verdictFromAnswers", () => {
+  test("a missing clause answer is reported, and the answered clauses still decide", () => {
+    const none = verdictFromAnswers({}, POLICY);
+    expect(none.violation).toBe(false);
+    expect(none.missing).toEqual(["deps", "e2e"]);
+    const partial = answers(0.9);
+    delete partial[clauseQuestionId("e2e")];
+    const verdict = verdictFromAnswers(partial, POLICY);
+    expect(verdict.violation).toBe(true);
+    expect(verdict.clause).toBe("deps");
+    expect(verdict.missing).toEqual(["e2e"]);
+  });
+
+  test("fires at the threshold, not only above it", () => {
+    const verdict = verdictFromAnswers(answers(DEFAULT_POLICY_THRESHOLD, 0), POLICY);
+    expect(verdict.violation).toBe(true);
+    expect(verdict.clause).toBe("deps");
+    expect(verdict.threshold).toBe(DEFAULT_POLICY_THRESHOLD);
+  });
+
+  test("below every threshold there is no violation and no clause", () => {
+    const verdict = verdictFromAnswers(answers(DEFAULT_POLICY_THRESHOLD - 0.01, 0), POLICY);
+    expect(verdict?.violation).toBe(false);
+    expect(verdict?.clause).toBeNull();
+    expect(verdict?.reasons).toEqual([]);
+  });
+
+  test("an allowed call still reports the highest probability, for the record", () => {
+    expect(verdictFromAnswers(answers(0.2, 0.5), POLICY)?.probability).toBe(0.5);
+  });
+
+  test("quotes the clause text in the reason, which is what the refusal renders", () => {
+    expect(verdictFromAnswers(answers(0.9, 0), POLICY)?.reasons).toEqual([
+      "clause deps: Dependency installs run in the container.",
+    ]);
+  });
+
+  test("a clause's own threshold overrides the default", () => {
+    const strict: Policy = {
+      ...POLICY,
+      clauses: [{ id: "deps", text: "Dependency installs run in the container.", threshold: 0.9 }],
+    };
+    const at = (noul: number) => verdictFromAnswers({ [clauseQuestionId("deps")]: { type: "noul", noul } }, strict);
+    expect(at(0.9)?.violation).toBe(true);
+    expect(at(0.9)?.threshold).toBe(0.9);
+    expect(at(0.89)?.violation).toBe(false);
+  });
+
+  test("the strongest firing clause is the one cited, not the first in the file", () => {
+    const verdict = verdictFromAnswers(answers(0.7, 0.95), POLICY);
+    expect(verdict?.clause).toBe("e2e");
+    expect(verdict?.probability).toBe(0.95);
+  });
+
+  test("a clause whose answer is the wrong type is reported as unchecked, not as a pass", () => {
+    const wrong = { ...answers(0.9, 0), [clauseQuestionId("e2e")]: { type: "choice" } } as unknown as Record<
+      string,
+      DecisionsAnswer
+    >;
+    const verdict = verdictFromAnswers(wrong, POLICY);
+    expect(verdict.clause).toBe("deps");
+    expect(verdict.missing).toEqual(["e2e"]);
+  });
+});
+
+describe("judgePolicy", () => {
+  test("asks every clause in one request, with the call facts and the project in the state", async () => {
+    const seen: { questions: string[]; state: Record<string, unknown> }[] = [];
+    const verdict = await judgePolicy(
+      async (questions, state) => {
+        seen.push({ questions: Object.keys(questions), state });
+        return answers(0.9, 0);
+      },
+      POLICY,
+      { tool: "bash", cwd: "/Users/acme/app", command: "pnpm install" },
+    );
+    expect(seen[0]?.questions.sort()).toEqual(["clause:deps", "clause:e2e"]);
+    expect(seen[0]?.state).toEqual({
+      project: "acme-widgets",
+      tool: "bash",
+      cwd: "/Users/acme/app",
+      command: "pnpm install",
+    });
+    expect(verdict?.clause).toBe("deps");
+  });
+
+  test("one request, whatever the clause count", async () => {
+    let calls = 0;
+    await judgePolicy(
+      async () => {
+        calls++;
+        return answers(0.1, 0.1);
+      },
+      POLICY,
+      { tool: "bash", cwd: "/p", command: "ls" },
+    );
+    expect(calls).toBe(1);
+  });
+
+  test("a failed request propagates, so the caller can notify and decide", async () => {
+    await expect(
+      judgePolicy(
+        async () => {
+          throw new Error("timeout");
+        },
+        POLICY,
+        { tool: "bash", cwd: "/p", command: "ls" },
+      ),
+    ).rejects.toThrow("timeout");
   });
 });
 
@@ -116,7 +295,7 @@ describe("policySummary", () => {
     expect(text).toContain("- e2e: Browser end-to-end suites run on the host.");
   });
 
-  test("names the command that reaches the environment, so a block is runnable", () => {
+  test("names the command that reaches the environment, so the agent can run work there", () => {
     expect(text).toContain("docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc");
   });
 
@@ -132,9 +311,8 @@ describe("policySummary", () => {
     const rendered = policySummary(custom, path);
     expect(rendered).toContain("acme-dev-1 bash -lc '<command>'");
     expect(rendered).not.toContain("acme-dev-1 sh -lc");
-    expect(replacementCommand(custom, "pnpm install")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 bash -lc 'pnpm install'",
-    );
+    expect(bindingShell(custom.binding ?? {})).toBe("bash -lc");
+    expect(bindingShell({})).toBe("sh -lc");
   });
 
   test("carries the precedence, and only when the policy declares one", () => {
@@ -158,243 +336,6 @@ describe("policySummary", () => {
   test("a policy without a binding renders the rules and no command", () => {
     const noBinding = policySummary({ ...POLICY, binding: null }, path);
     expect(noBinding).toContain("- deps:");
-    expect(noBinding).not.toContain("Run project work in");
-  });
-});
-
-describe("clauseQuestion", () => {
-  test("offers every clause plus an explicit none, so the answer is total", () => {
-    const criteria = (clauseQuestion(POLICY) as ChoiceQuestion).criteria;
-    expect(Object.keys(criteria).sort()).toEqual(["deps", "e2e", NO_CLAUSE].sort());
-    expect(criteria.deps).toBe("Dependency installs run in the container.");
-  });
-
-  test("phrases the citation as a consequence once a refusal is decided", () => {
-    const afterRefusal = (clauseQuestion(POLICY, { violation: true }) as ChoiceQuestion).instructions;
-    expect(afterRefusal).toContain("has been judged to break");
-    expect((clauseQuestion(POLICY) as ChoiceQuestion).instructions).not.toContain("has been judged");
-  });
-});
-
-describe("withClauseCitation", () => {
-  const verdict = {
-    violation: true,
-    probability: 0.9,
-    threshold: DEFAULT_POLICY_THRESHOLD,
-    clause: null,
-    reasons: ["probability 0.90 at threshold 0.65, but no clause was cited"],
-  };
-
-  test("replaces the uncited reason with the clause the second answer names", () => {
-    const cited = withClauseCitation(verdict, answers(0.9, "deps"), POLICY);
-    expect(cited.clause).toBe("deps");
-    expect(cited.reasons).toEqual(["clause deps: Dependency installs run in the container."]);
-  });
-
-  test("leaves an allowed command alone, since it has no clause to cite", () => {
-    const allowed = { ...verdict, violation: false, reasons: [] };
-    expect(withClauseCitation(allowed, answers(0.1, "deps"), POLICY)).toBe(allowed);
-  });
-
-  test("an answer that names none stays uncited instead of borrowing a clause", () => {
-    const uncited = withClauseCitation(verdict, answers(0.9, NO_CLAUSE), POLICY);
-    expect(uncited.clause).toBeNull();
-    expect(uncited.reasons[0]).toContain("no clause was cited");
-  });
-});
-
-describe("policyFromAnswers", () => {
-  test("a missing noul returns null, and the guard notifies and allows", () => {
-    expect(policyFromAnswers({}, POLICY)).toBeNull();
-    expect(policyFromAnswers({ [POLICY_QUESTION]: { type: "noul", noul: 0.1 } }, POLICY)?.violation).toBe(false);
-  });
-
-  test("fires at the threshold, not only above it", () => {
-    const verdict = policyFromAnswers(answers(DEFAULT_POLICY_THRESHOLD, "deps"), POLICY);
-    expect(verdict?.violation).toBe(true);
-    expect(verdict?.threshold).toBe(DEFAULT_POLICY_THRESHOLD);
-  });
-
-  test("below the threshold there is no violation and no clause", () => {
-    const verdict = policyFromAnswers(answers(DEFAULT_POLICY_THRESHOLD - 0.01, "deps"), POLICY);
-    expect(verdict?.violation).toBe(false);
-    expect(verdict?.clause).toBeNull();
-  });
-
-  test("a violation cites the clause the answer chose and quotes its text", () => {
-    const verdict = policyFromAnswers(answers(0.9, "deps"), POLICY);
-    expect(verdict?.clause).toBe("deps");
-    expect(verdict?.reasons).toEqual(["clause deps: Dependency installs run in the container."]);
-  });
-
-  test("a violation whose answer says none is reported as an uncited refusal, not dressed up", () => {
-    const verdict = policyFromAnswers(answers(0.9, NO_CLAUSE), POLICY);
-    expect(verdict?.violation).toBe(true);
-    expect(verdict?.clause).toBeNull();
-    expect(verdict?.reasons[0]).toContain("no clause was cited");
-  });
-
-  test("a cited id that is not in the policy is not a citation", () => {
-    const verdict = policyFromAnswers(answers(0.9, "made-up"), POLICY);
-    expect(verdict?.clause).toBeNull();
-  });
-
-  test("a violation with no clause answer at all is uncited, not an error", () => {
-    const verdict = policyFromAnswers(answers(0.9), POLICY);
-    expect(verdict?.violation).toBe(true);
-    expect(verdict?.clause).toBeNull();
-    expect(verdict?.reasons[0]).toContain("no clause was cited");
-  });
-
-  test("a clause answer of the wrong type is not a citation", () => {
-    const wrong = { type: "noul", noul: 0.9, choice: "deps" } as unknown as DecisionsAnswer;
-    const verdict = policyFromAnswers({ ...answers(0.9), [CLAUSE_QUESTION]: wrong }, POLICY);
-    expect(verdict?.violation).toBe(true);
-    expect(verdict?.clause).toBeNull();
-  });
-});
-
-describe("judgePolicy", () => {
-  const refused = { [POLICY_QUESTION]: { type: "noul" as const, noul: 0.9 } };
-
-  test("asks once and returns an allow without a citation request", async () => {
-    let calls = 0;
-    const verdict = await judgePolicy(
-      async () => {
-        calls++;
-        return answers(0.1);
-      },
-      POLICY,
-      {},
-    );
-    expect(verdict?.violation).toBe(false);
-    expect(calls).toBe(1);
-  });
-
-  test("cites from a second request after a refusal", async () => {
-    const verdict = await judgePolicy(
-      async (questions) => (POLICY_QUESTION in questions ? refused : answers(0.9, "deps")),
-      POLICY,
-      {},
-    );
-    expect(verdict?.violation).toBe(true);
-    expect(verdict?.clause).toBe("deps");
-  });
-
-  test("a failed citation request keeps the refusal, uncited, instead of allowing it", async () => {
-    const verdict = await judgePolicy(
-      async (questions) => {
-        if (POLICY_QUESTION in questions) return refused;
-        throw new Error("429");
-      },
-      POLICY,
-      {},
-    );
-    expect(verdict?.violation).toBe(true);
-    expect(verdict?.clause).toBeNull();
-    expect(verdict?.reasons[0]).toContain("no clause was cited");
-  });
-
-  test("a failed policy question propagates, so the caller can notify and decide", async () => {
-    await expect(
-      judgePolicy(
-        async () => {
-          throw new Error("timeout");
-        },
-        POLICY,
-        {},
-      ),
-    ).rejects.toThrow("timeout");
-  });
-});
-
-describe("replacementCommand", () => {
-  test("wraps the command so the refusal hands back something runnable", () => {
-    expect(replacementCommand(POLICY, "pnpm install --frozen-lockfile")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'pnpm install --frozen-lockfile'",
-    );
-  });
-
-  test("does not nest a command that already starts with the binding", () => {
-    expect(replacementCommand(POLICY, "docker exec -w /workspaces/acme-widgets/app acme-dev-1 pnpm install")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'pnpm install'",
-    );
-  });
-
-  test("offers nothing for a different container invocation, instead of nesting one", () => {
-    expect(replacementCommand(POLICY, "docker exec -it acme-dev-1 pnpm install; pnpm build")).toBeNull();
-  });
-
-  test("does not mistake a command that merely starts with the runtime word", () => {
-    expect(replacementCommand(POLICY, "docker-compose-helper run")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'docker-compose-helper run'",
-    );
-  });
-
-  test("drops a leading cd that resolves to the binding's workdir", () => {
-    // The wrapper already runs in the workdir; keeping the cd would point the
-    // suggestion at a subdirectory of a subdirectory.
-    expect(replacementCommand(POLICY, "cd app && pnpm install", "/workspaces/acme-widgets")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'pnpm install'",
-    );
-    expect(replacementCommand(POLICY, "cd /workspaces/acme-widgets/app && pnpm install")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'pnpm install'",
-    );
-  });
-
-  test("drops a cd into the workdir's mirror directory from the host root", () => {
-    for (const command of ["cd app && pnpm install", "cd app/ && pnpm install", "cd ./app/ && pnpm install"]) {
-      expect(replacementCommand(POLICY, command, "/Users/acme/acme-widgets")).toBe(
-        "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'pnpm install'",
-      );
-    }
-  });
-
-  test("drops a trailing-slash absolute target and a trailing-slash workdir", () => {
-    expect(replacementCommand(POLICY, "cd /workspaces/acme-widgets/app/ && pnpm install")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'pnpm install'",
-    );
-    const slashed = {
-      ...POLICY,
-      binding: { command: POLICY.binding?.command ?? "", workdir: "/workspaces/acme-widgets/app/" },
-    };
-    expect(replacementCommand(slashed, "cd /workspaces/acme-widgets/app && pnpm install")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'pnpm install'",
-    );
-  });
-
-  test("without a host cwd a relative cd is left alone rather than throwing", () => {
-    expect(replacementCommand(POLICY, "cd app && pnpm install")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'cd app && pnpm install'",
-    );
-  });
-
-  test("keeps a cd whose target is a deeper or neighbouring directory ending in the workdir's name", () => {
-    for (const command of ["cd frontend/app && pnpm install", "cd ../app && pnpm install"]) {
-      expect(replacementCommand(POLICY, command, "/Users/acme/acme-widgets")).toBe(
-        `docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc '${command}'`,
-      );
-    }
-  });
-
-  test("keeps a cd whose target name matches but whose host root does not", () => {
-    expect(replacementCommand(POLICY, "cd app && pnpm install", "/Users/acme/widgets/frontend")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'cd app && pnpm install'",
-    );
-  });
-
-  test("keeps a leading cd that goes somewhere else", () => {
-    expect(replacementCommand(POLICY, "cd packages/api && pnpm install", "/workspaces/acme-widgets")).toBe(
-      "docker exec -w /workspaces/acme-widgets/app acme-dev-1 sh -lc 'cd packages/api && pnpm install'",
-    );
-  });
-
-  test("has nothing to offer without a binding", () => {
-    expect(replacementCommand({ ...POLICY, binding: null }, "pnpm install")).toBeNull();
-  });
-
-  test("quotes single quotes so the command survives the shell", () => {
-    expect(shellQuote("echo 'hi'")).toBe("'echo '\\''hi'\\'''");
-    expect(shellQuote("")).toBe("''");
+    expect(noBinding).not.toContain("work environment");
   });
 });

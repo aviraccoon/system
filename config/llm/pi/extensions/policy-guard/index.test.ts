@@ -4,9 +4,10 @@
  * (`PolicyGuardOverrides`), so this runs without a pi session, a network call or the
  * notes tree.
  *
- * It exists because the wiring is where the silent failures live: dropping the
- * `ctx.cwd` argument to `refusalText` restores a nested `cd` in the replacement,
- * and a policy the agent can edit is a policy that is not enforced at all.
+ * It exists because the wiring is where the silent failures live: a call summary built
+ * without `ctx.cwd` resolves every path against the process directory, a policy the agent
+ * can edit is a policy that is not enforced at all, and a tool branch that returns early
+ * leaves every non-bash clause unread.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -22,7 +23,6 @@ import policyGuardExtension, { DECISIONS_PATH } from "./index";
 
 const POLICY = {
   project: "acme-widgets",
-  environment: "the devcontainer",
   binding: {
     command: "docker exec -w /workspaces/acme-widgets/app acme-dev-1",
     workdir: "/workspaces/acme-widgets/app",
@@ -47,16 +47,14 @@ afterEach(() => {
 /** The judge's answers, injected so no test needs a network call. */
 const ASK: PolicyAsk = async (questions) => {
   const answers: Record<string, DecisionsAnswer> = {};
-  if ("policy_violation" in questions) answers.policy_violation = { type: "noul", noul: 0.95 };
-  else answers.policy_clause = { type: "choice", choice: "deps", probabilities: { deps: 0.9 } };
+  for (const key of Object.keys(questions)) answers[key] = { type: "noul", noul: 0.95 };
   return answers;
 };
 
 /** A judge that clears everything: for the allowed side of the record. */
 const CLEARS: PolicyAsk = async (questions) => {
   const answers: Record<string, DecisionsAnswer> = {};
-  if ("policy_violation" in questions) answers.policy_violation = { type: "noul", noul: 0.05 };
-  else answers.policy_clause = { type: "choice", choice: "deps", probabilities: { deps: 0.9 } };
+  for (const key of Object.keys(questions)) answers[key] = { type: "noul", noul: 0.05 };
   return answers;
 };
 
@@ -139,29 +137,120 @@ async function blockReason(command: string, cwd: string): Promise<string | undef
 }
 
 describe("tool_call floor", () => {
-  test("the refusal reaches the agent with the clause and a wrapping replacement", async () => {
+  test("the refusal names the clause that fired and quotes it", async () => {
     const reason = await blockReason("pnpm install --frozen-lockfile", "/Users/acme/acme-widgets");
-    expect(reason).toContain("[policy-guard] refused");
-    expect(reason).toContain("clause deps:");
-    expect(reason).toContain("sh -lc 'pnpm install --frozen-lockfile'");
+    expect(reason).toContain("[policy-guard] refused by clause deps: Dependency work runs in the devcontainer.");
   });
 
-  test("the host cwd reaches the refusal text, so a leading cd into the workdir is dropped", async () => {
-    const reason = await blockReason("cd app && pnpm install", "/Users/acme/acme-widgets");
-    expect(reason).toContain("sh -lc 'pnpm install'");
-    expect(reason).not.toContain("cd app");
-  });
-
-  test("a host cwd that does not mirror the workdir's parent keeps the cd", async () => {
-    // Same command, a cwd that does not mirror the workdir's parent.
-    const reason = await blockReason("cd app && pnpm install", "/Users/acme/widgets/frontend");
-    expect(reason).toContain("sh -lc 'cd app && pnpm install'");
+  test("the refusal carries nothing about the call, since a clause can be about any axis", async () => {
+    const reason = await blockReason("pnpm install --frozen-lockfile", "/Users/acme/acme-widgets");
+    expect(reason).not.toContain("sh -lc");
+    expect(reason).not.toContain("instead");
   });
 
   test("the refusal names the file the rules live in, so a wrong clause is reportable", async () => {
     const reason = await blockReason("pnpm install", "/Users/acme/acme-widgets");
     expect(reason).toContain(`Rules: ${policyFile}`);
     expect(reason).toContain("the user's to change");
+  });
+});
+
+describe("every tool call", () => {
+  test("a write that breaks a clause is refused, and the record names the path it targeted", async () => {
+    const guard = await started(dir);
+    const result = (await guard.fire("tool_call", {
+      toolName: "write",
+      input: { path: join(dir, "src", "a.ts"), content: "x" },
+    })) as { block?: boolean; reason?: string } | undefined;
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("refused by clause deps");
+    const records = parseDecisions(readFileSync(join(dir, "policy-guard.log"), "utf-8"));
+    expect(records[0]?.command.endsWith("a.ts")).toBe(true);
+  });
+
+  test("a call that names nothing a clause could be about is not judged", async () => {
+    let calls = 0;
+    const counting: PolicyAsk = async (questions) => {
+      calls++;
+      return ASK(questions, {});
+    };
+    const guard = await started(dir, "s-test", counting);
+    const result = await guard.fire("tool_call", { toolName: "policy", input: {} });
+    expect(result).toBeUndefined();
+    expect(calls).toBe(0);
+  });
+
+  test("the bash tool's own budget reaches the judge, so a budgeted call is not read as unbudgeted", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const recording: PolicyAsk = async (questions, state) => {
+      seen.push(state);
+      return CLEARS(questions, state);
+    };
+    const guard = await started(dir, "s-test", recording);
+    await guard.fire("tool_call", { toolName: "bash", input: { command: "pnpm test", timeout: 240 } });
+    expect(seen[0]?.timeout).toBe(240);
+  });
+
+  test("a non-shell refusal names the unlock that works for it", async () => {
+    const guard = await started(dir);
+    const result = (await guard.fire("tool_call", {
+      toolName: "write",
+      input: { path: join(dir, "a.ts") },
+    })) as { block?: boolean; reason?: string } | undefined;
+    expect(result?.reason).toContain("/guard off");
+    expect(result?.reason).toContain("covers host work only");
+  });
+
+  test("a clause the judge did not answer is reported, and the rest still decide", async () => {
+    writeFileSync(
+      policyFile,
+      JSON.stringify({
+        ...POLICY,
+        clauses: [...POLICY.clauses, { id: "e2e", text: "Browser suites run on the host." }],
+      }),
+    );
+    const partial: PolicyAsk = async (questions) => {
+      const out: Record<string, DecisionsAnswer> = {};
+      for (const key of Object.keys(questions)) if (key === "clause:deps") out[key] = { type: "noul", noul: 0.95 };
+      return out;
+    };
+    const guard = await started(dir, "s-test", partial);
+    const result = (await guard.fire("tool_call", { toolName: "bash", input: { command: "pnpm install" } })) as
+      | { block?: boolean; reason?: string }
+      | undefined;
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("clause deps");
+    expect(guard.notices.join("\n")).toContain("did not answer for e2e");
+  });
+
+  test("the decision log records what a search asked for, not the tool name", async () => {
+    const guard = await started(dir, "s-test", CLEARS);
+    await guard.fire("tool_call", { toolName: "web_search", input: { query: "acme widgets" } });
+    const records = parseDecisions(readFileSync(join(dir, "policy-guard.log"), "utf-8"));
+    expect(records[0]?.command).toBe("acme widgets");
+  });
+
+  test("a session grant covers host work, not a write", async () => {
+    const guard = await started(dir);
+    await guard.command("guard", "allow");
+    const result = (await guard.fire("tool_call", {
+      toolName: "write",
+      input: { path: join(dir, "a.ts") },
+    })) as { block?: boolean } | undefined;
+    expect(result?.block).toBe(true);
+  });
+
+  test("the same call twice is judged once, so a retry does not pay for a second request", async () => {
+    let calls = 0;
+    const counting: PolicyAsk = async (questions) => {
+      calls++;
+      return ASK(questions, {});
+    };
+    const guard = await started(dir, "s-test", counting);
+    const call = { toolName: "bash", input: { command: "pnpm install" } };
+    await guard.fire("tool_call", call);
+    await guard.fire("tool_call", call);
+    expect(calls).toBe(1);
   });
 });
 
@@ -317,6 +406,13 @@ describe("the policy is not the agent's to write", () => {
     expect(result).toBeUndefined();
   });
 
+  test("/guard status names the clauses running on the default criteria", async () => {
+    const guard = await started(dir);
+    await guard.command("guard", "status");
+    // The fixture's clause has no criteria, so the author is told it runs on the neutral pair.
+    expect(guard.notices.join("\n")).toContain("clauses on the default criteria: deps");
+  });
+
   test("/guard status says the floor still applies where no policy loads", async () => {
     rmSync(policyFile, { force: true });
     const guard = await started(dir);
@@ -330,6 +426,18 @@ describe("the policy is not the agent's to write", () => {
     const offStatus = guard.notices.join("\n");
     expect(offStatus).toContain("the guard is off, so nothing is refused");
     expect(offStatus).not.toContain("only the policy file itself is refused");
+  });
+
+  test("a ~ path is expanded before the floor sees it", async () => {
+    const guard = await started(dir);
+    const result = (await guard.fire("tool_call", {
+      toolName: "write",
+      input: { path: "~/.agents/policy.json" },
+    })) as { block?: boolean } | undefined;
+    expect(result?.block).toBe(true);
+    // The name check alone also passes on `<cwd>/~/...`; the recorded target is the expanded path.
+    const records = parseDecisions(readFileSync(join(dir, "policy-guard.log"), "utf-8"));
+    expect(records[0]?.command).toBe(join(homedir(), ".agents", "policy.json"));
   });
 
   test("a leading @ is resolved the way the write tools resolve it", async () => {
@@ -353,7 +461,8 @@ describe("the policy is not the agent's to write", () => {
   });
 
   test("another file in the project is left alone", async () => {
-    const guard = await started(dir);
+    // Every tool call is judged now, so the judge clears this one: the floor is what must not fire.
+    const guard = await started(dir, "s-test", CLEARS);
     const result = await guard.fire("tool_call", {
       toolName: "patch",
       input: { path: join(dir, "README.md"), edits: [{ oldText: "a", newText: "b" }] },
@@ -364,7 +473,7 @@ describe("the policy is not the agent's to write", () => {
   test("the read tool is the way in, so reading the policy passes", async () => {
     // The shell refusal tells the agent to read the file; if the floor also refused the read tool,
     // that advice would be a dead end.
-    const guard = await started(dir);
+    const guard = await started(dir, "s-test", CLEARS);
     const result = await guard.fire("tool_call", { toolName: "read", input: { path: policyFile } });
     expect(result).toBeUndefined();
   });
@@ -477,7 +586,7 @@ describe("policy tool", () => {
     writeFileSync(policyFile, '{"project":""}');
     const guard = await started(dir);
     const text = await guard.tool("policy");
-    expect(text).toContain("No usable environment policy at");
+    expect(text).toContain("No usable policy at");
     expect(text).toContain("errors:");
   });
 
@@ -485,7 +594,7 @@ describe("policy tool", () => {
     rmSync(policyFile, { force: true });
     const guard = await started(dir);
     const text = await guard.tool("policy");
-    expect(text).toContain("No usable environment policy at");
+    expect(text).toContain("No usable policy at");
     expect(text).toContain(policyFile);
   });
 });

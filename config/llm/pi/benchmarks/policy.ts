@@ -1,20 +1,21 @@
 /**
- * Environment-policy benchmark.
+ * Policy benchmark.
  *
  * Run: BENCH_SEED=run-a bun run benchmarks/policy.ts
  *
- * Two measurements, in one run because both cost cents:
+ * Three measurements, in one run because all of them cost cents:
  *
  * 1. **Policy accuracy per policy length.** The same synthetic cases against a
  *    short policy (nine clauses) and a long one (the same nine with reasons,
  *    plus six a real project accumulates). The clause citation is scored
  *    separately: a refusal that fires for the right reason and one that fires
  *    citing nothing are not the same result.
- * 2. **Contamination.** The risk-factor battery is asked twice over identical
- *    states: alone, and beside the policy question. A factor probability that
- *    moves is what a merge of the two into one request would cost; the guard asks
- *    the policy question on its own today, so this measures the option it does
- *    not ship.
+ * 2. **A clause on another axis.** One policy carries a timeout budget and no
+ *    binding, so the only thing that can refuse a call is the budget. A guard
+ *    whose question is written around where work runs cannot pass these.
+ * 3. **Contamination.** The risk-factor battery is asked twice over identical
+ *    states: alone, and beside the policy questions. A factor probability that
+ *    moves is what a merge of the two into one request would cost.
  *
  * `BENCH_GROUP` selects case groups, `BENCH_SEED` fixes the risk fixtures,
  * `POLICY_THRESHOLD` moves the refusal threshold, `CONTAM_CASES` sets how many
@@ -28,18 +29,18 @@ import {
   type DecisionsQuestion,
   decisionsComplete,
 } from "../extensions/shared/decisions";
-import {
-  buildPolicyState,
-  DEFAULT_POLICY_THRESHOLD,
-  judgePolicy,
-  POLICY_QUESTION,
-  type Policy,
-  policyQuestion,
-} from "../extensions/shared/policy";
+import { clauseQuestions, DEFAULT_POLICY_THRESHOLD, judgePolicy, type Policy } from "../extensions/shared/policy";
 import { decisionFromAnswers, factorProbabilities, RISK_FACTORS } from "../extensions/shared/risk-factors";
 import { buildTests, makeFixture } from "./explain-cases";
-import { LONG_POLICY, POLICY_CASES, type PolicyCase, SHORT_POLICY } from "./policy-cases";
-import { mapWithConcurrency, resolveProviderKey } from "./shared";
+import {
+  LONG_POLICY,
+  POLICY_CASES,
+  type PolicyCase,
+  SHORT_POLICY,
+  TIMEOUT_CASES,
+  TIMEOUT_POLICY,
+} from "./policy-cases";
+import { citationRows, mapWithConcurrency, policyClausePass, policyRowPass, resolveProviderKey } from "./shared";
 
 const MODEL = process.env.JEV_MODEL ?? DEFAULT_DECISIONS_MODEL;
 const PROVIDER = process.env.JEV_PROVIDER ?? "openrouter-sidecar";
@@ -48,21 +49,25 @@ const THRESHOLD = Number(process.env.POLICY_THRESHOLD ?? DEFAULT_POLICY_THRESHOL
 const CONTAM_CASES = Number(process.env.CONTAM_CASES ?? 18);
 const DUMP = process.env.BENCH_DUMP;
 
+/** Every case either policy set carries, so a group filter can name any of them. */
+const ALL_CASES: PolicyCase[] = [...POLICY_CASES, ...TIMEOUT_CASES];
+
 const POLICIES: { name: string; policy: Policy }[] = [
   { name: "short", policy: SHORT_POLICY },
   { name: "long", policy: LONG_POLICY },
+  { name: "timeout", policy: TIMEOUT_POLICY },
 ];
 
 function selectedCases(): PolicyCase[] {
   const wanted = (process.env.BENCH_GROUP ?? "all").split(/[,\s]+/).filter(Boolean);
-  if (wanted.length === 0 || wanted.includes("all")) return POLICY_CASES;
-  const groups = new Set(POLICY_CASES.map((c) => c.group));
+  if (wanted.length === 0 || wanted.includes("all")) return ALL_CASES;
+  const groups = new Set(ALL_CASES.map((c) => c.group));
   for (const name of wanted) {
     if (!groups.has(name as PolicyCase["group"])) {
       throw new Error(`unknown group "${name}"; available: ${[...groups].join(", ")}`);
     }
   }
-  return POLICY_CASES.filter((c) => wanted.includes(c.group));
+  return ALL_CASES.filter((c) => wanted.includes(c.group));
 }
 
 interface PolicyRow {
@@ -73,6 +78,8 @@ interface PolicyRow {
   probability: number | null;
   expectedClause: string | null;
   citedClause: string | null;
+  /** Clause ids the judge did not answer; they were not checked. */
+  missing: string[];
   pass: boolean;
   clausePass: boolean | null;
   ms: number;
@@ -81,7 +88,7 @@ interface PolicyRow {
 }
 
 function questionSet(policy: Policy): Record<string, DecisionsQuestion> {
-  return { [POLICY_QUESTION]: policyQuestion(policy) };
+  return clauseQuestions(policy);
 }
 
 async function runPolicyCase(apiKey: string, policy: Policy, test: PolicyCase): Promise<PolicyRow> {
@@ -93,6 +100,7 @@ async function runPolicyCase(apiKey: string, policy: Policy, test: PolicyCase): 
     got: null,
     probability: null,
     citedClause: null,
+    missing: [],
     pass: false,
     clausePass: null,
     ms: 0,
@@ -102,35 +110,29 @@ async function runPolicyCase(apiKey: string, policy: Policy, test: PolicyCase): 
   let ms = 0;
   let cost = 0;
   try {
-    // The guard's own sequence: judgePolicy decides, then asks the clause only on a refusal.
-    const state = buildPolicyState(test.state);
+    // The guard's own call: every clause in one request, the threshold in code.
     const ask = async (questions: Record<string, DecisionsQuestion>, asked: Record<string, unknown>) => {
       const result = await decisionsComplete({ model: MODEL, state: asked, questions }, options);
       ms += result.ms;
       cost += result.usage.cost;
       return result.answers;
     };
-    const verdict = await judgePolicy(ask, policy, state, THRESHOLD);
-    if (!verdict) {
-      return { ...base, ms, cost, error: "incomplete answers" };
-    }
-    const settled = verdict;
-    const verdictPass = settled.violation === test.expected;
-    // Citation is only meaningful when the policy should have refused.
-    const clausePass = test.expected && test.clause ? settled.clause === test.clause : null;
+    const verdict = await judgePolicy(ask, policy, test.facts, THRESHOLD);
+    // One rule for the citation, shared with the pass rule, so the table's marker and its ok column agree.
+    const clausePass = policyClausePass(verdict, test.expected, test.clause ?? null);
     return {
       ...base,
-      got: settled.violation,
-      probability: settled.probability,
-      citedClause: settled.clause,
-      pass: verdictPass && clausePass !== false,
+      got: verdict.violation,
+      probability: verdict.probability,
+      citedClause: verdict.clause,
+      missing: verdict.missing,
+      pass: policyRowPass(verdict, test.expected, test.clause ?? null),
       clausePass,
       ms,
       cost,
     };
   } catch (err) {
-    // Only the decide request can throw out (judgePolicy keeps a failed citation);
-    // the citation failure shows as an uncited clause row instead.
+    // One request, so a failure is the only way a row errors.
     return { ...base, ms, cost, error: `decide: ${String(err).slice(0, 160)}` };
   }
 }
@@ -157,7 +159,7 @@ function printPolicyTable(policyName: string, rows: PolicyRow[]): void {
         row.probability === null ? "-" : row.probability.toFixed(2),
         cite,
         row.pass ? "ok" : "FAIL",
-      ])}${row.error ? `  ${row.error}` : ""}`,
+      ])}${row.error ? `  ${row.error}` : ""}${row.missing.length > 0 ? `  missing: ${row.missing.join(", ")}` : ""}`,
     );
   }
 }
@@ -168,18 +170,22 @@ function summarizePolicy(rows: PolicyRow[]): {
   falseNegatives: string[];
   clausePass: number;
   clauseTotal: number;
+  /** Rows where the judge left a clause unanswered, so the verdict came from part of the policy. */
+  missingRows: number;
   cost: number;
   meanMs: number;
 } {
   const falsePositives = rows.filter((r) => r.got === true && !r.expected).map((r) => r.id);
   const falseNegatives = rows.filter((r) => r.got !== true && r.expected).map((r) => r.id);
-  const clauseRows = rows.filter((r) => r.clausePass !== null);
+  // A row with an unchecked clause is not counted here: its citation came from part of the policy.
+  const clauseRows = citationRows(rows);
   return {
     pass: rows.filter((r) => r.pass).length,
     falsePositives,
     falseNegatives,
     clausePass: clauseRows.filter((r) => r.clausePass === true).length,
     clauseTotal: clauseRows.length,
+    missingRows: rows.filter((r) => r.missing.length > 0).length,
     cost: rows.reduce((sum, r) => sum + r.cost, 0),
     meanMs: rows.length === 0 ? 0 : rows.reduce((sum, r) => sum + r.ms, 0) / rows.length,
   };
@@ -276,7 +282,9 @@ let totalCost = 0;
 const dump: unknown[] = [];
 
 for (const { name, policy } of POLICIES) {
-  const rows = await mapWithConcurrency(cases, CONCURRENCY, (test) => runPolicyCase(apiKey, policy, test));
+  const pool = name === "timeout" ? TIMEOUT_CASES : POLICY_CASES;
+  const policyCases = pool.filter((c) => cases.includes(c));
+  const rows = await mapWithConcurrency(policyCases, CONCURRENCY, (test) => runPolicyCase(apiKey, policy, test));
   printPolicyTable(name, rows);
   const summary = summarizePolicy(rows);
   totalCost += summary.cost;
@@ -284,6 +292,7 @@ for (const { name, policy } of POLICIES) {
     `${summary.pass}/${rows.length} pass, ${summary.falsePositives.length} false positive` +
       ` (${summary.falsePositives.join(", ") || "none"}), ${summary.falseNegatives.length} false negative` +
       ` (${summary.falseNegatives.join(", ") || "none"}), citation ${summary.clausePass}/${summary.clauseTotal},` +
+      ` ${summary.missingRows} with an unchecked clause,` +
       ` mean ${Math.round(summary.meanMs)} ms, $${summary.cost.toFixed(4)}`,
   );
   dump.push({ kind: "policy", policy: name, rows });
