@@ -1,6 +1,6 @@
 /**
  * Parse and validate a project's environment policy file:
- * `~/notes/llm/<project>/.agents/environment.json`.
+ * `~/notes/llm/<project>/.agents/policy.json`.
  *
  * A hand-edited file gets one parser and one report. Every entry the parser
  * drops is named, and any error makes the policy inactive rather than half
@@ -9,11 +9,11 @@
  * supposed to honor is missing.
  */
 
-import type { EnvPolicy, PolicyClause } from "../shared/env-policy";
+import type { Policy, PolicyClause } from "../shared/policy";
 
 export interface PolicyFileResult {
   /** Null when the file has any error; the caller then runs without a guard. */
-  policy: EnvPolicy | null;
+  policy: Policy | null;
   errors: string[];
 }
 
@@ -78,7 +78,7 @@ export function parsePolicyFile(raw: string): PolicyFileResult {
     });
   }
 
-  let binding: EnvPolicy["binding"] = null;
+  let binding: Policy["binding"] = null;
   if (top.binding !== undefined && top.binding !== null) {
     const raw = objectAt(top.binding);
     if (!raw) {

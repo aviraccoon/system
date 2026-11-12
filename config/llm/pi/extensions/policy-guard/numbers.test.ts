@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_POLICY_THRESHOLD } from "../shared/env-policy";
+import { DEFAULT_POLICY_THRESHOLD } from "../shared/policy";
 import { guardNumbers } from "./numbers";
 
 describe("guardNumbers", () => {

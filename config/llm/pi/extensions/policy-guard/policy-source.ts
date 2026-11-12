@@ -7,12 +7,12 @@
  * safe direction, and it is the one failure a reader cannot see.
  */
 
-import type { EnvPolicy } from "../shared/env-policy";
+import type { Policy } from "../shared/policy";
 import { parsePolicyFile } from "./policy-file";
 
 export interface LoadedPolicy {
   path: string;
-  policy: EnvPolicy | null;
+  policy: Policy | null;
   errors: string[];
   /** True when this load differs from the last one, so caches must clear. */
   changed: boolean;
@@ -32,7 +32,7 @@ export function createPolicySource(deps: PolicySourceDeps): PolicySource {
   let path = "";
   /** null means the file was absent at the last load. */
   let mtime: number | null = null;
-  let policy: EnvPolicy | null = null;
+  let policy: Policy | null = null;
   let errors: string[] = [];
   let pathChanged = false;
 

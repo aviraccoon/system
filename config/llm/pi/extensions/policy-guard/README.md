@@ -1,9 +1,9 @@
-# env-guard
+# policy-guard
 
 Refuses `bash` calls that break a project's environment policy: dependency,
 build, test or dev-server work that the project runs in a container.
 
-The policy is prose, per project, at `~/notes/llm/<project>/.agents/environment.json`.
+The policy is prose, per project, at `~/notes/llm/<project>/.agents/policy.json`.
 No command list lives in this extension and nothing here parses a shell. A
 decision model reads the command against the project's clauses and answers two
 questions: refuse it, and which clause fired. That is what lets the guard tell a
@@ -54,12 +54,12 @@ floor on that file is the only rule that still applies there.
   the grant line. Nothing auto-allows a refusal and there is no per-call dialog;
   the only unlocks are the user-typed `/guard allow` and `/guard off`.
 - **The policy is the user's to write**: an edit-like call whose target resolves to
-  a `.agents/environment.json` is refused, whatever the session was granted and
+  a `.agents/policy.json` is refused, whatever the session was granted and
   whether or not the file parses. A shell command naming the file is refused too,
   read or write, because telling those apart means parsing shell; its refusal points
   at the read tool instead.
 - **No policy file**: the guard refuses nothing except a call that names a
-  `.agents/environment.json`, and a project that wants the rest writes the file.
+  `.agents/policy.json`, and a project that wants the rest writes the file.
 - **Where a command runs** is a reading the judge makes, from the command itself.
   The question tells it that a command whose work runs inside the container does
   not break a container clause, and that a wrapper, a chain or a pipeline does not
@@ -85,14 +85,14 @@ floor on that file is the only rule that still applies there.
 
 ## Tool
 
-`env_policy` (read-only, no arguments) is the agent's view of the guard: either the
+`policy` (read-only, no arguments) is the agent's view of the guard: either the
 rules with their clause ids, precedence and binding, or the policy path with its
 parse errors; the session state (granted or off); and the newest calls the guard has
 judged in this session, each with the clause it broke (an allowed call has none).
 
 ## Decision log
 
-`~/.pi/agent/state/env-guard.log` holds one JSON line per call the guard judged or
+`~/.pi/agent/state/policy-guard.log` holds one JSON line per call the guard judged or
 refused, tagged with the session id: allowed calls included, and a bash command is not
 re-judged while its verdict is cached. It is the record the judge's probability lives
 in; the tool's view never renders it, though an uncited refusal quotes it in the reason
@@ -109,7 +109,7 @@ records are dropped.
 | `PI_GUARD_TIMEOUT_MS` | `10000` |
 
 The questions, the clause rendering and the refusal derivation are in
-`../shared/env-policy.ts`. The threshold is a starting point calibrated with
+`../shared/policy.ts`. The threshold is a starting point calibrated with
 `benchmarks/policy.ts`, which also measures whether the policy question changes
 any of the risk battery's answers when both ride one request.
 
@@ -118,7 +118,7 @@ any of the risk battery's answers when both ride one request.
 | File | Purpose |
 |---|---|
 | `index.ts` | Activation, the `tool_call` floor, `/guard` |
-| `policy-file.ts` | Parser and validator for `environment.json` |
+| `policy-file.ts` | Parser and validator for `policy.json` |
 | `policy-source.ts` | Stat-gated policy loading, with the change signal that drops cached verdicts |
 | `numbers.ts` | Validated `PI_GUARD_THRESHOLD` / `PI_GUARD_TIMEOUT_MS` with the warning lines for bad values |
 | `decisions.ts` | The decision record and the session-scoped view the tool renders |

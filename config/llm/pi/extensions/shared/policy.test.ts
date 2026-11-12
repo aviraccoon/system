@@ -5,19 +5,19 @@ import {
   CLAUSE_QUESTION,
   clauseQuestion,
   DEFAULT_POLICY_THRESHOLD,
-  type EnvPolicy,
   judgePolicy,
   NO_CLAUSE,
   POLICY_QUESTION,
+  type Policy,
   policyFromAnswers,
   policyQuestion,
   policySummary,
   replacementCommand,
   withClauseCitation,
-} from "./env-policy";
+} from "./policy";
 import { shellQuote } from "./shell-quote";
 
-const POLICY: EnvPolicy = {
+const POLICY: Policy = {
   project: "acme-widgets",
   environment: "the devcontainer",
   binding: {
@@ -103,11 +103,11 @@ describe("policyQuestion", () => {
 });
 
 describe("policySummary", () => {
-  const path = "/notes/acme/.agents/environment.json";
+  const path = "/notes/acme/.agents/policy.json";
   const text = policySummary(POLICY, path);
 
   test("says what the guard is and what happens on a break, which a bare rule list cannot", () => {
-    expect(text).toContain("enforced by pi's env-guard");
+    expect(text).toContain("enforced by pi's policy-guard");
     expect(text).toContain("refused before it runs");
   });
 
@@ -152,7 +152,7 @@ describe("policySummary", () => {
       { ...POLICY, clauses: [{ id: "deps", text: "Dependency work runs in the container." }] },
       path,
     );
-    expect(single).toContain("Rules: /notes/acme/.agents/environment.json (1 clause)");
+    expect(single).toContain("Rules: /notes/acme/.agents/policy.json (1 clause)");
   });
 
   test("a policy without a binding renders the rules and no command", () => {

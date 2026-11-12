@@ -1,9 +1,9 @@
 /**
- * env-guard: refuse host work that a project's environment policy keeps in a
+ * policy-guard: refuse host work that a project's environment policy keeps in a
  * container.
  *
  * The policy is prose, per project, in
- * `~/notes/llm/<project>/.agents/environment.json`. No command list lives in
+ * `~/notes/llm/<project>/.agents/policy.json`. No command list lives in
  * this extension: a decision model reads the command and the clauses and answers
  * two questions, should this be refused and which clause fired. The verdict is a
  * floor. Nothing auto-allows it, there is no per-call dialog, and the only unlocks
@@ -31,16 +31,16 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Type } from "typebox";
 import { DEFAULT_DECISIONS_MODEL, decisionsComplete } from "../shared/decisions";
 import { collectToolPaths, EDIT_LIKE_TOOLS } from "../shared/edit-tools";
+import { journalNotesDir, projectFor } from "../shared/journal-context";
+import { resolveProviderAuth } from "../shared/model-roles";
 import {
   buildPolicyState,
-  type EnvPolicy,
   judgePolicy,
+  type Policy,
   type PolicyAsk,
   type PolicyVerdict,
   policySummary,
-} from "../shared/env-policy";
-import { journalNotesDir, projectFor } from "../shared/journal-context";
-import { resolveProviderAuth } from "../shared/model-roles";
+} from "../shared/policy";
 import {
   commandLine,
   type DecisionKind,
@@ -60,18 +60,18 @@ const MODEL = process.env.PI_GUARD_MODEL ?? DEFAULT_DECISIONS_MODEL;
 const NUMBERS = guardNumbers(process.env);
 const THRESHOLD = NUMBERS.threshold;
 const TIMEOUT_MS = NUMBERS.timeoutMs;
-const POLICY_FILE = join(".agents", "environment.json");
-const DECISIONS_PATH = join(homedir(), ".pi", "agent", "state", "env-guard.log");
+const POLICY_FILE = join(".agents", "policy.json");
+export const DECISIONS_PATH = join(homedir(), ".pi", "agent", "state", "policy-guard.log");
 
 /** A file the guard enforces is not a file the agent writes. Case-folded: APFS
- * opens `Environment.json` as the same file. */
-const POLICY_NAME = /(^|\/)\.agents\/environment\.json$/i;
+ * opens `Policy.json` as the same file. */
+const POLICY_NAME = /(^|\/)\.agents\/policy\.json$/i;
 
 const POLICY_WRITE_REASON =
-  "[env-guard] refused: a project's environment policy is the user's to edit. Name the rule you think is wrong instead of writing it.";
+  "[policy-guard] refused: a project's environment policy is the user's to edit. Name the rule you think is wrong instead of writing it.";
 
 const POLICY_SHELL_REASON =
-  "[env-guard] refused: a shell command that names an environment policy. The guard does not parse shell to tell a read from a write, so read the file with the read tool; the user is the one who changes it.";
+  "[policy-guard] refused: a shell command that names an environment policy. The guard does not parse shell to tell a read from a write, so read the file with the read tool; the user is the one who changes it.";
 
 /** pi's write and edit tools strip a leading `@`, so a target path is read the same way. */
 function resolveTarget(path: string, cwd: string): string {
@@ -108,7 +108,7 @@ function policyWriteReason(toolName: string, input: Record<string, unknown>, cwd
   return typeof command === "string" && command.toLowerCase().includes(POLICY_FILE) ? POLICY_SHELL_REASON : null;
 }
 
-export interface EnvGuardOverrides {
+export interface PolicyGuardOverrides {
   /** Bypass the decision model (tests): answers the questions directly. */
   ask?: PolicyAsk;
   /** Bypass the notes-tree lookup (tests): where this cwd's policy lives. */
@@ -117,11 +117,11 @@ export interface EnvGuardOverrides {
   decisionsPath?: string;
 }
 
-export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardOverrides = {}) {
+export default function policyGuardExtension(pi: ExtensionAPI, overrides: PolicyGuardOverrides = {}) {
   let granted = false;
   let off = false;
   let summarySent = false;
-  let policy: EnvPolicy | null = null;
+  let policy: Policy | null = null;
   let policyPath = "";
   let errors: string[] = [];
   /** Verdicts by command. Failures are not cached, so a retry retries. */
@@ -216,19 +216,19 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
       notifyOnce(
         ctx,
         `unusable:${loaded.path}`,
-        `env-guard: ${loaded.path} is not usable, so no policy is enforced: ${errors[0]}${errors.length > 1 ? ` (+${errors.length - 1} more, see /guard status)` : ""}`,
+        `policy-guard: ${loaded.path} is not usable, so no policy is enforced: ${errors[0]}${errors.length > 1 ? ` (+${errors.length - 1} more, see /guard status)` : ""}`,
       );
     }
   }
 
-  async function judge(ctx: ExtensionContext, current: EnvPolicy, command: string): Promise<PolicyVerdict | null> {
+  async function judge(ctx: ExtensionContext, current: Policy, command: string): Promise<PolicyVerdict | null> {
     let ask: PolicyAsk;
     if (overrides.ask) {
       ask = overrides.ask;
     } else {
       const auth = await resolveProviderAuth(PROVIDER, ctx.modelRegistry);
       if (!auth?.apiKey) {
-        notifyOnce(ctx, "no-auth", `env-guard: no credential for ${PROVIDER}; no policy is enforced`);
+        notifyOnce(ctx, "no-auth", `policy-guard: no credential for ${PROVIDER}; no policy is enforced`);
         return null;
       }
       const options = { apiKey: auth.apiKey, headers: auth.headers, timeoutMs: TIMEOUT_MS, signal: ctx.signal };
@@ -242,14 +242,14 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
         THRESHOLD,
       );
       if (!verdict) {
-        notifyOnce(ctx, "incomplete", "env-guard: the judge answered incompletely; that call was not checked");
+        notifyOnce(ctx, "incomplete", "policy-guard: the judge answered incompletely; that call was not checked");
       }
       return verdict;
     } catch (err) {
       notifyOnce(
         ctx,
         "judge-failed",
-        `env-guard: the judge failed, so policy checks are skipped: ${err instanceof Error ? err.message : String(err)}`,
+        `policy-guard: the judge failed, so policy checks are skipped: ${err instanceof Error ? err.message : String(err)}`,
       );
       return null;
     }
@@ -261,7 +261,7 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
     summarySent = false;
     verdicts.clear();
     notified.clear();
-    if (NUMBERS.warnings.length > 0) notifyOnce(ctx, "bad-numbers", `env-guard: ${NUMBERS.warnings.join("; ")}`);
+    if (NUMBERS.warnings.length > 0) notifyOnce(ctx, "bad-numbers", `policy-guard: ${NUMBERS.warnings.join("; ")}`);
     trimDecisions();
     refresh(ctx);
   });
@@ -276,7 +276,7 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
     if (!current) return;
     summarySent = true;
     return {
-      message: { customType: "env-guard-policy", content: policySummary(current, policyPath), display: false },
+      message: { customType: "policy-guard-policy", content: policySummary(current, policyPath), display: false },
     };
   });
 
@@ -327,26 +327,26 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
       refresh(ctx);
       if (action === "allow") {
         granted = true;
-        ctx.ui.notify("env-guard: host work allowed for this session", "info");
+        ctx.ui.notify("policy-guard: host work allowed for this session", "info");
         return;
       }
       if (action === "revoke") {
         granted = false;
-        ctx.ui.notify("env-guard: host grant revoked", "info");
+        ctx.ui.notify("policy-guard: host grant revoked", "info");
         return;
       }
       if (action === "off") {
         off = true;
-        ctx.ui.notify("env-guard: policy checks off for this session", "info");
+        ctx.ui.notify("policy-guard: policy checks off for this session", "info");
         return;
       }
       if (action === "on") {
         off = false;
-        ctx.ui.notify("env-guard: policy checks on", "info");
+        ctx.ui.notify("policy-guard: policy checks on", "info");
         return;
       }
       if (action !== "status") {
-        ctx.ui.notify(`env-guard: unknown action "${action}" (status, allow, revoke, off, on)`, "warning");
+        ctx.ui.notify(`policy-guard: unknown action "${action}" (status, allow, revoke, off, on)`, "warning");
         return;
       }
       const lines = [
@@ -365,13 +365,13 @@ export default function envGuardExtension(pi: ExtensionAPI, overrides: EnvGuardO
   });
 
   pi.registerTool({
-    name: "env_policy",
+    name: "policy",
     label: "Environment policy",
     description:
       "This project's environment policy: the rules the guard enforces, whether they loaded, the session's guard state, and the newest calls the guard has judged in this session. Read-only; the rules file is the user's to edit.",
     parameters: Type.Object({}),
     promptSnippet:
-      "env_policy: the project's environment policy, its load state, this session's guard state, and the newest calls the guard has judged this session.",
+      "policy: the project's environment policy, its load state, this session's guard state, and the newest calls the guard has judged this session.",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
       refresh(ctx);
       const lines: string[] = [];

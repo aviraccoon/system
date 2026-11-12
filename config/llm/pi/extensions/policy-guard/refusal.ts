@@ -10,19 +10,19 @@
  * session unlock, and neither is the agent's to set.
  */
 
-import { type EnvPolicy, type PolicyVerdict, replacementCommand, rulesLine } from "../shared/env-policy";
+import { type Policy, type PolicyVerdict, replacementCommand, rulesLine } from "../shared/policy";
 
-function runtimeOf(policy: EnvPolicy): string {
+function runtimeOf(policy: Policy): string {
   return policy.binding?.command.split(/\s+/)[0] ?? "";
 }
 
 export function refusalText(
-  policy: EnvPolicy,
+  policy: Policy,
   verdict: PolicyVerdict,
   command: string,
   options: { cwd?: string; policyPath?: string } = {},
 ): string {
-  // The reason line is owned by the verdict: citation() in shared/env-policy.ts.
+  // The reason line is owned by the verdict: citation() in shared/policy.ts.
   const clause = verdict.reasons[0] ?? "no clause was cited";
   const replacement = replacementCommand(policy, command, options.cwd);
   const runInstead = replacement
@@ -31,7 +31,7 @@ export function refusalText(
       ? `Run the host part inside ${policy.environment} yourself: this command already starts with \`${runtimeOf(policy)}\`, so wrapping the whole thing would nest the call.`
       : `Run it in ${policy.environment}; no command binding is configured for this project.`;
   const lines = [
-    `[env-guard] refused: ${policy.project} runs this work in ${policy.environment}, not on the host.`,
+    `[policy-guard] refused: ${policy.project} runs this work in ${policy.environment}, not on the host.`,
     clause,
     runInstead,
   ];

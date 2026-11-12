@@ -78,7 +78,7 @@ describe("sessionView", () => {
     const view = sessionView(
       [
         record(),
-        record({ kind: "policy-write", command: ".agents/environment.json", clause: null }),
+        record({ kind: "policy-write", command: ".agents/policy.json", clause: null }),
         record({ violated: false, clause: null, command: "git status" }),
       ],
       "s-1",

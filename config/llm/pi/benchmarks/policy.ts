@@ -31,11 +31,11 @@ import {
 import {
   buildPolicyState,
   DEFAULT_POLICY_THRESHOLD,
-  type EnvPolicy,
   judgePolicy,
   POLICY_QUESTION,
+  type Policy,
   policyQuestion,
-} from "../extensions/shared/env-policy";
+} from "../extensions/shared/policy";
 import { decisionFromAnswers, factorProbabilities, RISK_FACTORS } from "../extensions/shared/risk-factors";
 import { buildTests, makeFixture } from "./explain-cases";
 import { LONG_POLICY, POLICY_CASES, type PolicyCase, SHORT_POLICY } from "./policy-cases";
@@ -48,7 +48,7 @@ const THRESHOLD = Number(process.env.POLICY_THRESHOLD ?? DEFAULT_POLICY_THRESHOL
 const CONTAM_CASES = Number(process.env.CONTAM_CASES ?? 18);
 const DUMP = process.env.BENCH_DUMP;
 
-const POLICIES: { name: string; policy: EnvPolicy }[] = [
+const POLICIES: { name: string; policy: Policy }[] = [
   { name: "short", policy: SHORT_POLICY },
   { name: "long", policy: LONG_POLICY },
 ];
@@ -80,11 +80,11 @@ interface PolicyRow {
   error?: string;
 }
 
-function questionSet(policy: EnvPolicy): Record<string, DecisionsQuestion> {
+function questionSet(policy: Policy): Record<string, DecisionsQuestion> {
   return { [POLICY_QUESTION]: policyQuestion(policy) };
 }
 
-async function runPolicyCase(apiKey: string, policy: EnvPolicy, test: PolicyCase): Promise<PolicyRow> {
+async function runPolicyCase(apiKey: string, policy: Policy, test: PolicyCase): Promise<PolicyRow> {
   const base = {
     id: test.id,
     group: test.group,

@@ -1,7 +1,7 @@
 /**
  * Wiring test for the guard: what the agent receives at the start of a turn, and
  * what the floor refuses. The policy path and the decision model are injected
- * (`EnvGuardOverrides`), so this runs without a pi session, a network call or the
+ * (`PolicyGuardOverrides`), so this runs without a pi session, a network call or the
  * notes tree.
  *
  * It exists because the wiring is where the silent failures live: dropping the
@@ -11,14 +11,14 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "typebox";
 import type { DecisionsAnswer } from "../shared/decisions";
-import type { PolicyAsk } from "../shared/env-policy";
+import type { PolicyAsk } from "../shared/policy";
 import { FILE_LIMIT, parseDecisions } from "./decisions";
-import envGuardExtension from "./index";
+import policyGuardExtension, { DECISIONS_PATH } from "./index";
 
 const POLICY = {
   project: "acme-widgets",
@@ -34,8 +34,8 @@ let dir = "";
 let policyFile = "";
 
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), "env-guard-"));
-  policyFile = join(dir, ".agents", "environment.json");
+  dir = mkdtempSync(join(tmpdir(), "policy-guard-"));
+  policyFile = join(dir, ".agents", "policy.json");
   mkdirSync(dirname(policyFile), { recursive: true });
   writeFileSync(policyFile, JSON.stringify(POLICY));
 });
@@ -74,7 +74,7 @@ async function started(
   cwd: string,
   sessionId = "s-test",
   ask: PolicyAsk = ASK,
-  decisionsPath: string = join(dir, "env-guard.log"),
+  decisionsPath: string = join(dir, "policy-guard.log"),
 ): Promise<Guard> {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const commands = new Map<string, { handler: (args: string, ctx: unknown) => Promise<void> }>();
@@ -109,7 +109,7 @@ async function started(
   } as unknown as ExtensionContext;
   const notices: string[] = [];
 
-  envGuardExtension(pi, { ask, policyPath: () => policyFile, decisionsPath });
+  policyGuardExtension(pi, { ask, policyPath: () => policyFile, decisionsPath });
   await handlers.get("session_start")?.({}, ctx);
   return {
     fire: async (event, payload) => handlers.get(event)?.(payload ?? {}, ctx),
@@ -141,7 +141,7 @@ async function blockReason(command: string, cwd: string): Promise<string | undef
 describe("tool_call floor", () => {
   test("the refusal reaches the agent with the clause and a wrapping replacement", async () => {
     const reason = await blockReason("pnpm install --frozen-lockfile", "/Users/acme/acme-widgets");
-    expect(reason).toContain("[env-guard] refused");
+    expect(reason).toContain("[policy-guard] refused");
     expect(reason).toContain("clause deps:");
     expect(reason).toContain("sh -lc 'pnpm install --frozen-lockfile'");
   });
@@ -171,10 +171,16 @@ describe("rules in context", () => {
     const result = (await guard.fire("before_agent_start")) as
       | { message?: { content?: string; display?: boolean } }
       | undefined;
-    expect(result?.message?.content).toContain("enforced by pi's env-guard");
+    expect(result?.message?.content).toContain("enforced by pi's policy-guard");
     expect(result?.message?.content).toContain("- deps: Dependency work runs in the devcontainer.");
     expect(result?.message?.content).toContain(policyFile);
     expect(result?.message?.display).toBe(false);
+  });
+
+  test("the injected entry carries this extension's customType", async () => {
+    const guard = await started("/Users/acme/acme-widgets");
+    const result = (await guard.fire("before_agent_start")) as { message?: { customType?: string } } | undefined;
+    expect(result?.message?.customType).toBe("policy-guard-policy");
   });
 
   test("it is sent once, so a later turn does not carry a second copy", async () => {
@@ -212,7 +218,7 @@ describe("the policy is not the agent's to write", () => {
     const guard = await started(dir);
     const result = (await guard.fire("tool_call", {
       toolName: "write",
-      input: { path: join(".agents", "environment.json") },
+      input: { path: join(".agents", "policy.json") },
     })) as { block?: boolean } | undefined;
     expect(result?.block).toBe(true);
   });
@@ -262,7 +268,7 @@ describe("the policy is not the agent's to write", () => {
 
   test("the shell branch folds case too, since a case variant names the same file", async () => {
     const guard = await started(dir);
-    const mangled = policyFile.replace("environment.json", "Environment.JSON");
+    const mangled = policyFile.replace("policy.json", "Policy.JSON");
     const result = (await guard.fire("tool_call", { toolName: "bash", input: { command: `cat ${mangled}` } })) as
       | { block?: boolean; reason?: string }
       | undefined;
@@ -274,7 +280,7 @@ describe("the policy is not the agent's to write", () => {
     const guard = await started(dir);
     const result = (await guard.fire("tool_call", {
       toolName: "write",
-      input: { path: join(".agents", "Environment.json") },
+      input: { path: join(".agents", "Policy.json") },
     })) as { block?: boolean } | undefined;
     expect(result?.block).toBe(true);
   });
@@ -286,7 +292,7 @@ describe("the policy is not the agent's to write", () => {
     const guard = await started(dir);
     const result = (await guard.fire("tool_call", {
       toolName: "write",
-      input: { path: join(".agents", "Environment.json") },
+      input: { path: join(".agents", "Policy.json") },
     })) as { block?: boolean } | undefined;
     expect(result?.block).toBe(true);
   });
@@ -330,7 +336,7 @@ describe("the policy is not the agent's to write", () => {
     const guard = await started(dir);
     const result = (await guard.fire("tool_call", {
       toolName: "write",
-      input: { path: "@.agents/environment.json" },
+      input: { path: "@.agents/policy.json" },
     })) as { block?: boolean } | undefined;
     expect(result?.block).toBe(true);
   });
@@ -364,12 +370,12 @@ describe("the policy is not the agent's to write", () => {
   });
 });
 
-describe("env_policy tool", () => {
+describe("policy tool", () => {
   test("reports the rules, the session state and what was judged, without the probability", async () => {
     const guard = await started(dir);
     await guard.fire("tool_call", { toolName: "bash", input: { command: "pnpm install" } });
-    const text = await guard.tool("env_policy");
-    expect(text).toContain("enforced by pi's env-guard");
+    const text = await guard.tool("policy");
+    expect(text).toContain("enforced by pi's policy-guard");
     expect(text).toContain("state: on; host grant: not given");
     expect(text).toContain("judged in this session (newest 1):");
     expect(text).toContain("refused  pnpm install -> deps");
@@ -380,10 +386,10 @@ describe("env_policy tool", () => {
   test("the log keeps the probability and records a cleared call, which the view hides", async () => {
     const guard = await started(dir, "s-log", CLEARS);
     await guard.fire("tool_call", { toolName: "bash", input: { command: "git status" } });
-    const records = parseDecisions(readFileSync(join(dir, "env-guard.log"), "utf-8"));
+    const records = parseDecisions(readFileSync(join(dir, "policy-guard.log"), "utf-8"));
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({ violated: false, probability: 0.05, threshold: 0.65, session: "s-log" });
-    const text = await guard.tool("env_policy");
+    const text = await guard.tool("policy");
     expect(text).toContain("- allowed  git status");
     expect(text).not.toContain("0.05");
   });
@@ -391,7 +397,7 @@ describe("env_policy tool", () => {
   test("an unwritable log does not stop the refusal", async () => {
     const blocked = join(dir, "not-a-dir");
     writeFileSync(blocked, "a file where the log's directory would be");
-    const guard = await started(dir, "s-test", ASK, join(blocked, "env-guard.log"));
+    const guard = await started(dir, "s-test", ASK, join(blocked, "policy-guard.log"));
     const result = (await guard.fire("tool_call", { toolName: "bash", input: { command: "pnpm install" } })) as
       | { block?: boolean; reason?: string }
       | undefined;
@@ -403,7 +409,7 @@ describe("env_policy tool", () => {
     const first = await started(dir, "s-first");
     await first.fire("tool_call", { toolName: "bash", input: { command: "pnpm install" } });
     const second = await started(dir, "s-second");
-    const text = await second.tool("env_policy");
+    const text = await second.tool("policy");
     expect(text).toContain("judged in this session: none yet");
     expect(text).not.toContain("pnpm install");
   });
@@ -412,18 +418,18 @@ describe("env_policy tool", () => {
     const line = (index: number) =>
       `${JSON.stringify({ at: "2026-01-01T00:00:00.000Z", session: "old", project: "acme", kind: "policy", command: `cmd-${index}`, violated: true, clause: "deps", probability: 0.9, threshold: 0.65 })}\n`;
     writeFileSync(
-      join(dir, "env-guard.log"),
+      join(dir, "policy-guard.log"),
       Array.from({ length: FILE_LIMIT + 1 }, (_, index) => line(index)).join(""),
     );
     await started(dir);
-    const kept = parseDecisions(readFileSync(join(dir, "env-guard.log"), "utf-8"));
+    const kept = parseDecisions(readFileSync(join(dir, "policy-guard.log"), "utf-8"));
     expect(kept).toHaveLength(FILE_LIMIT);
     expect(kept.at(-1)?.command).toBe(`cmd-${FILE_LIMIT}`);
     // A file under the limit is left byte-identical.
     const short = line(1) + line(2);
-    writeFileSync(join(dir, "env-guard.log"), short);
+    writeFileSync(join(dir, "policy-guard.log"), short);
     await started(dir);
-    expect(readFileSync(join(dir, "env-guard.log"), "utf-8")).toBe(short);
+    expect(readFileSync(join(dir, "policy-guard.log"), "utf-8")).toBe(short);
   });
 
   test("another window's records cannot push this session's out of the view", async () => {
@@ -432,45 +438,45 @@ describe("env_policy tool", () => {
     // This session's record first, then enough of another window's to fill any tail window.
     const mine = line("s-mine", "pnpm install");
     const others = Array.from({ length: 600 }, (_, index) => line("other", `other-${index}`)).join("");
-    writeFileSync(join(dir, "env-guard.log"), mine + others);
+    writeFileSync(join(dir, "policy-guard.log"), mine + others);
     const guard = await started(dir, "s-mine");
-    expect(await guard.tool("env_policy")).toContain("refused  pnpm install -> deps");
+    expect(await guard.tool("policy")).toContain("refused  pnpm install -> deps");
   });
 
   test("reports a session grant", async () => {
     const guard = await started(dir);
     await guard.command("guard", "allow");
-    expect(await guard.tool("env_policy")).toContain("host grant: given for this session");
+    expect(await guard.tool("policy")).toContain("host grant: given for this session");
   });
 
   test("records a policy-file write under its own reason, with the path it targeted", async () => {
     const guard = await started(dir);
     await guard.fire("tool_call", { toolName: "write", input: { path: policyFile } });
-    expect(await guard.tool("env_policy")).toContain("refused (policy file write)");
+    expect(await guard.tool("policy")).toContain("refused (policy file write)");
     // The floor refusal carries no clause, and the view must say so rather than render null.
-    expect(await guard.tool("env_policy")).toContain("-> no clause cited");
+    expect(await guard.tool("policy")).toContain("-> no clause cited");
     // The record names the target, not the tool: a clipped path still starts with the path.
-    const records = parseDecisions(readFileSync(join(dir, "env-guard.log"), "utf-8"));
+    const records = parseDecisions(readFileSync(join(dir, "policy-guard.log"), "utf-8"));
     expect(records[0]?.command.startsWith(policyFile.slice(0, 60))).toBe(true);
   });
 
   test("records a shell command naming the policy under its own reason", async () => {
     const guard = await started(dir);
     await guard.fire("tool_call", { toolName: "bash", input: { command: `cat ${policyFile}` } });
-    const text = await guard.tool("env_policy");
+    const text = await guard.tool("policy");
     expect(text).toContain("refused (policy file named in shell)");
   });
 
   test("reports the guard as off when it is", async () => {
     const guard = await started(dir);
     await guard.command("guard", "off");
-    expect(await guard.tool("env_policy")).toContain("state: off");
+    expect(await guard.tool("policy")).toContain("state: off");
   });
 
   test("reports a policy's parse errors instead of its rules", async () => {
     writeFileSync(policyFile, '{"project":""}');
     const guard = await started(dir);
-    const text = await guard.tool("env_policy");
+    const text = await guard.tool("policy");
     expect(text).toContain("No usable environment policy at");
     expect(text).toContain("errors:");
   });
@@ -478,8 +484,15 @@ describe("env_policy tool", () => {
   test("says so when no policy loaded, rather than rendering an empty block", async () => {
     rmSync(policyFile, { force: true });
     const guard = await started(dir);
-    const text = await guard.tool("env_policy");
+    const text = await guard.tool("policy");
     expect(text).toContain("No usable environment policy at");
     expect(text).toContain(policyFile);
+  });
+});
+
+// The default log path is used only in production; every test injects one, so this pin is its only check.
+describe("default log path", () => {
+  test("the default decision log is the state directory's policy-guard.log", () => {
+    expect(DECISIONS_PATH).toBe(join(homedir(), ".pi", "agent", "state", "policy-guard.log"));
   });
 });

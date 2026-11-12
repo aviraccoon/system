@@ -39,7 +39,7 @@ export interface PolicyClause {
  * binding is what lets a refusal hand back a runnable replacement without the
  * extension knowing any project's tooling.
  */
-export interface EnvPolicy {
+export interface Policy {
   /** Project name, as the agent sees it. */
   project: string;
   /** Environment name used in the question, e.g. "the devcontainer". */
@@ -81,7 +81,7 @@ export const NO_CLAUSE = "none";
  */
 export const DEFAULT_POLICY_THRESHOLD = 0.65;
 
-function clauseList(policy: EnvPolicy): string {
+function clauseList(policy: Policy): string {
   return policy.clauses.map((clause, i) => `${i + 1}. ${clause.text}`).join("\n");
 }
 
@@ -92,7 +92,7 @@ export function buildPolicyState(state: PolicyState): Record<string, unknown> {
   return { project: state.project, cwd: state.cwd, command: state.command };
 }
 
-function environmentText(policy: EnvPolicy): string {
+function environmentText(policy: Policy): string {
   const binding = policy.binding;
   if (!binding) return policy.environment;
   return `${policy.environment}, reached with \`${binding.command}\` from \`${binding.workdir}\``;
@@ -109,7 +109,7 @@ function environmentText(policy: EnvPolicy): string {
  * commands that cannot execute anything, and that list is what four review
  * rounds found holes in; the model reads `docker exec` from the command itself.
  */
-export function policyQuestion(policy: EnvPolicy): DecisionsQuestion {
+export function policyQuestion(policy: Policy): DecisionsQuestion {
   const precedence = policy.precedence ? `\nPrecedence: ${policy.precedence}\n` : "\n";
   return {
     type: "noul",
@@ -146,10 +146,10 @@ export function rulesLine(policyPath: string, clauseCount: number): string {
  * Rendered from the clauses the judge reads, so the block cannot drift from what
  * is enforced; the file stays the owner.
  */
-export function policySummary(policy: EnvPolicy, policyPath: string): string {
+export function policySummary(policy: Policy, policyPath: string): string {
   const binding = policy.binding;
   const lines = [
-    "Environment policy for this project, enforced by pi's env-guard: a bash call that breaks one of these is refused before it runs, unless the judge is unavailable or the user grants the session.",
+    "Environment policy for this project, enforced by pi's policy-guard: a bash call that breaks one of these is refused before it runs, unless the judge is unavailable or the user grants the session.",
     "",
     ...policy.clauses.map((clause) => `- ${clause.id}: ${clause.text}`),
   ];
@@ -166,7 +166,7 @@ export function policySummary(policy: EnvPolicy, policyPath: string): string {
 }
 
 /** Which clause fired. `none` keeps the choice total: every case has an answer. */
-export function clauseQuestion(policy: EnvPolicy, options: { violation?: boolean } = {}): DecisionsQuestion {
+export function clauseQuestion(policy: Policy, options: { violation?: boolean } = {}): DecisionsQuestion {
   const criteria: Record<string, string> = {};
   for (const clause of policy.clauses) criteria[clause.id] = clause.text;
   criteria[NO_CLAUSE] = "The command breaks no clause: it is allowed where it runs, or it is not project work.";
@@ -189,14 +189,14 @@ export interface PolicyVerdict {
   reasons: string[];
 }
 
-function clauseText(policy: EnvPolicy, id: string): string {
+function clauseText(policy: Policy, id: string): string {
   return policy.clauses.find((clause) => clause.id === id)?.text ?? "";
 }
 
 /** The cited clause and the reason line, from whatever answers carry the clause question. */
 function citation(
   answers: Record<string, DecisionsAnswer>,
-  policy: EnvPolicy,
+  policy: Policy,
   probability: number,
   threshold: number,
 ): { clause: string | null; reasons: string[] } {
@@ -220,7 +220,7 @@ function citation(
 export function withClauseCitation(
   verdict: PolicyVerdict,
   answers: Record<string, DecisionsAnswer>,
-  policy: EnvPolicy,
+  policy: Policy,
 ): PolicyVerdict {
   if (!verdict.violation) return verdict;
   return { ...verdict, ...citation(answers, policy, verdict.probability, verdict.threshold) };
@@ -232,7 +232,7 @@ export function withClauseCitation(
  */
 export function policyFromAnswers(
   answers: Record<string, DecisionsAnswer>,
-  policy: EnvPolicy,
+  policy: Policy,
   threshold: number = DEFAULT_POLICY_THRESHOLD,
 ): PolicyVerdict | null {
   const answer = answers[POLICY_QUESTION];
@@ -250,7 +250,7 @@ export function policyFromAnswers(
  * names the workdir's own directory from the host's mirrored project root;
  * anything else is kept, because it may change where the work happens.
  */
-export function replacementCommand(policy: EnvPolicy, command: string, cwd?: string): string | null {
+export function replacementCommand(policy: Policy, command: string, cwd?: string): string | null {
   const binding = policy.binding;
   if (!binding) return null;
   const shell = bindingShell(binding);
@@ -299,7 +299,7 @@ export type PolicyAsk = (
  */
 export async function judgePolicy(
   ask: PolicyAsk,
-  policy: EnvPolicy,
+  policy: Policy,
   state: Record<string, unknown>,
   threshold: number = DEFAULT_POLICY_THRESHOLD,
 ): Promise<PolicyVerdict | null> {

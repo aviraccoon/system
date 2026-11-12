@@ -7,7 +7,7 @@
  * default and says so, so a typo cannot turn the guard off quietly.
  */
 
-import { DEFAULT_POLICY_THRESHOLD } from "../shared/env-policy";
+import { DEFAULT_POLICY_THRESHOLD } from "../shared/policy";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 

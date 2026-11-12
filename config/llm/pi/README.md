@@ -10,7 +10,6 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **at-mentions** | Inlines file/directory contents when using pi's `@` file picker |
 | **draft-suggestion** | Ghost text predicting the next message, Tab to accept |
 | **edit-guard** | Content-policy checks on edited files and bash commands; prose edits gated on the writing-style skill, dispatches gated on a current, linked journal |
-| **env-guard** | Refuses `bash` calls that break a project's environment policy (dependency, build, test or dev-server work a project keeps in a container), and an edit-like or shell call that names the policy file; policy is prose in `~/notes/llm/<project>/.agents/environment.json`, the refusal cites the clause when the judge names one, `/guard` grants host work for a session, an `env_policy` tool reports the rules and this session's verdicts, and the rules are in context from the first turn |
 | **harvest** | Timer status pill (running/idle) in sessions whose journal meta.json sets a `harvest` flag; refreshed after each turn |
 | **jobs** | `bash` that promotes a command still running after 60 s to a background job; completion is pushed as a message, `/jobs` lists, tails and kills, and the footer shows this directory's running jobs |
 | **journal** | Journal notes, project instructions and cross-project context injected at session start, re-injected after compaction, env var overrides |
@@ -20,6 +19,7 @@ Custom extensions and configuration for [pi](https://github.com/badlogic/pi-mono
 | **or-pin** | `/or-pin` -- pick the OpenRouter upstream provider to pin for the session |
 | **patch** | Tolerant file editing with Unicode/whitespace normalization, anchor disambiguation, multi-file, closest-match diagnostics, atomic all-or-nothing |
 | **permission-gate** | Confirmation dialog for tool calls with LLM-generated safety verdicts and auto-classify |
+| **policy-guard** | Refuses `bash` calls that break a project's environment policy (dependency, build, test or dev-server work a project keeps in a container), and an edit-like or shell call that names the policy file; policy is prose in `~/notes/llm/<project>/.agents/policy.json`, the refusal cites the clause when the judge names one, `/guard` grants host work for a session, a `policy` tool reports the rules and this session's verdicts, and the rules are in context from the first turn |
 | **review-gate** | The `review` tool and `/review-gate`: dispatch the reviewer and record the tree, message and classifier verdict a staged commit is checked against; a path-scoped round records nothing |
 | **sandbox-bash** | Read-only Seatbelt shell -- `bash_readonly` in the main session, `bash` replaced in agents that opt in |
 | **sidecar** | `/sidecar-models` command -- pick models for sidecar roles (explain, draft, vision) |

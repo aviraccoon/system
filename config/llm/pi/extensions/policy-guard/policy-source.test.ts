@@ -12,7 +12,7 @@ const VALID = JSON.stringify({
 });
 
 function source(initial: { raw?: string; mtime?: number }) {
-  const file = { raw: initial.raw, mtime: initial.mtime ?? 1000, path: "/notes/acme-widgets/.agents/environment.json" };
+  const file = { raw: initial.raw, mtime: initial.mtime ?? 1000, path: "/notes/acme-widgets/.agents/policy.json" };
   const counts = { stat: 0, read: 0 };
   const created = createPolicySource({
     pathFor: () => file.path,
@@ -58,8 +58,8 @@ describe("createPolicySource", () => {
   });
 
   test("a different project path reloads even when the mtime matches", () => {
-    const pathABC = "/notes/a/.agents/environment.json";
-    const pathXYZ = "/notes/x/.agents/environment.json";
+    const pathABC = "/notes/a/.agents/policy.json";
+    const pathXYZ = "/notes/x/.agents/policy.json";
     let path = pathABC;
     const reads: string[] = [];
     const created = createPolicySource({
@@ -91,7 +91,7 @@ describe("createPolicySource", () => {
 
   test("an unreadable file reports the error instead of a policy", () => {
     const created = createPolicySource({
-      pathFor: () => "/notes/acme-widgets/.agents/environment.json",
+      pathFor: () => "/notes/acme-widgets/.agents/policy.json",
       stat: () => ({ mtimeMs: 1000 }),
       read: () => {
         throw new Error("EACCES");

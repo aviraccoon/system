@@ -149,7 +149,7 @@ All benchmarks use the same `TestCase` type and runner from `shared.ts`.
 | `message-cases.ts` | Synthetic message-judgment cases |
 | `policy.ts` | Environment-policy runner: accuracy per policy length, and contamination of the factor battery |
 | `policy-cases.ts` | Synthetic policy cases and the short and long policies they are judged against |
-| `../extensions/shared/env-policy.ts` | Policy questions, their rendering, and the refusal derivation |
+| `../extensions/shared/policy.ts` | Policy questions, their rendering, and the refusal derivation |
 | `jev.ts` | Jev (TypeSafe decisions-model) factor runner |
 | `factors.ts` | Chat-model factor runner |
 | `explain.ts` | Explain role benchmark |

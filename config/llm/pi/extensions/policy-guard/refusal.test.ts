@@ -1,15 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
   CLAUSE_QUESTION,
-  type EnvPolicy,
   NO_CLAUSE,
   POLICY_QUESTION,
+  type Policy,
   type PolicyVerdict,
   policyFromAnswers,
-} from "../shared/env-policy";
+} from "../shared/policy";
 import { refusalText } from "./refusal";
 
-const POLICY: EnvPolicy = {
+const POLICY: Policy = {
   project: "acme-widgets",
   environment: "the devcontainer",
   binding: {
@@ -77,8 +77,8 @@ describe("refusalText", () => {
   });
 
   test("names the rules file, so a misfiring clause is reported rather than worked around", () => {
-    const withRules = refusalText(POLICY, VERDICT, "pnpm install", { policyPath: "/notes/acme/environment.json" });
-    expect(withRules).toContain("Rules: /notes/acme/environment.json (2 clauses)");
+    const withRules = refusalText(POLICY, VERDICT, "pnpm install", { policyPath: "/notes/acme/policy.json" });
+    expect(withRules).toContain("Rules: /notes/acme/policy.json (2 clauses)");
     expect(withRules).toContain("the user's to change");
     // No path supplied, no line: the text never invents a location.
     expect(text).not.toContain("Rules:");

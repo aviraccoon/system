@@ -19,7 +19,7 @@
  * not, and no case can express an intent because none reaches the judge.
  */
 
-import type { EnvPolicy, PolicyState } from "../extensions/shared/env-policy";
+import type { Policy, PolicyState } from "../extensions/shared/policy";
 
 export type PolicyGroup = "forbidden" | "allowed" | "container" | "readonly" | "unrelated" | "bypass" | "ambiguous";
 
@@ -61,7 +61,7 @@ const COMMON = [
   { id: "probe", text: "Printing a tool's own version is allowed anywhere; it touches no project code." },
 ];
 
-export const SHORT_POLICY: EnvPolicy = {
+export const SHORT_POLICY: Policy = {
   project: PROJECT,
   environment: "the devcontainer",
   binding: {
@@ -72,7 +72,7 @@ export const SHORT_POLICY: EnvPolicy = {
   precedence: "The e2e, browser, registry, native and probe clauses are the only exceptions to the first four.",
 };
 
-export const LONG_POLICY: EnvPolicy = {
+export const LONG_POLICY: Policy = {
   project: PROJECT,
   environment: "the devcontainer",
   binding: {
