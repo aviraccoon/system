@@ -68,9 +68,12 @@ bun test "${1:-.}"
 description = "Diff this host's closure against current system"
 run = """
 #!/usr/bin/env bash
+set -euo pipefail
+diff=$(mktemp)
+trap 'rm -f ./new-system "$diff"' EXIT
 nix build ".#darwinConfigurations.${FLAKE_HOST:-$(hostname)}.system" -o ./new-system
-nvd --color always diff /run/current-system ./new-system | less -FR
-rm ./new-system
+nvd --color always diff /run/current-system ./new-system >"$diff"
+less -FR "$diff"
 """
 
 [tasks.repl]
