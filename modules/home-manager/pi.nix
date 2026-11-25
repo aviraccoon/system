@@ -2,6 +2,7 @@
 {
   config,
   lib,
+  pkgs,
   android-skills,
   ...
 }:
@@ -29,6 +30,89 @@ let
   shared = import ./llm-shared.nix { inherit config android-skills; };
   inherit (shared) skills;
 
+  # Managed keys for auth.json; the piAuth activation deploys it as a real file
+  # instead of home.file (see home.activation.piAuth).
+  piAuthFile = pkgs.writeText "pi-auth.json" (
+    builtins.toJSON {
+      # OpenRouter with ZDR (Zero Data Retention) enforced in OpenRouter settings
+      openrouter = {
+        type = "api_key";
+        key = "!llm-key openrouter-main";
+      };
+      # Z.ai Coding Plan
+      zai = {
+        type = "api_key";
+        key = "!llm-key zai";
+      };
+    }
+  );
+
+  piAuth = pkgs.writeShellApplication {
+    name = "pi-auth";
+    runtimeInputs = [
+      pkgs.coreutils
+      pkgs.jq
+    ];
+    text = builtins.readFile ./pi-auth.sh;
+  };
+
+  # The merge runs only during a switch, against the real file, so a mistake in
+  # it is found by the person switching. This drives the same script against
+  # throwaway files, and the activation runs this checked artifact rather than
+  # the plain wrapper, so `nix build` cannot skip the check.
+  piAuthChecked =
+    pkgs.runCommand "pi-auth-checked"
+      {
+        nativeBuildInputs = [
+          pkgs.coreutils
+          pkgs.jq
+        ];
+      }
+      ''
+        mkdir -p "$out/bin"
+        script=${piAuth}/bin/pi-auth
+        managed=${piAuthFile}
+        target="$PWD/sub/auth.json"
+
+        # No file yet, and no directory to hold it: the deployed file lands with
+        # pi's mode, and every provider in it is a key reference, never a key.
+        "$script" "$managed" "$target"
+        jq -e '(length > 0) and all(.[]; .type == "api_key" and (.key | startswith("!llm-key ")))' "$target" >/dev/null
+        [ "$(stat -c %a "$target")" = 600 ]
+
+        # A provider added with pi's /login survives whole, and every managed
+        # provider holds its managed value over the stale copy.
+        jq '. as $t | {"example-oauth": {"type":"oauth","access":"a","refresh":"r","expires":0}} + ($t | map_values(.key = "stale"))' \
+          "$target" >"$PWD/next.json"
+        mv -f "$PWD/next.json" "$target"
+        "$script" "$managed" "$target"
+        jq -e --slurpfile m "$managed" '($m[0] | length) > 0 and ."example-oauth".refresh == "r" and (. as $t | $m[0] | to_entries | all(.[]; $t[.key] == .value))' "$target" >/dev/null
+
+        # A store-style symlink is replaced by a real file; the linked file is
+        # left intact, and the providers it held do not reach the new one.
+        jq '. + {"link-only": {"type":"api_key","key":"x"}}' "$target" >"$PWD/linked.json"
+        ln -sf "$PWD/linked.json" "$target"
+        "$script" "$managed" "$target"
+        jq -e '(has("link-only") | not) and all(.[]; .type == "api_key")' "$target" >/dev/null
+        jq -e 'has("link-only")' "$PWD/linked.json" >/dev/null
+
+        # Invalid JSON fails the switch, says why, and is left alone.
+        printf 'not json\n' >"$target"
+        if "$script" "$managed" "$target" 2>"$PWD/err.txt"; then
+          echo 'accepted invalid JSON'
+          exit 1
+        fi
+        [ "$(cat "$target")" = 'not json' ]
+        [ -s "$PWD/err.txt" ]
+        # The abandoned staged file holds credentials; it must not be readable.
+        [ ! -e "$target.new" ] || [ "$(stat -c %a "$target.new")" = 600 ]
+
+        # The copy under $out/bin, the path the activation runs.
+        cp "$script" "$out/bin/"
+        "$out/bin/pi-auth" "$managed" "$PWD/copied.json"
+        jq -e 'all(.[]; .type == "api_key")' "$PWD/copied.json" >/dev/null
+      '';
+
 in
 {
   home.file = lib.mkMerge [
@@ -42,20 +126,6 @@ in
         - Use patch (targeted replacement) for existing files, not write (full rewrite). Rewrites lose subtle details and make reviews harder.
         - Only use write for genuinely new files or when the entire file content is changing.
       '';
-
-      # auth.json file storing API keys and OAuth, see auth-storage.ts in pi.
-      ".pi/agent/auth.json".text = builtins.toJSON {
-        # OpenRouter with ZDR (Zero Data Retention) enforced in OpenRouter settings
-        openrouter = {
-          type = "api_key";
-          key = "!llm-key openrouter-main";
-        };
-        # Z.ai Coding Plan
-        zai = {
-          type = "api_key";
-          key = "!llm-key zai";
-        };
-      };
 
       # Custom model providers (LM Studio local models, etc.)
       # Pi reloads this on /model -- no restart needed.
@@ -474,6 +544,13 @@ in
       }) skills
     ))
   ];
+
+  # auth.json must be a real file (pi-auth.sh has the mechanism); the script merges
+  # the managed keys over the existing file, so OAuth tokens from pi's `/login`
+  # survive a switch.
+  home.activation.piAuth = lib.hm.dag.entryAfter [ "linkGeneration" ] ''
+    $DRY_RUN_CMD ${piAuthChecked}/bin/pi-auth "${piAuthFile}" "${piConfigDir}/auth.json"
+  '';
 
   # Extensions deployed to ~/.pi/agent/extensions/ for auto-discovery.
   # All are symlinked to live source — edit + /reload works without nix-switch.
