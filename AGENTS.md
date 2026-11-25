@@ -51,6 +51,7 @@ mise cpu              # Check custom packages for upstream updates
 - CLIs and scripts declare their arguments in a `config/shared/cli.ts` spec. Do not hand-roll `process.argv` parsing, and do not call `node:util` `parseArgs` directly (existing sites migrate as they are touched).
 - macOS app bundles from custom packages need symlinks in `modules/home-manager/default.nix` to appear in `~/Applications`.
 - Test format with `mise fmt-check` before proposing changes.
+- Nix expressions need no test pin: `nix build` (and `mise nix-diff`) is their check. Shell a `.nix` file deploys (inline `writeShellScript` or heredoc, or a `.sh` beside it) gets a check that drives it against throwaway inputs; extract inline shell (`pi-auth.sh` is the shape). Copy the nearest example: a build-time `runCommand` whose output the package or activation installs (`llm-keys.nix` `llm-key-checked`, `pi.nix` `piAuthChecked`), or a `bun test` when the script's only gate is `mise check` (`git-hooks/hooks.test.ts`).
 - A commit scope names the component the change is in: the extension, package, module, machine or directory a log reader filters by, or the wider area when the change spans several components or touches a file outside every component. Reuse a scope the log already has when it names that same component.
 - When adding Homebrew casks, prefer nixpkgs if the package is available and works well on macOS.
 - Never guess hostnames. Run `hostname` or check `machines/` directory for actual machine names.
