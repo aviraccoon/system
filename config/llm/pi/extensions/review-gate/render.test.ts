@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { AgentToolResult, Theme, ToolRenderResultOptions } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import { gateNoteColor, gateNoteText, renderReviewResult } from "./render";
 import { PATHS_ROUND_NOTE } from "./review-tool";
 
@@ -15,7 +16,7 @@ const theme = {
 const collapsed = { expanded: false, isPartial: false } as ToolRenderResultOptions;
 const expanded = { expanded: true, isPartial: false } as ToolRenderResultOptions;
 
-function render(component: { render(width: number): string[] }): string {
+function render(component: Component): string {
   return component.render(80).join("\n");
 }
 
